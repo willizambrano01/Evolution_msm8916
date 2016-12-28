@@ -270,6 +270,12 @@ source "fs/coda/Kconfig"
 source "fs/afs/Kconfig"
 source "fs/9p/Kconfig"
 
+config DYNAMIC_FSYNC
+ 	bool "dynamic file sync control"
+ 	default n
+ 	help
+ 	  An experimental file sync control using Android's early suspend / late resume drivers
+
 endif # NETWORK_FILESYSTEMS
 
 source "fs/nls/Kconfig"
