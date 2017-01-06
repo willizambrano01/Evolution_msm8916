@@ -7,9 +7,9 @@
  * devtmpfs, a tmpfs-based filesystem is created. Every driver-core
  * device which requests a device node, will add a node in this
  * filesystem.
- * By default, all devices are named after the name of the device,
- * owned by root and have a default mode of 0600. Subsystems can
- * overwrite the default setting if needed.
+ * By default, all devices are named after the the name of the
+ * device, owned by root and have a default mode of 0600. Subsystems
+ * can overwrite the default setting if needed.
  */
 
 #include <linux/kernel.h>
@@ -24,7 +24,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/kthread.h>
-#include "base.h"
 
 static struct task_struct *thread;
 
@@ -42,8 +41,6 @@ static struct req {
 	int err;
 	const char *name;
 	umode_t mode;	/* 0 => delete */
-	kuid_t uid;
-	kgid_t gid;
 	struct device *dev;
 } *requests;
 
@@ -88,9 +85,7 @@ int devtmpfs_create_node(struct device *dev)
 		return 0;
 
 	req.mode = 0;
-	req.uid = GLOBAL_ROOT_UID;
-	req.gid = GLOBAL_ROOT_GID;
-	req.name = device_get_devnode(dev, &req.mode, &req.uid, &req.gid, &tmp);
+	req.name = device_get_devnode(dev, &req.mode, &tmp);
 	if (!req.name)
 		return -ENOMEM;
 
@@ -126,7 +121,7 @@ int devtmpfs_delete_node(struct device *dev)
 	if (!thread)
 		return 0;
 
-	req.name = device_get_devnode(dev, NULL, NULL, NULL, &tmp);
+	req.name = device_get_devnode(dev, NULL, &tmp);
 	if (!req.name)
 		return -ENOMEM;
 
@@ -153,7 +148,7 @@ static int dev_mkdir(const char *name, umode_t mode)
 	struct path path;
 	int err;
 
-	dentry = kern_path_create(AT_FDCWD, name, &path, LOOKUP_DIRECTORY);
+	dentry = kern_path_create(AT_FDCWD, name, &path, 1);
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 
@@ -161,7 +156,9 @@ static int dev_mkdir(const char *name, umode_t mode)
 	if (!err)
 		/* mark as kernel-created inode */
 		dentry->d_inode->i_private = &thread;
-	done_path_create(&path, dentry);
+	dput(dentry);
+	mutex_unlock(&path.dentry->d_inode->i_mutex);
+	path_put(&path);
 	return err;
 }
 
@@ -192,8 +189,7 @@ static int create_path(const char *nodepath)
 	return err;
 }
 
-static int handle_create(const char *nodename, umode_t mode, kuid_t uid,
-			 kgid_t gid, struct device *dev)
+static int handle_create(const char *nodename, umode_t mode, struct device *dev)
 {
 	struct dentry *dentry;
 	struct path path;
@@ -207,14 +203,14 @@ static int handle_create(const char *nodename, umode_t mode, kuid_t uid,
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 
-	err = vfs_mknod(path.dentry->d_inode, dentry, mode, dev->devt);
+	err = vfs_mknod(path.dentry->d_inode,
+			dentry, mode, dev->devt);
 	if (!err) {
 		struct iattr newattrs;
 
+		/* fixup possibly umasked mode */
 		newattrs.ia_mode = mode;
-		newattrs.ia_uid = uid;
-		newattrs.ia_gid = gid;
-		newattrs.ia_valid = ATTR_MODE|ATTR_UID|ATTR_GID;
+		newattrs.ia_valid = ATTR_MODE;
 		mutex_lock(&dentry->d_inode->i_mutex);
 		notify_change(dentry, &newattrs);
 		mutex_unlock(&dentry->d_inode->i_mutex);
@@ -222,7 +218,10 @@ static int handle_create(const char *nodename, umode_t mode, kuid_t uid,
 		/* mark as kernel-created inode */
 		dentry->d_inode->i_private = &thread;
 	}
-	done_path_create(&path, dentry);
+	dput(dentry);
+
+	mutex_unlock(&path.dentry->d_inode->i_mutex);
+	path_put(&path);
 	return err;
 }
 
@@ -308,16 +307,15 @@ static int handle_remove(const char *nodename, struct device *dev)
 
 	if (dentry->d_inode) {
 		struct kstat stat;
-		struct path p = {.mnt = parent.mnt, .dentry = dentry};
-		err = vfs_getattr(&p, &stat);
+		err = vfs_getattr(parent.mnt, dentry, &stat);
 		if (!err && dev_mynode(dev, dentry->d_inode, &stat)) {
 			struct iattr newattrs;
 			/*
 			 * before unlinking this node, reset permissions
 			 * of possible references like hardlinks
 			 */
-			newattrs.ia_uid = GLOBAL_ROOT_UID;
-			newattrs.ia_gid = GLOBAL_ROOT_GID;
+			newattrs.ia_uid = 0;
+			newattrs.ia_gid = 0;
 			newattrs.ia_mode = stat.mode & ~0777;
 			newattrs.ia_valid =
 				ATTR_UID|ATTR_GID|ATTR_MODE;
@@ -364,11 +362,10 @@ int devtmpfs_mount(const char *mntdir)
 
 static DECLARE_COMPLETION(setup_done);
 
-static int handle(const char *name, umode_t mode, kuid_t uid, kgid_t gid,
-		  struct device *dev)
+static int handle(const char *name, umode_t mode, struct device *dev)
 {
 	if (mode)
-		return handle_create(name, mode, uid, gid, dev);
+		return handle_create(name, mode, dev);
 	else
 		return handle_remove(name, dev);
 }
@@ -394,8 +391,7 @@ static int devtmpfsd(void *p)
 			spin_unlock(&req_lock);
 			while (req) {
 				struct req *next = req->next;
-				req->err = handle(req->name, req->mode,
-						  req->uid, req->gid, req->dev);
+				req->err = handle(req->name, req->mode, req->dev);
 				complete(&req->done);
 				req = next;
 			}

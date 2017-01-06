@@ -282,11 +282,7 @@ static struct snd_soc_dai_driver bfin_ac97_dai = {
 		.formats = SNDRV_PCM_FMTBIT_S16_LE, },
 };
 
-static const struct snd_soc_component_driver bfin_ac97_component = {
-	.name		= "bfin-ac97",
-};
-
-static int asoc_bfin_ac97_probe(struct platform_device *pdev)
+static int __devinit asoc_bfin_ac97_probe(struct platform_device *pdev)
 {
 	struct sport_device *sport_handle;
 	int ret;
@@ -335,8 +331,7 @@ static int asoc_bfin_ac97_probe(struct platform_device *pdev)
 		goto sport_config_err;
 	}
 
-	ret = snd_soc_register_component(&pdev->dev, &bfin_ac97_component,
-					 &bfin_ac97_dai, 1);
+	ret = snd_soc_register_dai(&pdev->dev, &bfin_ac97_dai);
 	if (ret) {
 		pr_err("Failed to register DAI: %d\n", ret);
 		goto sport_config_err;
@@ -357,11 +352,11 @@ gpio_err:
 	return ret;
 }
 
-static int asoc_bfin_ac97_remove(struct platform_device *pdev)
+static int __devexit asoc_bfin_ac97_remove(struct platform_device *pdev)
 {
 	struct sport_device *sport_handle = platform_get_drvdata(pdev);
 
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dai(&pdev->dev);
 	sport_done(sport_handle);
 #ifdef CONFIG_SND_BF5XX_HAVE_COLD_RESET
 	gpio_free(CONFIG_SND_BF5XX_RESET_GPIO_NUM);
@@ -377,7 +372,7 @@ static struct platform_driver asoc_bfin_ac97_driver = {
 	},
 
 	.probe = asoc_bfin_ac97_probe,
-	.remove = asoc_bfin_ac97_remove,
+	.remove = __devexit_p(asoc_bfin_ac97_remove),
 };
 
 module_platform_driver(asoc_bfin_ac97_driver);

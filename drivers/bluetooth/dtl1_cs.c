@@ -38,6 +38,7 @@
 #include <linux/serial.h>
 #include <linux/serial_reg.h>
 #include <linux/bitops.h>
+#include <asm/system.h>
 #include <asm/io.h>
 
 #include <pcmcia/cistpl.h>
@@ -82,6 +83,9 @@ typedef struct dtl1_info_t {
 
 
 static int dtl1_config(struct pcmcia_device *link);
+static void dtl1_release(struct pcmcia_device *link);
+
+static void dtl1_detach(struct pcmcia_device *p_dev);
 
 
 /* Transmit states  */
@@ -144,9 +148,9 @@ static void dtl1_write_wakeup(dtl1_info_t *info)
 	}
 
 	do {
-		unsigned int iobase = info->p_dev->resource[0]->start;
+		register unsigned int iobase = info->p_dev->resource[0]->start;
 		register struct sk_buff *skb;
-		int len;
+		register int len;
 
 		clear_bit(XMIT_WAKEUP, &(info->tx_state));
 
@@ -363,7 +367,7 @@ static int dtl1_hci_open(struct hci_dev *hdev)
 
 static int dtl1_hci_flush(struct hci_dev *hdev)
 {
-	dtl1_info_t *info = hci_get_drvdata(hdev);
+	dtl1_info_t *info = (dtl1_info_t *)(hdev->driver_data);
 
 	/* Drop TX queue */
 	skb_queue_purge(&(info->txq));
@@ -395,7 +399,7 @@ static int dtl1_hci_send_frame(struct sk_buff *skb)
 		return -ENODEV;
 	}
 
-	info = hci_get_drvdata(hdev);
+	info = (dtl1_info_t *)(hdev->driver_data);
 
 	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
@@ -438,6 +442,11 @@ static int dtl1_hci_send_frame(struct sk_buff *skb)
 }
 
 
+static void dtl1_hci_destruct(struct hci_dev *hdev)
+{
+}
+
+
 static int dtl1_hci_ioctl(struct hci_dev *hdev, unsigned int cmd,  unsigned long arg)
 {
 	return -ENOIOCTLCMD;
@@ -474,14 +483,17 @@ static int dtl1_open(dtl1_info_t *info)
 	info->hdev = hdev;
 
 	hdev->bus = HCI_PCCARD;
-	hci_set_drvdata(hdev, info);
+	hdev->driver_data = info;
 	SET_HCIDEV_DEV(hdev, &info->p_dev->dev);
 
 	hdev->open     = dtl1_hci_open;
 	hdev->close    = dtl1_hci_close;
 	hdev->flush    = dtl1_hci_flush;
 	hdev->send     = dtl1_hci_send_frame;
+	hdev->destruct = dtl1_hci_destruct;
 	hdev->ioctl    = dtl1_hci_ioctl;
+
+	hdev->owner = THIS_MODULE;
 
 	spin_lock_irqsave(&(info->lock), flags);
 
@@ -539,7 +551,9 @@ static int dtl1_close(dtl1_info_t *info)
 
 	spin_unlock_irqrestore(&(info->lock), flags);
 
-	hci_unregister_dev(hdev);
+	if (hci_unregister_dev(hdev) < 0)
+		BT_ERR("Can't unregister HCI device %s", hdev->name);
+
 	hci_free_dev(hdev);
 
 	return 0;
@@ -550,7 +564,7 @@ static int dtl1_probe(struct pcmcia_device *link)
 	dtl1_info_t *info;
 
 	/* Create new info device */
-	info = devm_kzalloc(&link->dev, sizeof(*info), GFP_KERNEL);
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
 
@@ -567,8 +581,9 @@ static void dtl1_detach(struct pcmcia_device *link)
 {
 	dtl1_info_t *info = link->priv;
 
-	dtl1_close(info);
-	pcmcia_disable_device(link);
+	dtl1_release(link);
+
+	kfree(info);
 }
 
 static int dtl1_confcheck(struct pcmcia_device *p_dev, void *priv_data)
@@ -585,34 +600,43 @@ static int dtl1_confcheck(struct pcmcia_device *p_dev, void *priv_data)
 static int dtl1_config(struct pcmcia_device *link)
 {
 	dtl1_info_t *info = link->priv;
-	int ret;
+	int i;
 
 	/* Look for a generic full-sized window */
 	link->resource[0]->end = 8;
-	ret = pcmcia_loop_config(link, dtl1_confcheck, NULL);
-	if (ret)
+	if (pcmcia_loop_config(link, dtl1_confcheck, NULL) < 0)
 		goto failed;
 
-	ret = pcmcia_request_irq(link, dtl1_interrupt);
-	if (ret)
+	i = pcmcia_request_irq(link, dtl1_interrupt);
+	if (i != 0)
 		goto failed;
 
-	ret = pcmcia_enable_device(link);
-	if (ret)
+	i = pcmcia_enable_device(link);
+	if (i != 0)
 		goto failed;
 
-	ret = dtl1_open(info);
-	if (ret)
+	if (dtl1_open(info) != 0)
 		goto failed;
 
 	return 0;
 
 failed:
-	dtl1_detach(link);
-	return ret;
+	dtl1_release(link);
+	return -ENODEV;
 }
 
-static const struct pcmcia_device_id dtl1_ids[] = {
+
+static void dtl1_release(struct pcmcia_device *link)
+{
+	dtl1_info_t *info = link->priv;
+
+	dtl1_close(info);
+
+	pcmcia_disable_device(link);
+}
+
+
+static struct pcmcia_device_id dtl1_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("Nokia Mobile Phones", "DTL-1", 0xe1bfdd64, 0xe168480d),
 	PCMCIA_DEVICE_PROD_ID12("Nokia Mobile Phones", "DTL-4", 0xe1bfdd64, 0x9102bc82),
 	PCMCIA_DEVICE_PROD_ID12("Socket", "CF", 0xb38bcc2e, 0x44ebf863),
@@ -628,4 +652,17 @@ static struct pcmcia_driver dtl1_driver = {
 	.remove		= dtl1_detach,
 	.id_table	= dtl1_ids,
 };
-module_pcmcia_driver(dtl1_driver);
+
+static int __init init_dtl1_cs(void)
+{
+	return pcmcia_register_driver(&dtl1_driver);
+}
+
+
+static void __exit exit_dtl1_cs(void)
+{
+	pcmcia_unregister_driver(&dtl1_driver);
+}
+
+module_init(init_dtl1_cs);
+module_exit(exit_dtl1_cs);

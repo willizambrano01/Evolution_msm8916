@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -218,27 +218,12 @@ static int msm_dai_q6_hdmi_prepare(struct snd_pcm_substream *substream,
 	return rc;
 }
 
-static inline void msm_dai_q6_hdmi_set_dai_id(struct snd_soc_dai *dai)
-{
-	if (!dai->driver->id) {
-		dev_warn(dai->dev, "DAI driver id is not set\n");
-		return;
-	}
-	dai->id = dai->driver->id;
-	return;
-}
-
 static int msm_dai_q6_hdmi_dai_probe(struct snd_soc_dai *dai)
 {
 	struct msm_dai_q6_hdmi_dai_data *dai_data;
 	const struct snd_kcontrol_new *kcontrol;
 	int rc = 0;
-	struct snd_soc_dapm_route intercon;
 
-	if (!dai) {
-		pr_err("%s: dai not found\n", __func__);
-		return -EINVAL;
-	}
 	dai_data = kzalloc(sizeof(struct msm_dai_q6_hdmi_dai_data),
 		GFP_KERNEL);
 
@@ -248,8 +233,6 @@ static int msm_dai_q6_hdmi_dai_probe(struct snd_soc_dai *dai)
 		rc = -ENOMEM;
 	} else
 		dev_set_drvdata(dai->dev, dai_data);
-
-	msm_dai_q6_hdmi_set_dai_id(dai);
 
 	kcontrol = &hdmi_config_controls[0];
 
@@ -261,29 +244,6 @@ static int msm_dai_q6_hdmi_dai_probe(struct snd_soc_dai *dai)
 	rc = snd_ctl_add(dai->card->snd_card,
 					 snd_ctl_new1(kcontrol, dai_data));
 
-	memset(&intercon, 0 , sizeof(intercon));
-	if (!rc && dai && dai->driver) {
-		if (dai->driver->playback.stream_name &&
-			dai->driver->playback.aif_name) {
-			dev_dbg(dai->dev, "%s add route for widget %s",
-				   __func__, dai->driver->playback.stream_name);
-			intercon.source = dai->driver->playback.aif_name;
-			intercon.sink = dai->driver->playback.stream_name;
-			dev_dbg(dai->dev, "%s src %s sink %s\n",
-				   __func__, intercon.source, intercon.sink);
-			snd_soc_dapm_add_routes(&dai->dapm, &intercon, 1);
-		}
-		if (dai->driver->capture.stream_name &&
-		   dai->driver->capture.aif_name) {
-			dev_dbg(dai->dev, "%s add route for widget %s",
-				   __func__, dai->driver->capture.stream_name);
-			intercon.sink = dai->driver->capture.aif_name;
-			intercon.source = dai->driver->capture.stream_name;
-			dev_dbg(dai->dev, "%s src %s sink %s\n",
-				   __func__, intercon.source, intercon.sink);
-			snd_soc_dapm_add_routes(&dai->dapm, &intercon, 1);
-		}
-	}
 	return rc;
 }
 
@@ -304,7 +264,7 @@ static int msm_dai_q6_hdmi_dai_remove(struct snd_soc_dai *dai)
 		clear_bit(STATUS_PORT_STARTED, dai_data->status_mask);
 	}
 	kfree(dai_data);
-	snd_soc_unregister_component(dai->dev);
+	snd_soc_unregister_dai(dai->dev);
 
 	return 0;
 }
@@ -317,8 +277,6 @@ static struct snd_soc_dai_ops msm_dai_q6_hdmi_ops = {
 
 static struct snd_soc_dai_driver msm_dai_q6_hdmi_hdmi_rx_dai = {
 	.playback = {
-		.stream_name = "HDMI Playback",
-		.aif_name = "HDMI",
 		.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000 |
 		 SNDRV_PCM_RATE_192000,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE,
@@ -328,17 +286,13 @@ static struct snd_soc_dai_driver msm_dai_q6_hdmi_hdmi_rx_dai = {
 		.rate_min =	48000,
 	},
 	.ops = &msm_dai_q6_hdmi_ops,
-	.id = HDMI_RX,
 	.probe = msm_dai_q6_hdmi_dai_probe,
 	.remove = msm_dai_q6_hdmi_dai_remove,
 };
 
-static const struct snd_soc_component_driver msm_dai_hdmi_q6_component = {
-	.name		= "msm-dai-q6-hdmi",
-};
 
 /* To do: change to register DAIs as batch */
-static int msm_dai_q6_hdmi_dev_probe(struct platform_device *pdev)
+static __devinit int msm_dai_q6_hdmi_dev_probe(struct platform_device *pdev)
 {
 	int rc, id;
 	const char *q6_dev_id = "qcom,msm-dai-q6-dev-id";
@@ -351,15 +305,15 @@ static int msm_dai_q6_hdmi_dev_probe(struct platform_device *pdev)
 	}
 
 	pdev->id = id;
+	dev_set_name(&pdev->dev, "%s.%d", "msm-dai-q6-hdmi", id);
 
 	pr_debug("%s: dev name %s, id:%d\n", __func__,
 			dev_name(&pdev->dev), pdev->id);
 
 	switch (pdev->id) {
 	case HDMI_RX:
-		rc = snd_soc_register_component(&pdev->dev,
-			&msm_dai_hdmi_q6_component,
-			&msm_dai_q6_hdmi_hdmi_rx_dai, 1);
+		rc = snd_soc_register_dai(&pdev->dev,
+				&msm_dai_q6_hdmi_hdmi_rx_dai);
 		break;
 	default:
 		dev_err(&pdev->dev, "invalid device ID %d\n", pdev->id);
@@ -369,9 +323,9 @@ static int msm_dai_q6_hdmi_dev_probe(struct platform_device *pdev)
 	return rc;
 }
 
-static int msm_dai_q6_hdmi_dev_remove(struct platform_device *pdev)
+static __devexit int msm_dai_q6_hdmi_dev_remove(struct platform_device *pdev)
 {
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dai(&pdev->dev);
 	return 0;
 }
 

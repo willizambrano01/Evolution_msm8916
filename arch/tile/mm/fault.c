@@ -70,10 +70,9 @@ static noinline void force_sig_info_fault(const char *type, int si_signo,
  * Synthesize the fault a PL0 process would get by doing a word-load of
  * an unaligned address or a high kernel address.
  */
-SYSCALL_DEFINE1(cmpxchg_badaddr, unsigned long, address)
+SYSCALL_DEFINE2(cmpxchg_badaddr, unsigned long, address,
+		struct pt_regs *, regs)
 {
-	struct pt_regs *regs = current_pt_regs();
-
 	if (address >= PAGE_OFFSET)
 		force_sig_info_fault("atomic segfault", SIGSEGV, SEGV_MAPERR,
 				     address, INT_DTLB_MISS, current, regs);
@@ -188,7 +187,7 @@ static pgd_t *get_current_pgd(void)
 	HV_Context ctx = hv_inquire_context();
 	unsigned long pgd_pfn = ctx.page_table >> PAGE_SHIFT;
 	struct page *pgd_page = pfn_to_page(pgd_pfn);
-	BUG_ON(PageHighMem(pgd_page));
+	BUG_ON(PageHighMem(pgd_page));   /* oops, HIGHPTE? */
 	return (pgd_t *) __va(ctx.page_table);
 }
 
@@ -274,13 +273,10 @@ static int handle_page_fault(struct pt_regs *regs,
 	int si_code;
 	int is_kernel_mode;
 	pgd_t *pgd;
-	unsigned int flags;
 
 	/* on TILE, protection faults are always writes */
 	if (!is_page_fault)
 		write = 1;
-
-	flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	is_kernel_mode = (EX1_PL(regs->ex1) != USER_PL);
 
@@ -364,9 +360,6 @@ static int handle_page_fault(struct pt_regs *regs,
 		goto bad_area_nosemaphore;
 	}
 
-	if (!is_kernel_mode)
-		flags |= FAULT_FLAG_USER;
-
 	/*
 	 * When running in the kernel we expect faults to occur only to
 	 * addresses in user space.  All other faults represent errors in the
@@ -389,8 +382,6 @@ static int handle_page_fault(struct pt_regs *regs,
 			vma = NULL;  /* happy compiler */
 			goto bad_area_nosemaphore;
 		}
-
-retry:
 		down_read(&mm->mmap_sem);
 	}
 
@@ -427,7 +418,6 @@ good_area:
 #endif
 		if (!(vma->vm_flags & VM_WRITE))
 			goto bad_area;
-		flags |= FAULT_FLAG_WRITE;
 	} else {
 		if (!is_page_fault || !(vma->vm_flags & VM_READ))
 			goto bad_area;
@@ -439,11 +429,7 @@ good_area:
 	 * make sure we exit gracefully rather than endlessly redo
 	 * the fault.
 	 */
-	fault = handle_mm_fault(mm, vma, address, flags);
-
-	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current))
-		return 0;
-
+	fault = handle_mm_fault(mm, vma, address, write);
 	if (unlikely(fault & VM_FAULT_ERROR)) {
 		if (fault & VM_FAULT_OOM)
 			goto out_of_memory;
@@ -451,23 +437,10 @@ good_area:
 			goto do_sigbus;
 		BUG();
 	}
-	if (flags & FAULT_FLAG_ALLOW_RETRY) {
-		if (fault & VM_FAULT_MAJOR)
-			tsk->maj_flt++;
-		else
-			tsk->min_flt++;
-		if (fault & VM_FAULT_RETRY) {
-			flags &= ~FAULT_FLAG_ALLOW_RETRY;
-			flags |= FAULT_FLAG_TRIED;
-
-			 /*
-			  * No need to up_read(&mm->mmap_sem) as we would
-			  * have already released it in __lock_page_or_retry
-			  * in mm/filemap.c.
-			  */
-			goto retry;
-		}
-	}
+	if (fault & VM_FAULT_MAJOR)
+		tsk->maj_flt++;
+	else
+		tsk->min_flt++;
 
 #if CHIP_HAS_TILE_DMA() || CHIP_HAS_SN_PROC()
 	/*

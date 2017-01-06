@@ -87,7 +87,18 @@ static struct pci_driver phison_pci_driver = {
 #endif
 };
 
-module_pci_driver(phison_pci_driver);
+static int __init phison_ide_init(void)
+{
+	return pci_register_driver(&phison_pci_driver);
+}
+
+static void __exit phison_ide_exit(void)
+{
+	pci_unregister_driver(&phison_pci_driver);
+}
+
+module_init(phison_ide_init);
+module_exit(phison_ide_exit);
 
 MODULE_AUTHOR("Evan Ko");
 MODULE_DESCRIPTION("PCIE driver module for PHISON PS5000 E-BOX");

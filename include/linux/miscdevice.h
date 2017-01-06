@@ -19,6 +19,13 @@
 #define APOLLO_MOUSE_MINOR	7
 #define PC110PAD_MINOR		9
 /*#define ADB_MOUSE_MINOR	10	FIXME OBSOLETE */
+
+/* The misc dynamic minor shall not overlap with the fixed misc minor,
+ * else the registering of such misc device will be failed. Add a OFFSET
+ * to avoid overlapping with fixed minor.
+ */
+#define MISC_DYNAMIC_MINOR_OFFSET	11
+
 #define WATCHDOG_MINOR		130	/* Watchdog timer     */
 #define TEMP_MINOR		131	/* Temperature Sensor */
 #define RTC_MINOR		135
@@ -34,9 +41,7 @@
 #define MWAVE_MINOR		219	/* ACP/Mwave Modem */
 #define MPT_MINOR		220
 #define MPT2SAS_MINOR		221
-#define MPT3SAS_MINOR		222
 #define UINPUT_MINOR		223
-#define MISC_MCELOG_MINOR	227
 #define HPET_MINOR		228
 #define FUSE_MINOR		229
 #define KVM_MINOR		232
@@ -45,7 +50,6 @@
 #define MAPPER_CTRL_MINOR	236
 #define LOOP_CTRL_MINOR		237
 #define VHOST_NET_MINOR		238
-#define UHID_MINOR		239
 #define MISC_DYNAMIC_MINOR	255
 
 struct device;

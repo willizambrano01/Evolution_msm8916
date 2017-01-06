@@ -132,14 +132,14 @@ static void __flow_cache_shrink(struct flow_cache *fc,
 				int shrink_to)
 {
 	struct flow_cache_entry *fle;
-	struct hlist_node *tmp;
+	struct hlist_node *entry, *tmp;
 	LIST_HEAD(gc_list);
 	int i, deleted = 0;
 
 	for (i = 0; i < flow_cache_hash_size(fc); i++) {
 		int saved = 0;
 
-		hlist_for_each_entry_safe(fle, tmp,
+		hlist_for_each_entry_safe(fle, entry, tmp,
 					  &fcp->hash_table[i], u.hlist) {
 			if (saved < shrink_to &&
 			    flow_entry_valid(fle)) {
@@ -211,6 +211,7 @@ flow_cache_lookup(struct net *net, const struct flowi *key, u16 family, u8 dir,
 	struct flow_cache *fc = &flow_cache_global;
 	struct flow_cache_percpu *fcp;
 	struct flow_cache_entry *fle, *tfle;
+	struct hlist_node *entry;
 	struct flow_cache_object *flo;
 	size_t keysize;
 	unsigned int hash;
@@ -234,7 +235,7 @@ flow_cache_lookup(struct net *net, const struct flowi *key, u16 family, u8 dir,
 		flow_new_hash_rnd(fc, fcp);
 
 	hash = flow_hash_code(fc, fcp, key, keysize);
-	hlist_for_each_entry(tfle, &fcp->hash_table[hash], u.hlist) {
+	hlist_for_each_entry(tfle, entry, &fcp->hash_table[hash], u.hlist) {
 		if (tfle->net == net &&
 		    tfle->family == family &&
 		    tfle->dir == dir &&
@@ -285,7 +286,7 @@ nocache:
 		else
 			fle->genid--;
 	} else {
-		if (!IS_ERR_OR_NULL(flo))
+		if (flo && !IS_ERR(flo))
 			flo->ops->delete(flo);
 	}
 ret_object:
@@ -300,13 +301,13 @@ static void flow_cache_flush_tasklet(unsigned long data)
 	struct flow_cache *fc = info->cache;
 	struct flow_cache_percpu *fcp;
 	struct flow_cache_entry *fle;
-	struct hlist_node *tmp;
+	struct hlist_node *entry, *tmp;
 	LIST_HEAD(gc_list);
 	int i, deleted = 0;
 
 	fcp = this_cpu_ptr(fc->percpu);
 	for (i = 0; i < flow_cache_hash_size(fc); i++) {
-		hlist_for_each_entry_safe(fle, tmp,
+		hlist_for_each_entry_safe(fle, entry, tmp,
 					  &fcp->hash_table[i], u.hlist) {
 			if (flow_entry_valid(fle))
 				continue;
@@ -323,30 +324,14 @@ static void flow_cache_flush_tasklet(unsigned long data)
 		complete(&info->completion);
 }
 
-/*
- * Return whether a cpu needs flushing.  Conservatively, we assume
- * the presence of any entries means the core may require flushing,
- * since the flow_cache_ops.check() function may assume it's running
- * on the same core as the per-cpu cache component.
- */
-static int flow_cache_percpu_empty(struct flow_cache *fc, int cpu)
-{
-	struct flow_cache_percpu *fcp;
-	int i;
-
-	fcp = per_cpu_ptr(fc->percpu, cpu);
-	for (i = 0; i < flow_cache_hash_size(fc); i++)
-		if (!hlist_empty(&fcp->hash_table[i]))
-			return 0;
-	return 1;
-}
-
 static void flow_cache_flush_per_cpu(void *data)
 {
 	struct flow_flush_info *info = data;
+	int cpu;
 	struct tasklet_struct *tasklet;
 
-	tasklet = &this_cpu_ptr(info->cache->percpu)->flush_tasklet;
+	cpu = smp_processor_id();
+	tasklet = &per_cpu_ptr(info->cache->percpu, cpu)->flush_tasklet;
 	tasklet->data = (unsigned long)info;
 	tasklet_schedule(tasklet);
 }
@@ -355,40 +340,22 @@ void flow_cache_flush(void)
 {
 	struct flow_flush_info info;
 	static DEFINE_MUTEX(flow_flush_sem);
-	cpumask_var_t mask;
-	int i, self;
-
-	/* Track which cpus need flushing to avoid disturbing all cores. */
-	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
-		return;
-	cpumask_clear(mask);
 
 	/* Don't want cpus going down or up during this. */
 	get_online_cpus();
 	mutex_lock(&flow_flush_sem);
 	info.cache = &flow_cache_global;
-	for_each_online_cpu(i)
-		if (!flow_cache_percpu_empty(info.cache, i))
-			cpumask_set_cpu(i, mask);
-	atomic_set(&info.cpuleft, cpumask_weight(mask));
-	if (atomic_read(&info.cpuleft) == 0)
-		goto done;
-
+	atomic_set(&info.cpuleft, num_online_cpus());
 	init_completion(&info.completion);
 
 	local_bh_disable();
-	self = cpumask_test_and_clear_cpu(smp_processor_id(), mask);
-	on_each_cpu_mask(mask, flow_cache_flush_per_cpu, &info, 0);
-	if (self)
-		flow_cache_flush_tasklet((unsigned long)&info);
+	smp_call_function(flow_cache_flush_per_cpu, &info, 0);
+	flow_cache_flush_tasklet((unsigned long)&info);
 	local_bh_enable();
 
 	wait_for_completion(&info.completion);
-
-done:
 	mutex_unlock(&flow_flush_sem);
 	put_online_cpus();
-	free_cpumask_var(mask);
 }
 
 static void flow_cache_flush_task(struct work_struct *work)
@@ -456,8 +423,7 @@ static int __init flow_cache_init(struct flow_cache *fc)
 	if (!fc->percpu)
 		return -ENOMEM;
 
-	cpu_notifier_register_begin();
-
+	get_online_cpus();
 	for_each_online_cpu(i) {
 		if (flow_cache_cpu_prepare(fc, i))
 			goto err;
@@ -465,9 +431,8 @@ static int __init flow_cache_init(struct flow_cache *fc)
 	fc->hotcpu_notifier = (struct notifier_block){
 		.notifier_call = flow_cache_cpu,
 	};
-	__register_hotcpu_notifier(&fc->hotcpu_notifier);
-
-	cpu_notifier_register_done();
+	register_hotcpu_notifier(&fc->hotcpu_notifier);
+	put_online_cpus();
 
 	setup_timer(&fc->rnd_timer, flow_cache_new_hashrnd,
 		    (unsigned long) fc);
@@ -477,13 +442,12 @@ static int __init flow_cache_init(struct flow_cache *fc)
 	return 0;
 
 err:
+	put_online_cpus();
 	for_each_possible_cpu(i) {
 		struct flow_cache_percpu *fcp = per_cpu_ptr(fc->percpu, i);
 		kfree(fcp->hash_table);
 		fcp->hash_table = NULL;
 	}
-
-	cpu_notifier_register_done();
 
 	free_percpu(fc->percpu);
 	fc->percpu = NULL;

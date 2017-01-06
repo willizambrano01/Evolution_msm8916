@@ -164,7 +164,7 @@ struct snd_bt87x_board {
 	unsigned no_digital:1;	/* No digital input */
 };
 
-static struct snd_bt87x_board snd_bt87x_boards[] = {
+static __devinitdata struct snd_bt87x_board snd_bt87x_boards[] = {
 	[SND_BT87X_BOARD_UNKNOWN] = {
 		.dig_rate = 32000, /* just a guess */
 	},
@@ -435,7 +435,7 @@ static int snd_bt87x_pcm_open(struct snd_pcm_substream *substream)
 
 _error:
 	clear_bit(0, &chip->opened);
-	smp_mb__after_atomic();
+	smp_mb__after_clear_bit();
 	return err;
 }
 
@@ -450,7 +450,7 @@ static int snd_bt87x_close(struct snd_pcm_substream *substream)
 
 	chip->substream = NULL;
 	clear_bit(0, &chip->opened);
-	smp_mb__after_atomic();
+	smp_mb__after_clear_bit();
 	return 0;
 }
 
@@ -696,7 +696,7 @@ static int snd_bt87x_dev_free(struct snd_device *device)
 	return snd_bt87x_free(chip);
 }
 
-static int snd_bt87x_pcm(struct snd_bt87x *chip, int device, char *name)
+static int __devinit snd_bt87x_pcm(struct snd_bt87x *chip, int device, char *name)
 {
 	int err;
 	struct snd_pcm *pcm;
@@ -714,9 +714,9 @@ static int snd_bt87x_pcm(struct snd_bt87x *chip, int device, char *name)
 							ALIGN(255 * 4092, 1024));
 }
 
-static int snd_bt87x_create(struct snd_card *card,
-			    struct pci_dev *pci,
-			    struct snd_bt87x **rchip)
+static int __devinit snd_bt87x_create(struct snd_card *card,
+				      struct pci_dev *pci,
+				      struct snd_bt87x **rchip)
 {
 	struct snd_bt87x *chip;
 	int err;
@@ -822,7 +822,7 @@ MODULE_DEVICE_TABLE(pci, snd_bt87x_ids);
  * (DVB cards use the audio function to transfer MPEG data) */
 static struct {
 	unsigned short subvendor, subdevice;
-} blacklist[] = {
+} blacklist[] __devinitdata = {
 	{0x0071, 0x0101}, /* Nebula Electronics DigiTV */
 	{0x11bd, 0x001c}, /* Pinnacle PCTV Sat */
 	{0x11bd, 0x0026}, /* Pinnacle PCTV SAT CI */
@@ -839,7 +839,7 @@ static struct {
 static struct pci_driver driver;
 
 /* return the id of the card, or a negative value if it's blacklisted */
-static int snd_bt87x_detect_card(struct pci_dev *pci)
+static int __devinit snd_bt87x_detect_card(struct pci_dev *pci)
 {
 	int i;
 	const struct pci_device_id *supported;
@@ -864,8 +864,8 @@ static int snd_bt87x_detect_card(struct pci_dev *pci)
 	return SND_BT87X_BOARD_UNKNOWN;
 }
 
-static int snd_bt87x_probe(struct pci_dev *pci,
-			   const struct pci_device_id *pci_id)
+static int __devinit snd_bt87x_probe(struct pci_dev *pci,
+				     const struct pci_device_id *pci_id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -950,7 +950,7 @@ _error:
 	return err;
 }
 
-static void snd_bt87x_remove(struct pci_dev *pci)
+static void __devexit snd_bt87x_remove(struct pci_dev *pci)
 {
 	snd_card_free(pci_get_drvdata(pci));
 	pci_set_drvdata(pci, NULL);
@@ -968,7 +968,7 @@ static struct pci_driver driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = snd_bt87x_ids,
 	.probe = snd_bt87x_probe,
-	.remove = snd_bt87x_remove,
+	.remove = __devexit_p(snd_bt87x_remove),
 };
 
 static int __init alsa_card_bt87x_init(void)

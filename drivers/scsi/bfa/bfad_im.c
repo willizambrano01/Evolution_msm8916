@@ -523,13 +523,20 @@ bfad_im_scsi_host_alloc(struct bfad_s *bfad, struct bfad_im_port_s *im_port,
 	int error = 1;
 
 	mutex_lock(&bfad_mutex);
-	error = idr_alloc(&bfad_im_port_index, im_port, 0, 0, GFP_KERNEL);
-	if (error < 0) {
+	if (!idr_pre_get(&bfad_im_port_index, GFP_KERNEL)) {
 		mutex_unlock(&bfad_mutex);
-		printk(KERN_WARNING "idr_alloc failure\n");
+		printk(KERN_WARNING "idr_pre_get failure\n");
 		goto out;
 	}
-	im_port->idr_id = error;
+
+	error = idr_get_new(&bfad_im_port_index, im_port,
+					 &im_port->idr_id);
+	if (error) {
+		mutex_unlock(&bfad_mutex);
+		printk(KERN_WARNING "idr_get_new failure\n");
+		goto out;
+	}
+
 	mutex_unlock(&bfad_mutex);
 
 	im_port->shost = bfad_scsi_host_alloc(im_port, bfad);
@@ -680,21 +687,25 @@ bfa_status_t
 bfad_im_probe(struct bfad_s *bfad)
 {
 	struct bfad_im_s      *im;
+	bfa_status_t    rc = BFA_STATUS_OK;
 
 	im = kzalloc(sizeof(struct bfad_im_s), GFP_KERNEL);
-	if (im == NULL)
-		return BFA_STATUS_ENOMEM;
+	if (im == NULL) {
+		rc = BFA_STATUS_ENOMEM;
+		goto ext;
+	}
 
 	bfad->im = im;
 	im->bfad = bfad;
 
 	if (bfad_thread_workq(bfad) != BFA_STATUS_OK) {
 		kfree(im);
-		return BFA_STATUS_FAILED;
+		rc = BFA_STATUS_FAILED;
 	}
 
 	INIT_WORK(&im->aen_im_notify_work, bfad_aen_im_notify_handler);
-	return BFA_STATUS_OK;
+ext:
+	return rc;
 }
 
 void
@@ -976,7 +987,7 @@ done:
 	return 0;
 }
 
-u32
+static u32
 bfad_im_supported_speeds(struct bfa_s *bfa)
 {
 	struct bfa_ioc_attr_s *ioc_attr;
@@ -1205,15 +1216,6 @@ bfad_im_queuecommand_lck(struct scsi_cmnd *cmnd, void (*done) (struct scsi_cmnd 
 	rc = fc_remote_port_chkready(rport);
 	if (rc) {
 		cmnd->result = rc;
-		done(cmnd);
-		return 0;
-	}
-
-	if (bfad->bfad_flags & BFAD_EEH_BUSY) {
-		if (bfad->bfad_flags & BFAD_EEH_PCI_CHANNEL_IO_PERM_FAILURE)
-			cmnd->result = DID_NO_CONNECT << 16;
-		else
-			cmnd->result = DID_REQUEUE << 16;
 		done(cmnd);
 		return 0;
 	}

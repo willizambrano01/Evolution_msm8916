@@ -406,13 +406,16 @@ static inline int numaq_check_phys_apicid_present(int phys_apicid)
  * We use physical apicids here, not logical, so just return the default
  * physical broadcast to stop people from breaking us
  */
-static int
-numaq_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
-			     const struct cpumask *andmask,
-			     unsigned int *apicid)
+static unsigned int numaq_cpu_mask_to_apicid(const struct cpumask *cpumask)
 {
-	*apicid = 0x0F;
-	return 0;
+	return 0x0F;
+}
+
+static inline unsigned int
+numaq_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
+			     const struct cpumask *andmask)
+{
+	return 0x0F;
 }
 
 /* No NUMA-Q box has a HT CPU, but it can't hurt to use the default code. */
@@ -436,6 +439,20 @@ static int probe_numaq(void)
 {
 	/* already know from get_memcfg_numaq() */
 	return found_numaq;
+}
+
+static void numaq_vector_allocation_domain(int cpu, struct cpumask *retmask)
+{
+	/* Careful. Some cpus do not strictly honor the set of cpus
+	 * specified in the interrupt destination when using lowest
+	 * priority interrupt delivery mode.
+	 *
+	 * In particular there was a hyperthreading cpu observed to
+	 * deliver interrupts to the wrong hyperthread when only one
+	 * hyperthread was specified in the interrupt desitination.
+	 */
+	cpumask_clear(retmask);
+	cpumask_bits(retmask)[0] = APIC_ALL_CPUS;
 }
 
 static void numaq_setup_portio_remap(void)
@@ -474,7 +491,7 @@ static struct apic __refdata apic_numaq = {
 	.check_apicid_used		= numaq_check_apicid_used,
 	.check_apicid_present		= numaq_check_apicid_present,
 
-	.vector_allocation_domain	= flat_vector_allocation_domain,
+	.vector_allocation_domain	= numaq_vector_allocation_domain,
 	.init_apic_ldr			= numaq_init_apic_ldr,
 
 	.ioapic_phys_id_map		= numaq_ioapic_phys_id_map,
@@ -492,6 +509,7 @@ static struct apic __refdata apic_numaq = {
 	.set_apic_id			= NULL,
 	.apic_id_mask			= 0x0F << 24,
 
+	.cpu_mask_to_apicid		= numaq_cpu_mask_to_apicid,
 	.cpu_mask_to_apicid_and		= numaq_cpu_mask_to_apicid_and,
 
 	.send_IPI_mask			= numaq_send_IPI_mask,
@@ -512,7 +530,6 @@ static struct apic __refdata apic_numaq = {
 
 	.read				= native_apic_mem_read,
 	.write				= native_apic_mem_write,
-	.eoi_write			= native_apic_mem_write,
 	.icr_read			= native_apic_icr_read,
 	.icr_write			= native_apic_icr_write,
 	.wait_icr_idle			= native_apic_wait_icr_idle,

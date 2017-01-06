@@ -1,7 +1,7 @@
 /*
  * Atomic operations for the Hexagon architecture
  *
- * Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2011, The Linux Foundation. All rights reserved.
  *
  *
  * This program is free software; you can redistribute it and/or modify
@@ -117,37 +117,35 @@ static inline int atomic_sub_return(int i, atomic_t *v)
 #define atomic_sub(i, v) atomic_sub_return(i, (v))
 
 /**
- * __atomic_add_unless - add unless the number is a given value
+ * atomic_add_unless - add unless the number is a given value
  * @v: pointer to value
  * @a: amount to add
  * @u: unless value is equal to u
  *
- * Returns old value.
- *
+ * Returns 1 if the add happened, 0 if it didn't.
  */
-
 static inline int __atomic_add_unless(atomic_t *v, int a, int u)
 {
-	int __oldval;
-	register int tmp;
-
+	int output, __oldval;
 	asm volatile(
 		"1:	%0 = memw_locked(%2);"
 		"	{"
 		"		p3 = cmp.eq(%0, %4);"
 		"		if (p3.new) jump:nt 2f;"
-		"		%1 = add(%0, %3);"
+		"		%0 = add(%0, %3);"
+		"		%1 = #0;"
 		"	}"
-		"	memw_locked(%2, p3) = %1;"
+		"	memw_locked(%2, p3) = %0;"
 		"	{"
 		"		if !p3 jump 1b;"
+		"		%1 = #1;"
 		"	}"
 		"2:"
-		: "=&r" (__oldval), "=&r" (tmp)
+		: "=&r" (__oldval), "=&r" (output)
 		: "r" (v), "r" (a), "r" (u)
 		: "memory", "p3"
 	);
-	return __oldval;
+	return output;
 }
 
 #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)

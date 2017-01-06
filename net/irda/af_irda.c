@@ -305,7 +305,8 @@ static void irda_connect_response(struct irda_sock *self)
 
 	IRDA_DEBUG(2, "%s()\n", __func__);
 
-	skb = alloc_skb(TTP_MAX_HEADER + TTP_SAR_HEADER, GFP_KERNEL);
+	skb = alloc_skb(TTP_MAX_HEADER + TTP_SAR_HEADER,
+			GFP_ATOMIC);
 	if (skb == NULL) {
 		IRDA_DEBUG(0, "%s() Unable to allocate sk_buff!\n",
 			   __func__);
@@ -467,7 +468,7 @@ static int irda_open_tsap(struct irda_sock *self, __u8 tsap_sel, char *name)
 	notify_t notify;
 
 	if (self->tsap) {
-		IRDA_DEBUG(0, "%s: busy!\n", __func__);
+		IRDA_WARNING("%s: busy!\n", __func__);
 		return -EBUSY;
 	}
 
@@ -954,7 +955,7 @@ out:
  * The main difference with a "standard" connect is that with IrDA we need
  * to resolve the service name into a TSAP selector (in TCP, port number
  * doesn't have to be resolved).
- * Because of this service name resolution, we can offer "auto-connect",
+ * Because of this service name resoltion, we can offer "auto-connect",
  * where we connect to a service without specifying a destination address.
  *
  * Note : by consulting "errno", the user space caller may learn the cause
@@ -1103,10 +1104,10 @@ static int irda_create(struct net *net, struct socket *sock, int protocol,
 	struct sock *sk;
 	struct irda_sock *self;
 
-	IRDA_DEBUG(2, "%s()\n", __func__);
-
 	if (protocol < 0 || protocol > SK_PROTOCOL_MAX)
 		return -EINVAL;
+
+	IRDA_DEBUG(2, "%s()\n", __func__);
 
 	if (net != &init_net)
 		return -EAFNOSUPPORT;
@@ -1122,7 +1123,7 @@ static int irda_create(struct net *net, struct socket *sock, int protocol,
 	}
 
 	/* Allocate networking socket */
-	sk = sk_alloc(net, PF_IRDA, GFP_KERNEL, &irda_proto);
+	sk = sk_alloc(net, PF_IRDA, GFP_ATOMIC, &irda_proto);
 	if (sk == NULL)
 		return -ENOMEM;
 
@@ -1451,6 +1452,8 @@ static int irda_recvmsg_stream(struct kiocb *iocb, struct socket *sock,
 	err = 0;
 	target = sock_rcvlowat(sk, flags & MSG_WAITALL, size);
 	timeo = sock_rcvtimeo(sk, noblock);
+
+	msg->msg_namelen = 0;
 
 	do {
 		int chunk;
@@ -2567,7 +2570,8 @@ bed:
 						   err);
 
 			/* If watchdog is still activated, kill it! */
-			del_timer(&(self->watchdog));
+			if(timer_pending(&(self->watchdog)))
+				del_timer(&(self->watchdog));
 
 			IRDA_DEBUG(1, "%s(), ...waking up !\n", __func__);
 

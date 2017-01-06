@@ -12,7 +12,7 @@
 #include <linux/debug_locks.h>
 #include <linux/delay.h>
 #include <linux/export.h>
-#include <soc/qcom/watchdog.h>
+#include <linux/bug.h>
 
 void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
 			  struct lock_class_key *key)
@@ -65,11 +65,7 @@ static void spin_dump(raw_spinlock_t *lock, const char *msg)
 		owner ? owner->comm : "<none>",
 		owner ? task_pid_nr(owner) : -1,
 		lock->owner_cpu);
-#ifdef CONFIG_DEBUG_SPINLOCK_BITE_ON_BUG
-	msm_trigger_wdog_bite();
-#elif defined(CONFIG_DEBUG_SPINLOCK_PANIC_ON_BUG)
-	BUG();
-#endif
+	BUG_ON(PANIC_CORRUPTION);
 	dump_stack();
 }
 
@@ -111,8 +107,13 @@ static inline void debug_spin_unlock(raw_spinlock_t *lock)
 
 static void __spin_lock_debug(raw_spinlock_t *lock)
 {
+#ifdef CONFIG_SPINLOCK_TIMEOUT_EXT
+	static u32 spinlock_timeout = 2*HZ;
+#else
+	static u32 spinlock_timeout = HZ;
+#endif
 	u64 i;
-	u64 loops = loops_per_jiffy * HZ;
+	u64 loops = (loops_per_jiffy * spinlock_timeout);
 
 	for (i = 0; i < loops; i++) {
 		if (arch_spin_trylock(&lock->raw_lock))
@@ -120,7 +121,7 @@ static void __spin_lock_debug(raw_spinlock_t *lock)
 		__delay(1);
 	}
 	/* lockup suspected: */
-	spin_bug(lock, "lockup suspected");
+	spin_dump(lock, "lockup");
 #ifdef CONFIG_SMP
 	trigger_all_cpu_backtrace();
 #endif

@@ -29,35 +29,37 @@
 #include <linux/mtd/partitions.h>
 #include <linux/mtd/nand.h>
 #include <linux/mmc/host.h>
-#include <linux/usb/phy.h>
 
 #include <linux/regulator/machine.h>
 #include <linux/i2c/twl.h>
-#include "id.h"
+
+#include <mach/hardware.h>
+#include <mach/id.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/mach/flash.h>
 
+#include <plat/board.h>
 #include "common.h"
-#include "gpmc.h"
-#include <linux/platform_data/mtd-nand-omap2.h>
+#include <plat/gpmc.h>
+#include <plat/nand.h>
+#include <plat/usb.h>
 #include <video/omapdss.h>
-#include <video/omap-panel-data.h>
+#include <video/omap-panel-generic-dpi.h>
+#include <video/omap-panel-dvi.h>
 
-#include <linux/platform_data/spi-omap2-mcspi.h>
+#include <plat/mcspi.h>
 #include <linux/input/matrix_keypad.h>
 #include <linux/spi/spi.h>
 #include <linux/dm9000.h>
 #include <linux/interrupt.h>
 
 #include "sdram-micron-mt46h32m32lf-6.h"
+
 #include "mux.h"
 #include "hsmmc.h"
-#include "board-flash.h"
 #include "common-board-devices.h"
-
-#define	NAND_CS			0
 
 #define OMAP_DM9000_GPIO_IRQ	25
 #define OMAP3_DEVKIT_TS_GPIO	27
@@ -103,6 +105,32 @@ static struct omap2_hsmmc_info mmc[] = {
 	{}	/* Terminator */
 };
 
+static int devkit8000_panel_enable_lcd(struct omap_dss_device *dssdev)
+{
+	if (gpio_is_valid(dssdev->reset_gpio))
+		gpio_set_value_cansleep(dssdev->reset_gpio, 1);
+	return 0;
+}
+
+static void devkit8000_panel_disable_lcd(struct omap_dss_device *dssdev)
+{
+	if (gpio_is_valid(dssdev->reset_gpio))
+		gpio_set_value_cansleep(dssdev->reset_gpio, 0);
+}
+
+static int devkit8000_panel_enable_dvi(struct omap_dss_device *dssdev)
+{
+	if (gpio_is_valid(dssdev->reset_gpio))
+		gpio_set_value_cansleep(dssdev->reset_gpio, 1);
+	return 0;
+}
+
+static void devkit8000_panel_disable_dvi(struct omap_dss_device *dssdev)
+{
+	if (gpio_is_valid(dssdev->reset_gpio))
+		gpio_set_value_cansleep(dssdev->reset_gpio, 0);
+}
+
 static struct regulator_consumer_supply devkit8000_vmmc1_supply[] = {
 	REGULATOR_SUPPLY("vmmc", "omap_hsmmc.0"),
 };
@@ -114,7 +142,8 @@ static struct regulator_consumer_supply devkit8000_vio_supply[] = {
 
 static struct panel_generic_dpi_data lcd_panel = {
 	.name			= "innolux_at070tn83",
-	/* gpios filled in code */
+	.platform_enable        = devkit8000_panel_enable_lcd,
+	.platform_disable       = devkit8000_panel_disable_lcd,
 };
 
 static struct omap_dss_device devkit8000_lcd_device = {
@@ -125,15 +154,15 @@ static struct omap_dss_device devkit8000_lcd_device = {
 	.phy.dpi.data_lines     = 24,
 };
 
-static struct tfp410_platform_data dvi_panel = {
-	.power_down_gpio	= -1,
-	.i2c_bus_num		= 1,
+static struct panel_dvi_platform_data dvi_panel = {
+	.platform_enable        = devkit8000_panel_enable_dvi,
+	.platform_disable       = devkit8000_panel_disable_dvi,
 };
 
 static struct omap_dss_device devkit8000_dvi_device = {
 	.name                   = "dvi",
 	.type                   = OMAP_DISPLAY_TYPE_DPI,
-	.driver_name            = "tfp410",
+	.driver_name            = "dvi",
 	.data			= &dvi_panel,
 	.phy.dpi.data_lines     = 24,
 };
@@ -196,6 +225,8 @@ static struct gpio_led gpio_leds[];
 static int devkit8000_twl_gpio_setup(struct device *dev,
 		unsigned gpio, unsigned ngpio)
 {
+	int ret;
+
 	/* gpio + 0 is "mmc0_cd" (input/IRQ) */
 	mmc[0].gpio_cd = gpio + 0;
 	omap_hsmmc_late_init(mmc);
@@ -204,16 +235,30 @@ static int devkit8000_twl_gpio_setup(struct device *dev,
 	gpio_leds[2].gpio = gpio + TWL4030_GPIO_MAX + 1;
 
 	/* TWL4030_GPIO_MAX + 0 is "LCD_PWREN" (out, active high) */
-	lcd_panel.num_gpios = 1;
-	lcd_panel.gpios[0] = gpio + TWL4030_GPIO_MAX + 0;
+	devkit8000_lcd_device.reset_gpio = gpio + TWL4030_GPIO_MAX + 0;
+	ret = gpio_request_one(devkit8000_lcd_device.reset_gpio,
+			       GPIOF_OUT_INIT_LOW, "LCD_PWREN");
+	if (ret < 0) {
+		devkit8000_lcd_device.reset_gpio = -EINVAL;
+		printk(KERN_ERR "Failed to request GPIO for LCD_PWRN\n");
+	}
 
 	/* gpio + 7 is "DVI_PD" (out, active low) */
-	dvi_panel.power_down_gpio = gpio + 7;
+	devkit8000_dvi_device.reset_gpio = gpio + 7;
+	ret = gpio_request_one(devkit8000_dvi_device.reset_gpio,
+			       GPIOF_OUT_INIT_LOW, "DVI PowerDown");
+	if (ret < 0) {
+		devkit8000_dvi_device.reset_gpio = -EINVAL;
+		printk(KERN_ERR "Failed to request GPIO for DVI PowerDown\n");
+	}
 
 	return 0;
 }
 
 static struct twl4030_gpio_platform_data devkit8000_gpio_data = {
+	.gpio_base	= OMAP_MAX_GPIO_LINES,
+	.irq_base	= TWL4030_GPIO_IRQ_BASE,
+	.irq_end	= TWL4030_GPIO_IRQ_END,
 	.use_leds	= true,
 	.pulldowns	= BIT(1) | BIT(2) | BIT(6) | BIT(8) | BIT(13)
 				| BIT(15) | BIT(16) | BIT(17),
@@ -414,8 +459,16 @@ static struct platform_device *devkit8000_devices[] __initdata = {
 	&omap_dm9000_dev,
 };
 
-static struct usbhs_omap_platform_data usbhs_bdata __initdata = {
+static const struct usbhs_omap_board_data usbhs_bdata __initconst = {
+
 	.port_mode[0] = OMAP_EHCI_PORT_MODE_PHY,
+	.port_mode[1] = OMAP_USBHS_PORT_MODE_UNUSED,
+	.port_mode[2] = OMAP_USBHS_PORT_MODE_UNUSED,
+
+	.phy_reset  = true,
+	.reset_gpio_port[0]  = -EINVAL,
+	.reset_gpio_port[1]  = -EINVAL,
+	.reset_gpio_port[2]  = -EINVAL
 };
 
 #ifdef CONFIG_OMAP_MUX
@@ -593,13 +646,10 @@ static void __init devkit8000_init(void)
 
 	omap_ads7846_init(2, OMAP3_DEVKIT_TS_GPIO, 0, NULL);
 
-	usb_bind_phy("musb-hdrc.0.auto", 0, "twl4030_usb");
 	usb_musb_init(NULL);
 	usbhs_init(&usbhs_bdata);
-	board_nand_init(devkit8000_nand_partitions,
-			ARRAY_SIZE(devkit8000_nand_partitions), NAND_CS,
-			NAND_BUSWIDTH_16, NULL);
-	omap_twl4030_audio_init("omap3beagle", NULL);
+	omap_nand_flash_init(NAND_BUSWIDTH_16, devkit8000_nand_partitions,
+			     ARRAY_SIZE(devkit8000_nand_partitions));
 
 	/* Ensure SDRC pins are mux'd for self-refresh */
 	omap_mux_init_signal("sdrc_cke0", OMAP_PIN_OUTPUT);
@@ -614,7 +664,6 @@ MACHINE_START(DEVKIT8000, "OMAP3 Devkit8000")
 	.init_irq	= omap3_init_irq,
 	.handle_irq	= omap3_intc_handle_irq,
 	.init_machine	= devkit8000_init,
-	.init_late	= omap35xx_init_late,
-	.init_time	= omap3_secure_sync32k_timer_init,
-	.restart	= omap3xxx_restart,
+	.timer		= &omap3_secure_timer,
+	.restart	= omap_prcm_restart,
 MACHINE_END

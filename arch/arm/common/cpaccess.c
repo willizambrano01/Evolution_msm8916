@@ -17,6 +17,7 @@
 #include <linux/proc_fs.h>
 #include <linux/kernel_stat.h>
 #include <linux/uaccess.h>
+#include <linux/sysdev.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/kernel.h>
@@ -57,6 +58,10 @@ char type[TYPE_MAX_CHARACTERS] = "C";
 
 static DEFINE_PER_CPU(struct cp_params, cp_param)
 	 = { 0, 15, 0, 0, 0, 0, 0, 'r' };
+
+static struct sysdev_class cpaccess_sysclass = {
+	.name = "cpaccess",
+};
 
 void cpaccess_dummy_inst(void);
 
@@ -272,6 +277,15 @@ static ssize_t cp_register_write_sysfs(
 }
 
 /*
+ * wrapper for deprecated sysdev write interface
+ */
+static ssize_t sysdev_cp_register_write_sysfs(struct sys_device *dev,
+	struct sysdev_attribute *attr, const char *buf, size_t cnt)
+{
+	return cp_register_write_sysfs(NULL, NULL, buf, cnt);
+}
+
+/*
  * cp_register_read_sysfs - sysfs interface for reading CP registers
  *
  * Code to read in the CPxx crn, crm, op1, op2 variables, or into
@@ -298,6 +312,26 @@ static ssize_t cp_register_read_sysfs(
 	return ret;
 }
 
+/*
+ * wrapper for deprecated sysdev read interface
+ */
+static ssize_t sysdev_cp_register_read_sysfs(struct sys_device *dev,
+	struct sysdev_attribute *attr, char *buf)
+{
+	return cp_register_read_sysfs(NULL, NULL, buf);
+}
+
+/*
+ * Setup sysfs files
+ */
+SYSDEV_ATTR(cp_rw, 0644, sysdev_cp_register_read_sysfs,
+	    sysdev_cp_register_write_sysfs);
+
+static struct sys_device device_cpaccess = {
+	.id     = 0,
+	.cls    = &cpaccess_sysclass,
+};
+
 static struct device cpaccess_dev = {
 	.init_name = "cpaccess",
 };
@@ -320,7 +354,25 @@ static struct attribute_group attr_group = {
  */
 static int __init init_cpaccess_sysfs(void)
 {
-	int error;
+	/*
+	 * sysdev interface is deprecated and will be removed
+	 * after migration to new sysfs entry
+	 */
+
+	int error = sysdev_class_register(&cpaccess_sysclass);
+
+	if (!error)
+		error = sysdev_register(&device_cpaccess);
+	else
+		pr_err("Error initializing cpaccess interface\n");
+
+	if (!error)
+		error = sysdev_create_file(&device_cpaccess,
+		 &attr_cp_rw);
+	else {
+		pr_err("Error initializing cpaccess interface\n");
+		goto exit0;
+	}
 
 	error = device_register(&cpaccess_dev);
 	if (error) {
@@ -345,11 +397,17 @@ static int __init init_cpaccess_sysfs(void)
 exit1:
 	device_unregister(&cpaccess_dev);
 exit0:
+	sysdev_unregister(&device_cpaccess);
+	sysdev_class_unregister(&cpaccess_sysclass);
 	return error;
 }
 
 static void __exit exit_cpaccess_sysfs(void)
 {
+	sysdev_remove_file(&device_cpaccess, &attr_cp_rw);
+	sysdev_unregister(&device_cpaccess);
+	sysdev_class_unregister(&cpaccess_sysclass);
+
 	sysfs_remove_group(&cpaccess_dev.kobj, &attr_group);
 	device_unregister(&cpaccess_dev);
 }

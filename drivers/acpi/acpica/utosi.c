@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2013, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,12 +68,11 @@ static struct acpi_interface_info acpi_default_supported_interfaces[] = {
 	{"Windows 2001.1", NULL, 0, ACPI_OSI_WINSRV_2003},	/* Windows Server 2003 */
 	{"Windows 2001 SP2", NULL, 0, ACPI_OSI_WIN_XP_SP2},	/* Windows XP SP2 */
 	{"Windows 2001.1 SP1", NULL, 0, ACPI_OSI_WINSRV_2003_SP1},	/* Windows Server 2003 SP1 - Added 03/2006 */
-	{"Windows 2006", NULL, 0, ACPI_OSI_WIN_VISTA},	/* Windows vista - Added 03/2006 */
+	{"Windows 2006", NULL, 0, ACPI_OSI_WIN_VISTA},	/* Windows Vista - Added 03/2006 */
 	{"Windows 2006.1", NULL, 0, ACPI_OSI_WINSRV_2008},	/* Windows Server 2008 - Added 09/2009 */
 	{"Windows 2006 SP1", NULL, 0, ACPI_OSI_WIN_VISTA_SP1},	/* Windows Vista SP1 - Added 09/2009 */
 	{"Windows 2006 SP2", NULL, 0, ACPI_OSI_WIN_VISTA_SP2},	/* Windows Vista SP2 - Added 09/2010 */
 	{"Windows 2009", NULL, 0, ACPI_OSI_WIN_7},	/* Windows 7 and Server 2008 R2 - Added 09/2009 */
-	{"Windows 2012", NULL, 0, ACPI_OSI_WIN_8},	/* Windows 8 and Server 2012 - Added 08/2012 */
 
 	/* Feature Group Strings */
 
@@ -108,14 +107,9 @@ static struct acpi_interface_info acpi_default_supported_interfaces[] = {
 
 acpi_status acpi_ut_initialize_interfaces(void)
 {
-	acpi_status status;
 	u32 i;
 
-	status = acpi_os_acquire_mutex(acpi_gbl_osi_mutex, ACPI_WAIT_FOREVER);
-	if (ACPI_FAILURE(status)) {
-		return (status);
-	}
-
+	(void)acpi_os_acquire_mutex(acpi_gbl_osi_mutex, ACPI_WAIT_FOREVER);
 	acpi_gbl_supported_interfaces = acpi_default_supported_interfaces;
 
 	/* Link the static list of supported interfaces */
@@ -137,24 +131,20 @@ acpi_status acpi_ut_initialize_interfaces(void)
  *
  * PARAMETERS:  None
  *
- * RETURN:      Status
+ * RETURN:      None
  *
  * DESCRIPTION: Delete all interfaces in the global list. Sets
  *              acpi_gbl_supported_interfaces to NULL.
  *
  ******************************************************************************/
 
-acpi_status acpi_ut_interface_terminate(void)
+void acpi_ut_interface_terminate(void)
 {
-	acpi_status status;
 	struct acpi_interface_info *next_interface;
 
-	status = acpi_os_acquire_mutex(acpi_gbl_osi_mutex, ACPI_WAIT_FOREVER);
-	if (ACPI_FAILURE(status)) {
-		return (status);
-	}
-
+	(void)acpi_os_acquire_mutex(acpi_gbl_osi_mutex, ACPI_WAIT_FOREVER);
 	next_interface = acpi_gbl_supported_interfaces;
+
 	while (next_interface) {
 		acpi_gbl_supported_interfaces = next_interface->next;
 
@@ -169,7 +159,6 @@ acpi_status acpi_ut_interface_terminate(void)
 	}
 
 	acpi_os_release_mutex(acpi_gbl_osi_mutex);
-	return (AE_OK);
 }
 
 /*******************************************************************************
@@ -325,7 +314,6 @@ acpi_status acpi_ut_osi_implementation(struct acpi_walk_state * walk_state)
 	union acpi_operand_object *return_desc;
 	struct acpi_interface_info *interface_info;
 	acpi_interface_handler interface_handler;
-	acpi_status status;
 	u32 return_value;
 
 	ACPI_FUNCTION_TRACE(ut_osi_implementation);
@@ -347,11 +335,7 @@ acpi_status acpi_ut_osi_implementation(struct acpi_walk_state * walk_state)
 	/* Default return value is 0, NOT SUPPORTED */
 
 	return_value = 0;
-	status = acpi_os_acquire_mutex(acpi_gbl_osi_mutex, ACPI_WAIT_FOREVER);
-	if (ACPI_FAILURE(status)) {
-		acpi_ut_remove_reference(return_desc);
-		return_ACPI_STATUS(status);
-	}
+	(void)acpi_os_acquire_mutex(acpi_gbl_osi_mutex, ACPI_WAIT_FOREVER);
 
 	/* Lookup the interface in the global _OSI list */
 

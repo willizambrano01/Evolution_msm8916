@@ -171,22 +171,26 @@ void tipc_net_route_msg(struct sk_buff *buf)
 	tipc_link_send(buf, dnode, msg_link_selector(msg));
 }
 
-void tipc_net_start(u32 addr)
+int tipc_net_start(u32 addr)
 {
 	char addr_string[16];
 
-	write_lock_bh(&tipc_net_lock);
+	tipc_subscr_stop();
+	tipc_cfg_stop();
+
 	tipc_own_addr = addr;
 	tipc_named_reinit();
 	tipc_port_reinit();
+
 	tipc_bclink_init();
-	write_unlock_bh(&tipc_net_lock);
 
-	tipc_cfg_reinit();
+	tipc_k_signal((Handler)tipc_subscr_start, 0);
+	tipc_k_signal((Handler)tipc_cfg_init, 0);
 
-	pr_info("Started in network mode\n");
-	pr_info("Own node address %s, network identity %u\n",
-		tipc_addr_string_fill(addr_string, tipc_own_addr), tipc_net_id);
+	info("Started in network mode\n");
+	info("Own node address %s, network identity %u\n",
+	     tipc_addr_string_fill(addr_string, tipc_own_addr), tipc_net_id);
+	return 0;
 }
 
 void tipc_net_stop(void)
@@ -201,5 +205,5 @@ void tipc_net_stop(void)
 	list_for_each_entry_safe(node, t_node, &tipc_node_list, list)
 		tipc_node_delete(node);
 	write_unlock_bh(&tipc_net_lock);
-	pr_info("Left network mode\n");
+	info("Left network mode\n");
 }

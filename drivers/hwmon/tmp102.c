@@ -26,7 +26,6 @@
 #include <linux/err.h>
 #include <linux/mutex.h>
 #include <linux/device.h>
-#include <linux/jiffies.h>
 
 #define	DRIVER_NAME "tmp102"
 
@@ -115,7 +114,7 @@ static ssize_t tmp102_set_temp(struct device *dev,
 
 	if (kstrtol(buf, 10, &val) < 0)
 		return -EINVAL;
-	val = clamp_val(val, -256000, 255000);
+	val = SENSORS_LIMIT(val, -256000, 255000);
 
 	mutex_lock(&tmp102->lock);
 	tmp102->temp[sda->index] = val;
@@ -147,7 +146,7 @@ static const struct attribute_group tmp102_attr_group = {
 #define TMP102_CONFIG  (TMP102_CONF_TM | TMP102_CONF_EM | TMP102_CONF_CR1)
 #define TMP102_CONFIG_RD_ONLY (TMP102_CONF_R0 | TMP102_CONF_R1 | TMP102_CONF_AL)
 
-static int tmp102_probe(struct i2c_client *client,
+static int __devinit tmp102_probe(struct i2c_client *client,
 				  const struct i2c_device_id *id)
 {
 	struct tmp102 *tmp102;
@@ -155,21 +154,22 @@ static int tmp102_probe(struct i2c_client *client,
 
 	if (!i2c_check_functionality(client->adapter,
 				     I2C_FUNC_SMBUS_WORD_DATA)) {
-		dev_err(&client->dev,
-			"adapter doesn't support SMBus word transactions\n");
+		dev_err(&client->dev, "adapter doesn't support SMBus word "
+			"transactions\n");
 		return -ENODEV;
 	}
 
-	tmp102 = devm_kzalloc(&client->dev, sizeof(*tmp102), GFP_KERNEL);
-	if (!tmp102)
+	tmp102 = kzalloc(sizeof(*tmp102), GFP_KERNEL);
+	if (!tmp102) {
+		dev_dbg(&client->dev, "kzalloc failed\n");
 		return -ENOMEM;
-
+	}
 	i2c_set_clientdata(client, tmp102);
 
 	status = i2c_smbus_read_word_swapped(client, TMP102_CONF_REG);
 	if (status < 0) {
 		dev_err(&client->dev, "error reading config register\n");
-		return status;
+		goto fail_free;
 	}
 	tmp102->config_orig = status;
 	status = i2c_smbus_write_word_swapped(client, TMP102_CONF_REG,
@@ -213,10 +213,13 @@ fail_remove_sysfs:
 fail_restore_config:
 	i2c_smbus_write_word_swapped(client, TMP102_CONF_REG,
 				     tmp102->config_orig);
+fail_free:
+	kfree(tmp102);
+
 	return status;
 }
 
-static int tmp102_remove(struct i2c_client *client)
+static int __devexit tmp102_remove(struct i2c_client *client)
 {
 	struct tmp102 *tmp102 = i2c_get_clientdata(client);
 
@@ -232,6 +235,8 @@ static int tmp102_remove(struct i2c_client *client)
 			i2c_smbus_write_word_swapped(client, TMP102_CONF_REG,
 						     config | TMP102_CONF_SD);
 	}
+
+	kfree(tmp102);
 
 	return 0;
 }
@@ -283,7 +288,7 @@ static struct i2c_driver tmp102_driver = {
 	.driver.name	= DRIVER_NAME,
 	.driver.pm	= TMP102_DEV_PM_OPS,
 	.probe		= tmp102_probe,
-	.remove		= tmp102_remove,
+	.remove		= __devexit_p(tmp102_remove),
 	.id_table	= tmp102_id,
 };
 

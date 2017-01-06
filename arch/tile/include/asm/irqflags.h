@@ -18,20 +18,32 @@
 #include <arch/interrupts.h>
 #include <arch/chip.h>
 
+#if !defined(__tilegx__) && defined(__ASSEMBLY__)
+
 /*
  * The set of interrupts we want to allow when interrupts are nominally
  * disabled.  The remainder are effectively "NMI" interrupts from
  * the point of view of the generic Linux code.  Note that synchronous
  * interrupts (aka "non-queued") are not blocked by the mask in any case.
  */
-#define LINUX_MASKABLE_INTERRUPTS \
-	(~((_AC(1,ULL) << INT_PERF_COUNT) | (_AC(1,ULL) << INT_AUX_PERF_COUNT)))
-
-#if CHIP_HAS_SPLIT_INTR_MASK()
-/* The same macro, but for the two 32-bit SPRs separately. */
-#define LINUX_MASKABLE_INTERRUPTS_LO (-1)
+#if CHIP_HAS_AUX_PERF_COUNTERS()
 #define LINUX_MASKABLE_INTERRUPTS_HI \
-	(~((1 << (INT_PERF_COUNT - 32)) | (1 << (INT_AUX_PERF_COUNT - 32))))
+       (~(INT_MASK_HI(INT_PERF_COUNT) | INT_MASK_HI(INT_AUX_PERF_COUNT)))
+#else
+#define LINUX_MASKABLE_INTERRUPTS_HI \
+       (~(INT_MASK_HI(INT_PERF_COUNT)))
+#endif
+
+#else
+
+#if CHIP_HAS_AUX_PERF_COUNTERS()
+#define LINUX_MASKABLE_INTERRUPTS \
+	(~(INT_MASK(INT_PERF_COUNT) | INT_MASK(INT_AUX_PERF_COUNT)))
+#else
+#define LINUX_MASKABLE_INTERRUPTS \
+	(~(INT_MASK(INT_PERF_COUNT)))
+#endif
+
 #endif
 
 #ifndef __ASSEMBLY__
@@ -40,15 +52,7 @@
 #include <asm/percpu.h>
 #include <arch/spr_def.h>
 
-/*
- * Set and clear kernel interrupt masks.
- *
- * NOTE: __insn_mtspr() is a compiler builtin marked as a memory
- * clobber.  We rely on it being equivalent to a compiler barrier in
- * this code since arch_local_irq_save() and friends must act as
- * compiler barriers.  This compiler semantic is baked into enough
- * places that the compiler will maintain it going forward.
- */
+/* Set and clear kernel interrupt masks. */
 #if CHIP_HAS_SPLIT_INTR_MASK()
 #if INT_PERF_COUNT < 32 || INT_AUX_PERF_COUNT < 32 || INT_MEM_ERROR >= 32
 # error Fix assumptions about which word various interrupts are in
@@ -86,14 +90,6 @@
 	__insn_mtspr(SPR_INTERRUPT_MASK_RESET_K_0, (unsigned long)(__m)); \
 	__insn_mtspr(SPR_INTERRUPT_MASK_RESET_K_1, (unsigned long)(__m>>32)); \
 } while (0)
-#define interrupt_mask_save_mask() \
-	(__insn_mfspr(SPR_INTERRUPT_MASK_SET_K_0) | \
-	 (((unsigned long long)__insn_mfspr(SPR_INTERRUPT_MASK_SET_K_1))<<32))
-#define interrupt_mask_restore_mask(mask) do { \
-	unsigned long long __m = (mask); \
-	__insn_mtspr(SPR_INTERRUPT_MASK_K_0, (unsigned long)(__m)); \
-	__insn_mtspr(SPR_INTERRUPT_MASK_K_1, (unsigned long)(__m>>32)); \
-} while (0)
 #else
 #define interrupt_mask_set(n) \
 	__insn_mtspr(SPR_INTERRUPT_MASK_SET_K, (1UL << (n)))
@@ -105,10 +101,6 @@
 	__insn_mtspr(SPR_INTERRUPT_MASK_SET_K, (mask))
 #define interrupt_mask_reset_mask(mask) \
 	__insn_mtspr(SPR_INTERRUPT_MASK_RESET_K, (mask))
-#define interrupt_mask_save_mask() \
-	__insn_mfspr(SPR_INTERRUPT_MASK_K)
-#define interrupt_mask_restore_mask(mask) \
-	__insn_mtspr(SPR_INTERRUPT_MASK_K, (mask))
 #endif
 
 /*
@@ -122,7 +114,7 @@
  * to know our current state.
  */
 DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
-#define INITIAL_INTERRUPTS_ENABLED (1ULL << INT_MEM_ERROR)
+#define INITIAL_INTERRUPTS_ENABLED INT_MASK(INT_MEM_ERROR)
 
 /* Disable interrupts. */
 #define arch_local_irq_disable() \
@@ -130,7 +122,7 @@ DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
 
 /* Disable all interrupts, including NMIs. */
 #define arch_local_irq_disable_all() \
-	interrupt_mask_set_mask(-1ULL)
+	interrupt_mask_set_mask(-1UL)
 
 /* Re-enable all maskable interrupts. */
 #define arch_local_irq_enable() \
@@ -161,7 +153,7 @@ DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
 
 /* Prevent the given interrupt from being enabled next time we enable irqs. */
 #define arch_local_irq_mask(interrupt) \
-	(__get_cpu_var(interrupts_enabled_mask) &= ~(1ULL << (interrupt)))
+	(__get_cpu_var(interrupts_enabled_mask) &= ~INT_MASK(interrupt))
 
 /* Prevent the given interrupt from being enabled immediately. */
 #define arch_local_irq_mask_now(interrupt) do { \
@@ -171,7 +163,7 @@ DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
 
 /* Allow the given interrupt to be enabled next time we enable irqs. */
 #define arch_local_irq_unmask(interrupt) \
-	(__get_cpu_var(interrupts_enabled_mask) |= (1ULL << (interrupt)))
+	(__get_cpu_var(interrupts_enabled_mask) |= INT_MASK(interrupt))
 
 /* Allow the given interrupt to be enabled immediately, if !irqs_disabled. */
 #define arch_local_irq_unmask_now(interrupt) do { \
@@ -187,7 +179,7 @@ DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
 #ifdef __tilegx__
 
 #if INT_MEM_ERROR != 0
-# error Fix IRQS_DISABLED() macro
+# error Fix IRQ_DISABLED() macro
 #endif
 
 /* Return 0 or 1 to indicate whether interrupts are currently disabled. */
@@ -215,10 +207,9 @@ DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
 	mtspr   SPR_INTERRUPT_MASK_SET_K, tmp
 
 /* Enable interrupts. */
-#define IRQ_ENABLE_LOAD(tmp0, tmp1)				\
+#define IRQ_ENABLE(tmp0, tmp1)					\
 	GET_INTERRUPTS_ENABLED_MASK_PTR(tmp0);			\
-	ld      tmp0, tmp0
-#define IRQ_ENABLE_APPLY(tmp0, tmp1)				\
+	ld      tmp0, tmp0;					\
 	mtspr   SPR_INTERRUPT_MASK_RESET_K, tmp0
 
 #else /* !__tilegx__ */
@@ -246,7 +237,7 @@ DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
 /* Disable interrupts. */
 #define IRQ_DISABLE(tmp0, tmp1)					\
 	{							\
-	 movei  tmp0, LINUX_MASKABLE_INTERRUPTS_LO;		\
+	 movei  tmp0, -1;					\
 	 moveli tmp1, lo16(LINUX_MASKABLE_INTERRUPTS_HI)	\
 	};							\
 	{							\
@@ -262,21 +253,16 @@ DECLARE_PER_CPU(unsigned long long, interrupts_enabled_mask);
 	mtspr   SPR_INTERRUPT_MASK_SET_K_1, tmp
 
 /* Enable interrupts. */
-#define IRQ_ENABLE_LOAD(tmp0, tmp1)				\
+#define IRQ_ENABLE(tmp0, tmp1)					\
 	GET_INTERRUPTS_ENABLED_MASK_PTR(tmp0);			\
 	{							\
 	 lw     tmp0, tmp0;					\
 	 addi   tmp1, tmp0, 4					\
 	};							\
-	lw      tmp1, tmp1
-#define IRQ_ENABLE_APPLY(tmp0, tmp1)				\
+	lw      tmp1, tmp1;					\
 	mtspr   SPR_INTERRUPT_MASK_RESET_K_0, tmp0;		\
 	mtspr   SPR_INTERRUPT_MASK_RESET_K_1, tmp1
 #endif
-
-#define IRQ_ENABLE(tmp0, tmp1)					\
-	IRQ_ENABLE_LOAD(tmp0, tmp1);				\
-	IRQ_ENABLE_APPLY(tmp0, tmp1)
 
 /*
  * Do the CPU's IRQ-state tracing from assembly code. We call a

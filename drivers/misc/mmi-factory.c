@@ -16,7 +16,6 @@
  * 02111-1307, USA
  */
 #include <linux/gpio.h>
-#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -25,9 +24,6 @@
 #include <linux/reboot.h>
 #include <linux/slab.h>
 #include <linux/qpnp/power-on.h>
-#include <linux/delay.h>
-#include <soc/qcom/watchdog.h>
-
 
 enum mmi_factory_device_list {
 	HONEYFUFU = 0,
@@ -38,7 +34,7 @@ enum mmi_factory_device_list {
 #define KP_CABLE_INDEX 1
 #define KP_WARN_INDEX 2
 #define KP_NUM_GPIOS 3
-
+#define PMIO_PON_EXTRA_RESET_KUNPOW_BIT BIT(9)
 struct mmi_factory_info {
 	int num_gpios;
 	struct gpio *list;
@@ -50,92 +46,23 @@ struct mmi_factory_info {
 	int fac_cbl_irq;
 };
 
-
-static int usr_rst_sw_dis_flg = -EINVAL;
-static ssize_t usr_rst_sw_dis_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	unsigned long r;
-	unsigned long mode;
-
-	r = kstrtoul(buf, 0, &mode);
-	if (r) {
-		pr_err("Invalid value = %lu\n", mode);
-		return -EINVAL;
-	}
-
-	usr_rst_sw_dis_flg = mode;
-
-	return count;
-}
-
-static ssize_t usr_rst_sw_dis_show(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%s\n",
-			 (usr_rst_sw_dis_flg > 0) ? "DISABLED" : "ENABLED");
-}
-
-static DEVICE_ATTR(usr_rst_sw_dis, 0664,
-		   usr_rst_sw_dis_show,
-		   usr_rst_sw_dis_store);
-
-static int fac_kill_sw_dis_flg = -EINVAL;
-static ssize_t fac_kill_sw_dis_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	unsigned long r;
-	unsigned long mode;
-
-	r = kstrtoul(buf, 0, &mode);
-	if (r) {
-		pr_err("Invalid value = %lu\n", mode);
-		return -EINVAL;
-	}
-
-	fac_kill_sw_dis_flg = mode;
-
-	return count;
-}
-
-static ssize_t fac_kill_sw_dis_show(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%s\n",
-			 (fac_kill_sw_dis_flg > 0) ? "DISABLED" : "ENABLED");
-}
-
-static DEVICE_ATTR(fac_kill_sw_dis, 0664,
-		   fac_kill_sw_dis_show,
-		   fac_kill_sw_dis_store);
-
 /* The driver should only be present when booting with the environment variable
  * indicating factory-cable is present.
  */
 static bool mmi_factory_cable_present(void)
 {
-	struct device_node *np = of_find_node_by_path("/chosen");
-	u32 fact_cable = 0;
+	struct device_node *np;
+	bool fact_cable;
 
-	if (np)
-		of_property_read_u32(np, "mmi,factory-cable", &fact_cable);
-
+	np = of_find_node_by_path("/chosen");
+	fact_cable = of_property_read_bool(np, "mmi,factory-cable");
 	of_node_put(np);
-	return !!fact_cable ? true : false;
-}
 
-static int is_secure;
-int __init secure_hardware_init(char *s)
-{
-	is_secure = !strncmp(s, "1", 1);
+	if (!np || !fact_cable)
+		return false;
 
-	return 1;
+	return true;
 }
-__setup("androidboot.secure_hardware=", secure_hardware_init);
 
 static void warn_irq_w(struct work_struct *w)
 {
@@ -143,36 +70,14 @@ static void warn_irq_w(struct work_struct *w)
 						     struct mmi_factory_info,
 						     warn_irq_work.work);
 	int warn_line = gpio_get_value(info->list[KP_WARN_INDEX].gpio);
-	int reset_info = RESET_EXTRA_RESET_KUNPOW_REASON;
 
 	if (!warn_line) {
 		pr_info("HW User Reset!\n");
 		pr_info("2 sec to Reset.\n");
-
-#ifdef CONFIG_QPNP_POWER_ON
-		/* trigger wdog if resin key pressed */
-		if (qpnp_pon_key_status & QPNP_PON_KEY_RESIN_BIT && !is_secure) {
-			pr_info("User triggered watchdog reset(Pwr + VolDn)\n");
-			msm_trigger_wdog_bite();
-			return;
-		}
-#endif
-		/* Configure hardware reset before halt
-		 * The new KUNGKOW circuit will not disconnect the battery if
-		 * usb/dc is connected. But because the kernel is halted, a
-		 * watchdog reset will be reported instead of hardware reset.
-		 * In this case, we need to clear the KUNPOW reset bit to let
-		 * BL detect it as a hardware reset.
-		 * A pmic hard reset is necessary to report the powerup reason
-		 * to BL correctly.
-		 */
-		if (usr_rst_sw_dis_flg <= 0) {
-			qpnp_pon_store_extra_reset_info(reset_info, 0);
-			qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
-			kernel_halt();
-		} else
-			pr_info("SW HALT Disabled!\n");
-
+		qpnp_pon_store_extra_reset_info(
+			PMIO_PON_EXTRA_RESET_KUNPOW_BIT,
+			0);
+		kernel_halt();
 		return;
 	}
 }
@@ -208,10 +113,7 @@ static void fac_cbl_irq_w(struct work_struct *w)
 				pr_info("Factory Kill Disabled!\n");
 			} else {
 				pr_info("2 sec to power off.\n");
-				if (fac_kill_sw_dis_flg <= 0)
-					kernel_power_off();
-				else
-					pr_info("SW POFF Disabled!\n");
+				kernel_power_off();
 				return;
 			}
 		}
@@ -281,8 +183,8 @@ static struct mmi_factory_info *mmi_parse_of(struct platform_device *pdev)
 	return info;
 }
 
-static enum mmi_factory_device_list hff_dev = HONEYFUFU;
-static enum mmi_factory_device_list kp_dev = KUNGPOW;
+static enum mmi_factory_device_list hff_dev  __devinitdata = HONEYFUFU;
+static enum mmi_factory_device_list kp_dev  __devinitdata = KUNGPOW;
 
 static const struct of_device_id mmi_factory_of_tbl[] = {
 	{ .compatible = "mmi,factory-support-msm8960", .data = &hff_dev},
@@ -296,7 +198,7 @@ static int mmi_factory_probe(struct platform_device *pdev)
 	const struct of_device_id *match;
 	struct mmi_factory_info *info;
 	int ret;
-	int i, warn_line;
+	int i;
 
 	match = of_match_device(mmi_factory_of_tbl, &pdev->dev);
 	if (!match) {
@@ -350,43 +252,11 @@ static int mmi_factory_probe(struct platform_device *pdev)
 		goto fail;
 	}
 
-	/* Toggle factory kill disable line */
-	warn_line = gpio_get_value(info->list[KP_WARN_INDEX].gpio);
-
-	if (!warn_line && !info->factory_cable) {
-		gpio_direction_output(info->list[KP_KILL_INDEX].gpio, 1);
-		udelay(50);
-		gpio_direction_output(info->list[KP_KILL_INDEX].gpio, 0);
-		udelay(50);
-		gpio_direction_output(info->list[KP_KILL_INDEX].gpio, 1);
-		udelay(50);
-		gpio_direction_output(info->list[KP_KILL_INDEX].gpio, 0);
-		udelay(50);
-		gpio_direction_output(info->list[KP_KILL_INDEX].gpio, 1);
-	}
-
 	if ((info->dev == KUNGPOW) && (info->num_gpios == KP_NUM_GPIOS)) {
 		/* Disable Kill if not powered up by a factory cable */
 		if (!info->factory_cable)
 			gpio_direction_output(info->list[KP_KILL_INDEX].gpio,
 						1);
-		else {
-			ret = device_create_file(&pdev->dev,
-						 &dev_attr_usr_rst_sw_dis);
-			if (ret)
-				dev_err(&pdev->dev,
-					"couldn't create usr_rst_sw_dis\n");
-
-			usr_rst_sw_dis_flg = 0;
-
-			ret = device_create_file(&pdev->dev,
-						&dev_attr_fac_kill_sw_dis);
-			if (ret)
-				dev_err(&pdev->dev,
-					"couldn't create fac_kill_sw_dis\n");
-
-			fac_kill_sw_dis_flg = 0;
-		}
 
 		info->warn_irq = gpio_to_irq(info->list[KP_WARN_INDEX].gpio);
 		info->fac_cbl_irq =
@@ -445,12 +315,6 @@ static int mmi_factory_remove(struct platform_device *pdev)
 {
 	struct mmi_factory_info *info = platform_get_drvdata(pdev);
 
-	if (usr_rst_sw_dis_flg >= 0)
-		device_remove_file(&pdev->dev,
-				   &dev_attr_usr_rst_sw_dis);
-	if (fac_kill_sw_dis_flg >= 0)
-		device_remove_file(&pdev->dev,
-				   &dev_attr_fac_kill_sw_dis);
 	if (info) {
 		gpio_free_array(info->list, info->num_gpios);
 

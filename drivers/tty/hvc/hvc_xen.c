@@ -21,7 +21,6 @@
 #include <linux/console.h>
 #include <linux/delay.h>
 #include <linux/err.h>
-#include <linux/irq.h>
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/list.h>
@@ -36,7 +35,6 @@
 #include <xen/page.h>
 #include <xen/events.h>
 #include <xen/interface/io/console.h>
-#include <xen/interface/sched.h>
 #include <xen/hvc-console.h>
 #include <xen/xenbus.h>
 
@@ -211,10 +209,11 @@ static int xen_hvm_console_init(void)
 		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL | __GFP_ZERO);
 		if (!info)
 			return -ENOMEM;
-	} else if (info->intf != NULL) {
-		/* already configured */
-		return 0;
 	}
+
+	/* already configured */
+	if (info->intf != NULL)
+		return 0;
 	/*
 	 * If the toolstack (or the hypervisor) hasn't set these values, the
 	 * default value is 0. Even though mfn = 0 and evtchn = 0 are
@@ -230,7 +229,7 @@ static int xen_hvm_console_init(void)
 	if (r < 0 || v == 0)
 		goto err;
 	mfn = v;
-	info->intf = xen_remap(mfn << PAGE_SHIFT, PAGE_SIZE);
+	info->intf = ioremap(mfn << PAGE_SHIFT, PAGE_SIZE);
 	if (info->intf == NULL)
 		goto err;
 	info->vtermno = HVC_COOKIE;
@@ -260,10 +259,12 @@ static int xen_pv_console_init(void)
 		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL | __GFP_ZERO);
 		if (!info)
 			return -ENOMEM;
-	} else if (info->intf != NULL) {
-		/* already configured */
-		return 0;
 	}
+
+	/* already configured */
+	if (info->intf != NULL)
+		return 0;
+
 	info->evtchn = xen_start_info->console.domU.evtchn;
 	info->intf = mfn_to_virt(xen_start_info->console.domU.mfn);
 	info->vtermno = HVC_COOKIE;
@@ -422,7 +423,7 @@ static int xencons_connect_backend(struct xenbus_device *dev,
 	return ret;
 }
 
-static int xencons_probe(struct xenbus_device *dev,
+static int __devinit xencons_probe(struct xenbus_device *dev,
 				  const struct xenbus_device_id *id)
 {
 	int ret, devid;
@@ -478,6 +479,7 @@ static void xencons_backend_changed(struct xenbus_device *dev,
 	case XenbusStateInitialising:
 	case XenbusStateInitialised:
 	case XenbusStateUnknown:
+	case XenbusStateClosed:
 		break;
 
 	case XenbusStateInitWait:
@@ -487,10 +489,6 @@ static void xencons_backend_changed(struct xenbus_device *dev,
 		xenbus_switch_state(dev, XenbusStateConnected);
 		break;
 
-	case XenbusStateClosed:
-		if (dev->state == XenbusStateClosed)
-			break;
-		/* Missed the backend's CLOSING state -- fallthrough */
 	case XenbusStateClosing:
 		xenbus_frontend_closed(dev);
 		break;
@@ -636,7 +634,6 @@ struct console xenboot_console = {
 	.name		= "xenboot",
 	.write		= xenboot_write_console,
 	.flags		= CON_PRINTBUFFER | CON_BOOT | CON_ANYTIME,
-	.index		= -1,
 };
 #endif	/* CONFIG_EARLY_PRINTK */
 

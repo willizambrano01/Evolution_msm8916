@@ -898,9 +898,11 @@ static int lm87_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	struct lm87_data *data;
 	int err;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct lm87_data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct lm87_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	data->valid = 0;
@@ -921,7 +923,7 @@ static int lm87_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&client->dev.kobj, &lm87_group);
 	if (err)
-		goto exit_stop;
+		goto exit_free;
 
 	if (data->channel & CHAN_NO_FAN(0)) {
 		err = sysfs_create_group(&client->dev.kobj, &lm87_group_in6);
@@ -970,8 +972,10 @@ static int lm87_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 exit_remove:
 	lm87_remove_files(client);
-exit_stop:
+exit_free:
 	lm87_write_value(client, LM87_REG_CONFIG, data->config);
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -983,6 +987,7 @@ static int lm87_remove(struct i2c_client *client)
 	lm87_remove_files(client);
 
 	lm87_write_value(client, LM87_REG_CONFIG, data->config);
+	kfree(data);
 	return 0;
 }
 

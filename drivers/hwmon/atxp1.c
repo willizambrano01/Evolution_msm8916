@@ -345,10 +345,11 @@ static int atxp1_probe(struct i2c_client *new_client,
 	struct atxp1_data *data;
 	int err;
 
-	data = devm_kzalloc(&new_client->dev, sizeof(struct atxp1_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct atxp1_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	/* Get VRM */
 	data->vrm = vid_which_vrm();
@@ -361,7 +362,7 @@ static int atxp1_probe(struct i2c_client *new_client,
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&new_client->dev.kobj, &atxp1_group);
 	if (err)
-		return err;
+		goto exit_free;
 
 	data->hwmon_dev = hwmon_device_register(&new_client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -376,6 +377,9 @@ static int atxp1_probe(struct i2c_client *new_client,
 
 exit_remove_files:
 	sysfs_remove_group(&new_client->dev.kobj, &atxp1_group);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 };
 
@@ -385,6 +389,8 @@ static int atxp1_remove(struct i2c_client *client)
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &atxp1_group);
+
+	kfree(data);
 
 	return 0;
 };

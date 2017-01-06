@@ -90,36 +90,11 @@ static struct snd_soc_platform_driver dummy_platform = {
 };
 
 static struct snd_soc_codec_driver dummy_codec;
-
-#define STUB_RATES	SNDRV_PCM_RATE_8000_192000
-#define STUB_FORMATS	(SNDRV_PCM_FMTBIT_S8 | \
-			SNDRV_PCM_FMTBIT_U8 | \
-			SNDRV_PCM_FMTBIT_S16_LE | \
-			SNDRV_PCM_FMTBIT_U16_LE | \
-			SNDRV_PCM_FMTBIT_S24_LE | \
-			SNDRV_PCM_FMTBIT_U24_LE | \
-			SNDRV_PCM_FMTBIT_S32_LE | \
-			SNDRV_PCM_FMTBIT_U32_LE | \
-			SNDRV_PCM_FMTBIT_IEC958_SUBFRAME_LE)
 static struct snd_soc_dai_driver dummy_dai = {
 	.name = "snd-soc-dummy-dai",
-	.playback = {
-		.stream_name	= "Playback",
-		.channels_min	= 1,
-		.channels_max	= 384,
-		.rates		= STUB_RATES,
-		.formats	= STUB_FORMATS,
-	},
-	.capture = {
-		.stream_name	= "Capture",
-		.channels_min	= 1,
-		.channels_max	= 384,
-		.rates = STUB_RATES,
-		.formats = STUB_FORMATS,
-	 },
 };
 
-static int snd_soc_dummy_probe(struct platform_device *pdev)
+static __devinit int snd_soc_dummy_probe(struct platform_device *pdev)
 {
 	int ret;
 
@@ -136,7 +111,7 @@ static int snd_soc_dummy_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int snd_soc_dummy_remove(struct platform_device *pdev)
+static __devexit int snd_soc_dummy_remove(struct platform_device *pdev)
 {
 	snd_soc_unregister_platform(&pdev->dev);
 	snd_soc_unregister_codec(&pdev->dev);
@@ -150,7 +125,7 @@ static struct platform_driver soc_dummy_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe = snd_soc_dummy_probe,
-	.remove = snd_soc_dummy_remove,
+	.remove = __devexit_p(snd_soc_dummy_remove),
 };
 
 static struct platform_device *soc_dummy_dev;

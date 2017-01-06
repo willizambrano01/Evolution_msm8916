@@ -1,5 +1,7 @@
 /*
- * Copyright IBM Corp. 2006
+ * include/asm-s390/appldata.h
+ *
+ * Copyright (C) IBM Corp. 2006
  *
  * Author(s): Melissa Howland <melissah@us.ibm.com>
  */
@@ -70,7 +72,7 @@ static inline int appldata_asm(struct appldata_product_id *id,
 	int ry;
 
 	if (!MACHINE_IS_VM)
-		return -EOPNOTSUPP;
+		return -ENOSYS;
 	parm_list.diag = 0xdc;
 	parm_list.function = fn;
 	parm_list.parlist_length = sizeof(parm_list);

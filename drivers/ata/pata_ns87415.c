@@ -414,7 +414,18 @@ static struct pci_driver ns87415_pci_driver = {
 #endif
 };
 
-module_pci_driver(ns87415_pci_driver);
+static int __init ns87415_init(void)
+{
+	return pci_register_driver(&ns87415_pci_driver);
+}
+
+static void __exit ns87415_exit(void)
+{
+	pci_unregister_driver(&ns87415_pci_driver);
+}
+
+module_init(ns87415_init);
+module_exit(ns87415_exit);
 
 MODULE_AUTHOR("Alan Cox");
 MODULE_DESCRIPTION("ATA low-level driver for NS87415 controllers");

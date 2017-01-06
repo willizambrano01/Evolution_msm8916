@@ -83,7 +83,7 @@ struct fb_bitfield rgb_bitfields[][4] =
 	{ { 8, 4, 0 },  { 4, 4, 0 }, { 0, 4, 0 }, { 0, 0, 0 } },
 };
 
-static struct fb_fix_screeninfo au1100fb_fix = {
+static struct fb_fix_screeninfo au1100fb_fix __devinitdata = {
 	.id		= "AU1100 FB",
 	.xpanstep 	= 1,
 	.ypanstep 	= 1,
@@ -91,7 +91,7 @@ static struct fb_fix_screeninfo au1100fb_fix = {
 	.accel		= FB_ACCEL_NONE,
 };
 
-static struct fb_var_screeninfo au1100fb_var = {
+static struct fb_var_screeninfo au1100fb_var __devinitdata = {
 	.activate	= FB_ACTIVATE_NOW,
 	.height		= -1,
 	.width		= -1,
@@ -111,16 +111,30 @@ static int au1100fb_fb_blank(int blank_mode, struct fb_info *fbi)
 	switch (blank_mode) {
 
 	case VESA_NO_BLANKING:
-		/* Turn on panel */
-		fbdev->regs->lcd_control |= LCD_CONTROL_GO;
+			/* Turn on panel */
+			fbdev->regs->lcd_control |= LCD_CONTROL_GO;
+#ifdef CONFIG_MIPS_PB1100
+			if (fbdev->panel_idx == 1) {
+				au_writew(au_readw(PB1100_G_CONTROL)
+					  | (PB1100_G_CONTROL_BL | PB1100_G_CONTROL_VDD),
+			PB1100_G_CONTROL);
+			}
+#endif
 		au_sync();
 		break;
 
 	case VESA_VSYNC_SUSPEND:
 	case VESA_HSYNC_SUSPEND:
 	case VESA_POWERDOWN:
-		/* Turn off panel */
-		fbdev->regs->lcd_control &= ~LCD_CONTROL_GO;
+			/* Turn off panel */
+			fbdev->regs->lcd_control &= ~LCD_CONTROL_GO;
+#ifdef CONFIG_MIPS_PB1100
+			if (fbdev->panel_idx == 1) {
+				au_writew(au_readw(PB1100_G_CONTROL)
+				  	  & ~(PB1100_G_CONTROL_BL | PB1100_G_CONTROL_VDD),
+			PB1100_G_CONTROL);
+			}
+#endif
 		au_sync();
 		break;
 	default:
@@ -429,7 +443,7 @@ static int au1100fb_setup(struct au1100fb_device *fbdev)
 	return 0;
 }
 
-static int au1100fb_drv_probe(struct platform_device *dev)
+static int __devinit au1100fb_drv_probe(struct platform_device *dev)
 {
 	struct au1100fb_device *fbdev = NULL;
 	struct resource *regs_res;
@@ -496,7 +510,7 @@ static int au1100fb_drv_probe(struct platform_device *dev)
 	for (page = (unsigned long)fbdev->fb_mem;
 	     page < PAGE_ALIGN((unsigned long)fbdev->fb_mem + fbdev->fb_len);
 	     page += PAGE_SIZE) {
-#ifdef CONFIG_DMA_NONCOHERENT
+#if CONFIG_DMA_NONCOHERENT
 		SetPageReserved(virt_to_page(CAC_ADDR((void *)page)));
 #else
 		SetPageReserved(virt_to_page(page));

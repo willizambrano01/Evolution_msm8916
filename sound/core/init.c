@@ -106,7 +106,7 @@ static void snd_card_id_read(struct snd_info_entry *entry,
 	snd_iprintf(buffer, "%s\n", entry->card->id);
 }
 
-static ssize_t snd_card_state_read(struct snd_info_entry *entry,
+static int snd_card_state_read(struct snd_info_entry *entry,
 			       void *file_private_data, struct file *file,
 			       char __user *buf, size_t count, loff_t pos)
 {
@@ -193,7 +193,7 @@ static inline int init_info_for_card(struct snd_card *card)
  *  space for the driver to use freely.  The allocated struct is stored
  *  in the given card_ret pointer.
  *
- *  Return: Zero if successful or a negative error code.
+ *  Returns zero if successful or a negative error code.
  */
 int snd_card_create(int idx, const char *xid,
 		    struct module *module, int extra_size,
@@ -257,7 +257,6 @@ int snd_card_create(int idx, const char *xid,
 	INIT_LIST_HEAD(&card->devices);
 	init_rwsem(&card->controls_rwsem);
 	rwlock_init(&card->ctl_files_rwlock);
-	mutex_init(&card->user_ctl_lock);
 	INIT_LIST_HEAD(&card->controls);
 	INIT_LIST_HEAD(&card->ctl_files);
 	spin_lock_init(&card->files_lock);
@@ -388,7 +387,7 @@ static const struct file_operations snd_shutdown_f_ops =
  *
  *  Disconnects all APIs from the file-operations (user space).
  *
- *  Return: Zero, otherwise a negative error code.
+ *  Returns zero, otherwise a negative error code.
  *
  *  Note: The current implementation replaces all active file->f_op with special
  *        dummy file operations (they do nothing except release).
@@ -466,7 +465,7 @@ EXPORT_SYMBOL(snd_card_disconnect);
  *  devices automatically.  That is, you don't have to release the devices
  *  by yourself.
  *
- *  Return: Zero. Frees all associated devices and frees the control
+ *  Returns zero. Frees all associated devices and frees the control
  *  interface associated to given soundcard.
  */
 static int snd_card_do_free(struct snd_card *card)
@@ -708,7 +707,7 @@ static struct device_attribute card_number_attrs =
  *  external accesses.  Thus, you should call this function at the end
  *  of the initialization of the card.
  *
- *  Return: Zero otherwise a negative error code if the registration failed.
+ *  Returns zero otherwise a negative error code if the registration failed.
  */
 int snd_card_register(struct snd_card *card)
 {
@@ -869,7 +868,7 @@ int __exit snd_card_info_done(void)
  *  This function adds the component id string to the supported list.
  *  The component can be referred from the alsa-lib.
  *
- *  Return: Zero otherwise a negative error code.
+ *  Returns zero otherwise a negative error code.
  */
   
 int snd_component_add(struct snd_card *card, const char *component)
@@ -903,7 +902,7 @@ EXPORT_SYMBOL(snd_component_add);
  *  This linked-list is used to keep tracking the connection state,
  *  and to avoid the release of busy resources by hotplug.
  *
- *  Return: zero or a negative error code.
+ *  Returns zero or a negative error code.
  */
 int snd_card_file_add(struct snd_card *card, struct file *file)
 {
@@ -940,7 +939,7 @@ EXPORT_SYMBOL(snd_card_file_add);
  *  called beforehand, it processes the pending release of
  *  resources.
  *
- *  Return: Zero or a negative error code.
+ *  Returns zero or a negative error code.
  */
 int snd_card_file_remove(struct snd_card *card, struct file *file)
 {
@@ -1007,8 +1006,6 @@ EXPORT_SYMBOL(snd_card_is_online_state);
  *  @power_state: expected power state
  *
  *  Waits until the power-state is changed.
- *
- *  Return: Zero if successful, or a negative error code.
  *
  *  Note: the power lock must be active before call.
  */

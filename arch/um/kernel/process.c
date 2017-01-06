@@ -18,15 +18,14 @@
 #include <linux/seq_file.h>
 #include <linux/tick.h>
 #include <linux/threads.h>
-#include <linux/tracehook.h>
 #include <asm/current.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
 #include <asm/uaccess.h>
-#include <as-layout.h>
-#include <kern_util.h>
-#include <os.h>
-#include <skas.h>
+#include "as-layout.h"
+#include "kern_util.h"
+#include "os.h"
+#include "skas.h"
 
 /*
  * This is a per-cpu array.  A processor only modifies its entry and it only
@@ -69,6 +68,18 @@ unsigned long alloc_stack(int order, int atomic)
 	return page;
 }
 
+int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
+{
+	int pid;
+
+	current->thread.request.u.thread.proc = fn;
+	current->thread.request.u.thread.arg = arg;
+	pid = do_fork(CLONE_VM | CLONE_UNTRACED | flags, 0,
+		      &current->thread.regs, 0, NULL, NULL);
+	return pid;
+}
+EXPORT_SYMBOL(kernel_thread);
+
 static inline void set_current(struct task_struct *task)
 {
 	cpu_tasks[task_thread_info(task)->cpu] = ((struct cpu_task)
@@ -103,10 +114,8 @@ void interrupt_end(void)
 {
 	if (need_resched())
 		schedule();
-	if (test_thread_flag(TIF_SIGPENDING))
+	if (test_tsk_thread_flag(current, TIF_SIGPENDING))
 		do_signal();
-	if (test_and_clear_thread_flag(TIF_NOTIFY_RESUME))
-		tracehook_notify_resume(&current->thread.regs);
 }
 
 void exit_thread(void)
@@ -135,10 +144,16 @@ void new_thread_handler(void)
 	arg = current->thread.request.u.thread.arg;
 
 	/*
-	 * callback returns only if the kernel thread execs a process
+	 * The return value is 1 if the kernel thread execs a process,
+	 * 0 if it just exits
 	 */
-	n = fn(arg);
-	userspace(&current->thread.regs.regs);
+	n = run_kernel_thread(fn, arg, &current->thread.exec_buf);
+	if (n == 1) {
+		/* Handle any immediate reschedules or signals */
+		interrupt_end();
+		userspace(&current->thread.regs.regs);
+	}
+	else do_exit(0);
 }
 
 /* Called magically, see new_thread_handler above */
@@ -157,38 +172,41 @@ void fork_handler(void)
 
 	current->thread.prev_sched = NULL;
 
+	/* Handle any immediate reschedules or signals */
+	interrupt_end();
+
 	userspace(&current->thread.regs.regs);
 }
 
 int copy_thread(unsigned long clone_flags, unsigned long sp,
-		unsigned long arg, struct task_struct * p)
+		unsigned long stack_top, struct task_struct * p,
+		struct pt_regs *regs)
 {
 	void (*handler)(void);
-	int kthread = current->flags & PF_KTHREAD;
 	int ret = 0;
 
 	p->thread = (struct thread_struct) INIT_THREAD;
 
-	if (!kthread) {
-	  	memcpy(&p->thread.regs.regs, current_pt_regs(),
+	if (current->thread.forking) {
+	  	memcpy(&p->thread.regs.regs, &regs->regs,
 		       sizeof(p->thread.regs.regs));
-		PT_REGS_SET_SYSCALL_RETURN(&p->thread.regs, 0);
+		REGS_SET_SYSCALL_RETURN(p->thread.regs.regs.gp, 0);
 		if (sp != 0)
 			REGS_SP(p->thread.regs.regs.gp) = sp;
 
 		handler = fork_handler;
 
 		arch_copy_thread(&current->thread.arch, &p->thread.arch);
-	} else {
+	}
+	else {
 		get_safe_registers(p->thread.regs.regs.gp, p->thread.regs.regs.fp);
-		p->thread.request.u.thread.proc = (int (*)(void *))sp;
-		p->thread.request.u.thread.arg = (void *)arg;
+		p->thread.request.u.thread = current->thread.request.u.thread;
 		handler = new_thread_handler;
 	}
 
 	new_thread(task_stack_page(p), &p->thread.switch_buf, handler);
 
-	if (!kthread) {
+	if (current->thread.forking) {
 		clear_flushed_tls(p);
 
 		/*
@@ -210,14 +228,33 @@ void initial_thread_cb(void (*proc)(void *), void *arg)
 	kmalloc_ok = save_kmalloc_ok;
 }
 
-void arch_cpu_idle(void)
+void default_idle(void)
 {
 	unsigned long long nsecs;
 
+	while (1) {
+		/* endless idle loop with no priority at all */
+
+		/*
+		 * although we are an idle CPU, we do not want to
+		 * get into the scheduler unnecessarily.
+		 */
+		if (need_resched())
+			schedule();
+
+		tick_nohz_idle_enter();
+		rcu_idle_enter();
+		nsecs = disable_timer();
+		idle_sleep(nsecs);
+		rcu_idle_exit();
+		tick_nohz_idle_exit();
+	}
+}
+
+void cpu_idle(void)
+{
 	cpu_tasks[current_thread_info()->cpu].pid = os_getpid();
-	nsecs = disable_timer();
-	idle_sleep(nsecs);
-	local_irq_enable();
+	default_idle();
 }
 
 int __cant_sleep(void) {

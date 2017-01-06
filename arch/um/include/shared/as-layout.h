@@ -35,7 +35,7 @@
 
 #ifndef __ASSEMBLY__
 
-#include <sysdep/ptrace.h>
+#include "sysdep/ptrace.h"
 
 struct cpu_task {
 	int pid;
@@ -60,8 +60,7 @@ extern unsigned long host_task_size;
 
 extern int linux_main(int argc, char **argv);
 
-struct siginfo;
-extern void (*sig_info[])(int, struct siginfo *si, struct uml_pt_regs *);
+extern void (*sig_info[])(int, struct uml_pt_regs *);
 
 #endif
 

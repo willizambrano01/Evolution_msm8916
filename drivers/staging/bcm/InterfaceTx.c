@@ -3,12 +3,12 @@
 /*this is transmit call-back(BULK OUT)*/
 static void write_bulk_callback(struct urb *urb/*, struct pt_regs *regs*/)
 {
-	struct bcm_usb_tcb *pTcb= (struct bcm_usb_tcb *)urb->context;
-	struct bcm_interface_adapter *psIntfAdapter = pTcb->psIntfAdapter;
-	struct bcm_link_request *pControlMsg = (struct bcm_link_request *)urb->transfer_buffer;
-	struct bcm_mini_adapter *psAdapter = psIntfAdapter->psAdapter ;
+	PUSB_TCB pTcb= (PUSB_TCB)urb->context;
+	PS_INTERFACE_ADAPTER psIntfAdapter = pTcb->psIntfAdapter;
+	CONTROL_MESSAGE *pControlMsg = (CONTROL_MESSAGE *)urb->transfer_buffer;
+	PMINI_ADAPTER psAdapter = psIntfAdapter->psAdapter ;
 	BOOLEAN bpowerDownMsg = FALSE ;
-	struct bcm_mini_adapter *Adapter = GET_BCM_ADAPTER(gblpnetdev);
+    PMINI_ADAPTER Adapter = GET_BCM_ADAPTER(gblpnetdev);
 
     if (unlikely(netif_msg_tx_done(Adapter)))
 	    pr_info(PFX "%s: transmit status %d\n", Adapter->dev->name, urb->status);
@@ -107,9 +107,9 @@ err_exit :
 }
 
 
-static struct bcm_usb_tcb *GetBulkOutTcb(struct bcm_interface_adapter *psIntfAdapter)
+static PUSB_TCB GetBulkOutTcb(PS_INTERFACE_ADAPTER psIntfAdapter)
 {
-	struct bcm_usb_tcb *pTcb = NULL;
+	PUSB_TCB pTcb = NULL;
 	UINT index = 0;
 
 	if((atomic_read(&psIntfAdapter->uNumTcbUsed) < MAXIMUM_USB_TCB) &&
@@ -128,7 +128,7 @@ static struct bcm_usb_tcb *GetBulkOutTcb(struct bcm_interface_adapter *psIntfAda
 	return pTcb;
 }
 
-static int TransmitTcb(struct bcm_interface_adapter *psIntfAdapter, struct bcm_usb_tcb *pTcb, PVOID data, int len)
+static int TransmitTcb(PS_INTERFACE_ADAPTER psIntfAdapter, PUSB_TCB pTcb, PVOID data, int len)
 {
 
 	struct urb *urb = pTcb->urb;
@@ -182,9 +182,9 @@ static int TransmitTcb(struct bcm_interface_adapter *psIntfAdapter, struct bcm_u
 
 int InterfaceTransmitPacket(PVOID arg, PVOID data, UINT len)
 {
-	struct bcm_usb_tcb *pTcb= NULL;
+	PUSB_TCB pTcb= NULL;
 
-	struct bcm_interface_adapter *psIntfAdapter = (struct bcm_interface_adapter *)arg;
+	PS_INTERFACE_ADAPTER psIntfAdapter = (PS_INTERFACE_ADAPTER)arg;
 	pTcb= GetBulkOutTcb(psIntfAdapter);
 	if(pTcb == NULL)
 	{

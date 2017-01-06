@@ -19,7 +19,6 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
-#include <linux/regulator/of_regulator.h>
 #include <linux/gpio.h>
 #include <linux/slab.h>
 
@@ -27,43 +26,65 @@
 #include <linux/mfd/arizona/pdata.h>
 #include <linux/mfd/arizona/registers.h>
 
+
+#define  MIN_UV 	900000
+#define  UV_STEP 	50000
+#define  HI_PWR_UV	1800000
+
 struct arizona_ldo1 {
 	struct regulator_dev *regulator;
 	struct arizona *arizona;
 
 	struct regulator_consumer_supply supply;
 	struct regulator_init_data init_data;
+
+	int ena;
+	int ena_state;
 };
 
-static int arizona_ldo1_hc_list_voltage(struct regulator_dev *rdev,
-					unsigned int selector)
+static int arizona_ldo_reg_list_voltage_linear(struct regulator_dev *rdev,
+					       unsigned int selector)
 {
 	if (selector >= rdev->desc->n_voltages)
 		return -EINVAL;
 
 	if (selector == rdev->desc->n_voltages - 1)
-		return 1800000;
+		return HI_PWR_UV;
 	else
-		return rdev->desc->min_uV + (rdev->desc->uV_step * selector);
+		return MIN_UV + (UV_STEP * selector);
 }
 
-static int arizona_ldo1_hc_map_voltage(struct regulator_dev *rdev,
-				       int min_uV, int max_uV)
+static int arizona_ldo_reg_get_voltage_sel(struct regulator_dev *rdev)
 {
-	int sel;
+	unsigned int val;
+	int ret;
+	struct arizona_ldo1 *ldo1 = rdev_get_drvdata(rdev);
 
-	sel = DIV_ROUND_UP(min_uV - rdev->desc->min_uV, rdev->desc->uV_step);
-	if (sel >= rdev->desc->n_voltages)
-		sel = rdev->desc->n_voltages - 1;
+	ret = regmap_read(ldo1->arizona->regmap,
+			  ARIZONA_LDO1_CONTROL_2,
+			  &val);
+	if (ret != 0)
+		return ret;
 
-	return sel;
+	if (val & ARIZONA_LDO1_HI_PWR)
+		return rdev->desc->n_voltages - 1;
+
+	ret = regmap_read(ldo1->arizona->regmap,
+			  ARIZONA_LDO1_CONTROL_1,
+			  &val);
+	if (ret != 0)
+		return ret;
+
+	val &= ARIZONA_LDO1_VSEL_MASK;
+	val >>= ARIZONA_LDO1_VSEL_SHIFT;
+
+	return val;
 }
 
-static int arizona_ldo1_hc_set_voltage_sel(struct regulator_dev *rdev,
+static int arizona_ldo_reg_set_voltage_sel(struct regulator_dev *rdev,
 					   unsigned sel)
 {
-	struct arizona_ldo1 *ldo = rdev_get_drvdata(rdev);
-	struct regmap *regmap = ldo->arizona->regmap;
+	struct arizona_ldo1 *ldo1 = rdev_get_drvdata(rdev);
 	unsigned int val;
 	int ret;
 
@@ -72,85 +93,91 @@ static int arizona_ldo1_hc_set_voltage_sel(struct regulator_dev *rdev,
 	else
 		val = 0;
 
-	ret = regmap_update_bits(regmap, ARIZONA_LDO1_CONTROL_2,
-				 ARIZONA_LDO1_HI_PWR, val);
-	if (ret != 0)
+	ret = regmap_update_bits(ldo1->arizona->regmap, ARIZONA_LDO1_CONTROL_2,
+			         ARIZONA_LDO1_HI_PWR, val);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_update_bits(ldo1->arizona->regmap,
+				  ARIZONA_DYNAMIC_FREQUENCY_SCALING_1,
+				  ARIZONA_SUBSYS_MAX_FREQ, val);
+	if (ret < 0)
 		return ret;
 
 	if (val)
 		return 0;
 
-	val = sel << ARIZONA_LDO1_VSEL_SHIFT;
+	sel <<= ARIZONA_LDO1_VSEL_SHIFT;
 
-	return regmap_update_bits(regmap, ARIZONA_LDO1_CONTROL_1,
-				  ARIZONA_LDO1_VSEL_MASK, val);
+	return regmap_update_bits(ldo1->arizona->regmap,
+				  ARIZONA_LDO1_CONTROL_1,
+				  ARIZONA_LDO1_VSEL_MASK, sel);
 }
 
-static int arizona_ldo1_hc_get_voltage_sel(struct regulator_dev *rdev)
+static int arizona_ldo_enable_time(struct regulator_dev *rdev)
 {
-	struct arizona_ldo1 *ldo = rdev_get_drvdata(rdev);
-	struct regmap *regmap = ldo->arizona->regmap;
-	unsigned int val;
-	int ret;
+	struct arizona_ldo1 *ldo1 = rdev_get_drvdata(rdev);
 
-	ret = regmap_read(regmap, ARIZONA_LDO1_CONTROL_2, &val);
-	if (ret != 0)
-		return ret;
-
-	if (val & ARIZONA_LDO1_HI_PWR)
-		return rdev->desc->n_voltages - 1;
-
-	ret = regmap_read(regmap, ARIZONA_LDO1_CONTROL_1, &val);
-	if (ret != 0)
-		return ret;
-
-	return (val & ARIZONA_LDO1_VSEL_MASK) >> ARIZONA_LDO1_VSEL_SHIFT;
+	switch (ldo1->arizona->type) {
+	case WM5102:
+		return 1500;
+	default:
+		return 500;
+	}
 }
 
-static struct regulator_ops arizona_ldo1_hc_ops = {
-	.list_voltage = arizona_ldo1_hc_list_voltage,
-	.map_voltage = arizona_ldo1_hc_map_voltage,
-	.get_voltage_sel = arizona_ldo1_hc_get_voltage_sel,
-	.set_voltage_sel = arizona_ldo1_hc_set_voltage_sel,
-	.get_bypass = regulator_get_bypass_regmap,
-	.set_bypass = regulator_set_bypass_regmap,
-};
+static int arizona_ldo_enable(struct regulator_dev *rdev)
+{
+	struct arizona_ldo1 *ldo1 = rdev_get_drvdata(rdev);
 
-static const struct regulator_desc arizona_ldo1_hc = {
-	.name = "LDO1",
-	.supply_name = "LDOVDD",
-	.type = REGULATOR_VOLTAGE,
-	.ops = &arizona_ldo1_hc_ops,
+	if (!ldo1->ena)
+		return -EINVAL;
 
-	.bypass_reg = ARIZONA_LDO1_CONTROL_1,
-	.bypass_mask = ARIZONA_LDO1_BYPASS,
-	.min_uV = 900000,
-	.uV_step = 50000,
-	.n_voltages = 8,
-	.enable_time = 1500,
+	gpio_set_value_cansleep(ldo1->ena, 1);
+	ldo1->ena_state = 1;
 
-	.owner = THIS_MODULE,
-};
+	return 0;
+}
+
+static int arizona_ldo_disable(struct regulator_dev *rdev)
+{
+	struct arizona_ldo1 *ldo1 = rdev_get_drvdata(rdev);
+
+	if (!ldo1->ena)
+		return -EINVAL;
+
+	gpio_set_value_cansleep(ldo1->ena, 0);
+	ldo1->ena_state = 0;
+
+	return 0;
+}
+
+static int arizona_ldo_is_enabled(struct regulator_dev *rdev)
+{
+	struct arizona_ldo1 *ldo1 = rdev_get_drvdata(rdev);
+
+	if (!ldo1->ena)
+		return -EINVAL;
+
+	return ldo1->ena_state;
+}
 
 static struct regulator_ops arizona_ldo1_ops = {
-	.list_voltage = regulator_list_voltage_linear,
-	.map_voltage = regulator_map_voltage_linear,
-	.get_voltage_sel = regulator_get_voltage_sel_regmap,
-	.set_voltage_sel = regulator_set_voltage_sel_regmap,
+	.enable = arizona_ldo_enable,
+	.disable = arizona_ldo_disable,
+	.is_enabled = arizona_ldo_is_enabled,
+	.list_voltage = arizona_ldo_reg_list_voltage_linear,
+	.get_voltage_sel = arizona_ldo_reg_get_voltage_sel,
+	.set_voltage_sel = arizona_ldo_reg_set_voltage_sel,
+	.enable_time = arizona_ldo_enable_time,
 };
 
-static const struct regulator_desc arizona_ldo1 = {
+static struct regulator_desc arizona_ldo1 = {
 	.name = "LDO1",
-	.supply_name = "LDOVDD",
 	.type = REGULATOR_VOLTAGE,
 	.ops = &arizona_ldo1_ops,
 
-	.vsel_reg = ARIZONA_LDO1_CONTROL_1,
-	.vsel_mask = ARIZONA_LDO1_VSEL_MASK,
-	.min_uV = 900000,
-	.uV_step = 25000,
-	.n_voltages = 13,
-	.enable_time = 3000,
+	.n_voltages = 8,
 
 	.owner = THIS_MODULE,
 };
@@ -172,56 +199,28 @@ static const struct regulator_init_data arizona_ldo1_default = {
 	.num_consumer_supplies = 1,
 };
 
-static int arizona_ldo1_of_get_pdata(struct arizona *arizona,
-				     struct regulator_config *config)
-{
-	struct arizona_pdata *pdata = &arizona->pdata;
-	struct arizona_ldo1 *ldo1 = config->driver_data;
-	struct device_node *init_node, *dcvdd_node;
-	struct regulator_init_data *init_data;
-
-	pdata->ldoena = arizona_of_get_named_gpio(arizona, "wlf,ldoena", true);
-
-	init_node = of_get_child_by_name(arizona->dev->of_node, "ldo1");
-	dcvdd_node = of_parse_phandle(arizona->dev->of_node, "DCVDD-supply", 0);
-
-	if (init_node) {
-		config->of_node = init_node;
-
-		init_data = of_get_regulator_init_data(arizona->dev, init_node);
-
-		if (init_data) {
-			init_data->consumer_supplies = &ldo1->supply;
-			init_data->num_consumer_supplies = 1;
-
-			if (dcvdd_node && dcvdd_node != init_node)
-				arizona->external_dcvdd = true;
-
-			pdata->ldo1 = init_data;
-		}
-	} else if (dcvdd_node) {
-		arizona->external_dcvdd = true;
-	}
-
-	of_node_put(dcvdd_node);
-
-	return 0;
-}
-
-static int arizona_ldo1_probe(struct platform_device *pdev)
+static __devinit int arizona_ldo1_probe(struct platform_device *pdev)
 {
 	struct arizona *arizona = dev_get_drvdata(pdev->dev.parent);
-	const struct regulator_desc *desc;
-	struct regulator_config config = { };
 	struct arizona_ldo1 *ldo1;
+	struct regulator_init_data *init_data;
 	int ret;
-
-	arizona->external_dcvdd = false;
 
 	ldo1 = devm_kzalloc(&pdev->dev, sizeof(*ldo1), GFP_KERNEL);
 	if (ldo1 == NULL) {
 		dev_err(&pdev->dev, "Unable to allocate private data\n");
 		return -ENOMEM;
+	}
+
+	if (arizona->pdata.ldoena) {
+		ldo1->ena = arizona->pdata.ldoena;
+		ret = gpio_request_one(ldo1->ena, GPIOF_OUT_INIT_LOW,
+					"Arizona LDOENA");
+		if (ret != 0) {
+			dev_err(arizona->dev, "Failed to request LDOENA: %d\n",
+				ret);
+			return ret;
+		}
 	}
 
 	ldo1->arizona = arizona;
@@ -233,14 +232,9 @@ static int arizona_ldo1_probe(struct platform_device *pdev)
 	 */
 	switch (arizona->type) {
 	case WM5102:
-	case WM8997:
-	case WM8998:
-	case WM1814:
-		desc = &arizona_ldo1_hc;
 		ldo1->init_data = arizona_ldo1_dvfs;
 		break;
 	default:
-		desc = &arizona_ldo1;
 		ldo1->init_data = arizona_ldo1_default;
 		break;
 	}
@@ -249,33 +243,15 @@ static int arizona_ldo1_probe(struct platform_device *pdev)
 	ldo1->supply.supply = "DCVDD";
 	ldo1->supply.dev_name = dev_name(arizona->dev);
 
-	config.dev = arizona->dev;
-	config.driver_data = ldo1;
-	config.regmap = arizona->regmap;
-
-	if (IS_ENABLED(CONFIG_OF)) {
-		if (!dev_get_platdata(arizona->dev)) {
-			ret = arizona_ldo1_of_get_pdata(arizona, &config);
-			if (ret < 0)
-				return ret;
-		}
-	}
-
-	config.ena_gpio = arizona->pdata.ldoena;
-
 	if (arizona->pdata.ldo1)
-		config.init_data = arizona->pdata.ldo1;
+		init_data = arizona->pdata.ldo1;
 	else
-		config.init_data = &ldo1->init_data;
+		init_data = &ldo1->init_data;
 
-	/*
-	 * LDO1 can only be used to supply DCVDD so if it has no
-	 * consumers then DCVDD is supplied externally.
-	 */
-	if (config.init_data->num_consumer_supplies == 0)
-		arizona->external_dcvdd = true;
+	ldo1->regulator = regulator_register(&arizona_ldo1,
+					     arizona->dev, init_data,
+					     ldo1, NULL);
 
-	ldo1->regulator = regulator_register(desc, &config);
 	if (IS_ERR(ldo1->regulator)) {
 		ret = PTR_ERR(ldo1->regulator);
 		dev_err(arizona->dev, "Failed to register LDO1 supply: %d\n",
@@ -283,14 +259,12 @@ static int arizona_ldo1_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	of_node_put(config.of_node);
-
 	platform_set_drvdata(pdev, ldo1);
 
 	return 0;
 }
 
-static int arizona_ldo1_remove(struct platform_device *pdev)
+static __devexit int arizona_ldo1_remove(struct platform_device *pdev)
 {
 	struct arizona_ldo1 *ldo1 = platform_get_drvdata(pdev);
 
@@ -301,7 +275,7 @@ static int arizona_ldo1_remove(struct platform_device *pdev)
 
 static struct platform_driver arizona_ldo1_driver = {
 	.probe = arizona_ldo1_probe,
-	.remove = arizona_ldo1_remove,
+	.remove = __devexit_p(arizona_ldo1_remove),
 	.driver		= {
 		.name	= "arizona-ldo1",
 		.owner	= THIS_MODULE,

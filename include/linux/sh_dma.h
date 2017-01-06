@@ -10,27 +10,38 @@
 #ifndef SH_DMA_H
 #define SH_DMA_H
 
-#include <linux/dmaengine.h>
 #include <linux/list.h>
-#include <linux/shdma-base.h>
-#include <linux/types.h>
-
-struct device;
+#include <linux/dmaengine.h>
 
 /* Used by slave DMA clients to request DMA to/from a specific peripheral */
 struct sh_dmae_slave {
-	struct shdma_slave		shdma_slave;	/* Set by the platform */
+	unsigned int			slave_id; /* Set by the platform */
+	struct device			*dma_dev; /* Set by the platform */
+	const struct sh_dmae_slave_config	*config;  /* Set by the driver */
 };
 
-/*
- * Supplied by platforms to specify, how a DMA channel has to be configured for
- * a certain peripheral
- */
+struct sh_dmae_regs {
+	u32 sar; /* SAR / source address */
+	u32 dar; /* DAR / destination address */
+	u32 tcr; /* TCR / transfer count */
+};
+
+struct sh_desc {
+	struct sh_dmae_regs hw;
+	struct list_head node;
+	struct dma_async_tx_descriptor async_tx;
+	enum dma_transfer_direction direction;
+	dma_cookie_t cookie;
+	size_t partial;
+	int chunks;
+	int mark;
+};
+
 struct sh_dmae_slave_config {
-	int		slave_id;
-	dma_addr_t	addr;
-	u32		chcr;
-	char		mid_rid;
+	unsigned int			slave_id;
+	dma_addr_t			addr;
+	u32				chcr;
+	char				mid_rid;
 };
 
 struct sh_dmae_channel {
@@ -98,7 +109,5 @@ struct sh_dmae_pdata {
 #define CHCR_DE	0x00000001
 #define CHCR_TE	0x00000002
 #define CHCR_IE	0x00000004
-
-bool shdma_chan_filter(struct dma_chan *chan, void *arg);
 
 #endif

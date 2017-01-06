@@ -1,6 +1,6 @@
 /*
  * Copyright (C) ST-Ericsson AB 2010
- * Author:	Sjur Brendeland
+ * Author:	Sjur Brendeland / sjur.brandeland@stericsson.com
  * License terms: GNU General Public License (GPL) version 2
  */
 
@@ -21,7 +21,7 @@
 #include <linux/debugfs.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Sjur Brendeland");
+MODULE_AUTHOR("Sjur Brendeland<sjur.brandeland@stericsson.com>");
 MODULE_DESCRIPTION("CAIF serial device TTY line discipline");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_LDISC(N_CAIF);
@@ -88,9 +88,11 @@ static inline void update_tty_status(struct ser_device *ser)
 {
 	ser->tty_status =
 		ser->tty->stopped << 5 |
+		ser->tty->hw_stopped << 4 |
 		ser->tty->flow_stopped << 3 |
 		ser->tty->packet << 2 |
-		ser->tty->port->low_latency << 1;
+		ser->tty->low_latency << 1 |
+		ser->tty->warned;
 }
 static inline void debugfs_init(struct ser_device *ser, struct tty_struct *tty)
 {

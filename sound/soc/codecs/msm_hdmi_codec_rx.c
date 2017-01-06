@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,11 +17,9 @@
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/soc.h>
-#include <linux/msm_hdmi.h>
+#include <mach/msm_hdmi_audio_codec.h>
 
 #define MSM_HDMI_PCM_RATES	SNDRV_PCM_RATE_48000
-
-static int msm_hdmi_audio_codec_return_value;
 
 struct msm_hdmi_audio_codec_rx_data {
 	struct platform_device *hdmi_core_pdev;
@@ -86,26 +84,24 @@ static int msm_hdmi_audio_codec_rx_dai_startup(
 		struct snd_pcm_substream *substream,
 		struct snd_soc_dai *dai)
 {
-	int ret = 0;
+	int rv = 0;
 	struct msm_hdmi_audio_codec_rx_data *codec_data =
 			dev_get_drvdata(dai->codec->dev);
 
-	msm_hdmi_audio_codec_return_value =
-		codec_data->hdmi_ops.hdmi_cable_status(
+	rv = codec_data->hdmi_ops.hdmi_cable_status(
 		codec_data->hdmi_core_pdev, 1);
-	if (IS_ERR_VALUE(msm_hdmi_audio_codec_return_value)) {
+	if (IS_ERR_VALUE(rv)) {
 		dev_err(dai->dev,
-			"%s() HDMI core is not ready (ret val = %d)\n",
-			__func__, msm_hdmi_audio_codec_return_value);
-		ret = msm_hdmi_audio_codec_return_value;
-	} else if (!msm_hdmi_audio_codec_return_value) {
+			"%s() HDMI core is not ready (rv = %d)\n",
+			__func__, rv);
+	} else if (!rv) {
 		dev_err(dai->dev,
 			"%s() HDMI cable is not connected (ret val = %d)\n",
-			__func__, msm_hdmi_audio_codec_return_value);
-		ret = -EAGAIN;
+			__func__, rv);
+		rv = -EAGAIN;
 	}
 
-	return ret;
+	return rv;
 }
 
 static int msm_hdmi_audio_codec_rx_dai_hw_params(
@@ -117,42 +113,43 @@ static int msm_hdmi_audio_codec_rx_dai_hw_params(
 	u32 level_shift  = 0; /* 0dB */
 	bool down_mix = 0;
 	u32 num_channels = params_channels(params);
-	int rc = 0;
+	int rv = 0;
 
 	struct msm_hdmi_audio_codec_rx_data *codec_data =
 			dev_get_drvdata(dai->codec->dev);
 
-	if (IS_ERR_VALUE(msm_hdmi_audio_codec_return_value)) {
+	rv = codec_data->hdmi_ops.hdmi_cable_status(
+		codec_data->hdmi_core_pdev, 1);
+	if (IS_ERR_VALUE(rv)) {
 		dev_err(dai->dev,
-			"%s() HDMI core is not ready (ret val = %d)\n",
-			__func__, msm_hdmi_audio_codec_return_value);
-		return msm_hdmi_audio_codec_return_value;
-	} else if (!msm_hdmi_audio_codec_return_value) {
+			"%s() HDMI core is not ready (rv = %d)\n",
+			__func__, rv);
+		return rv;
+	} else if (!rv) {
 		dev_err(dai->dev,
-			"%s() HDMI cable is not connected (ret val = %d)\n",
-			__func__, msm_hdmi_audio_codec_return_value);
+			"%s() HDMI cable is not connected (rv = %d)\n",
+			__func__, rv);
 		return -EAGAIN;
 	}
 
-	/*refer to HDMI spec CEA-861-E: Table 28 Audio InfoFrame Data Byte 4*/
 	switch (num_channels) {
 	case 2:
 		channel_allocation  = 0;
 		break;
 	case 3:
-		channel_allocation  = 0x02;/*default to FL/FR/FC*/
+		channel_allocation  = 0x02;//default to FL/FR/FC
 		break;
 	case 4:
-		channel_allocation  = 0x06;/*default to FL/FR/FC/RC*/
+		channel_allocation  = 0x06;//default to FL/FR/FC/RC
 		break;
 	case 5:
-		channel_allocation  = 0x0A;/*default to FL/FR/FC/RR/RL*/
+		channel_allocation  = 0x0A;//default to FL/FR/FC/RR/RL
 		break;
 	case 6:
 		channel_allocation  = 0x0B;
 		break;
 	case 7:
-		channel_allocation  = 0x12;/*default to FL/FR/FC/RL/RR/RRC/RLC*/
+		channel_allocation  = 0x12;//default to FL/FR/FC/RL/RR/RRC/RLC
 		break;
 	case 8:
 		channel_allocation  = 0x13;
@@ -167,16 +164,16 @@ static int msm_hdmi_audio_codec_rx_dai_hw_params(
 		__func__, num_channels, params_rate(params),
 		channel_allocation);
 
-	rc = codec_data->hdmi_ops.audio_info_setup(
+	rv = codec_data->hdmi_ops.audio_info_setup(
 			codec_data->hdmi_core_pdev,
 			params_rate(params), num_channels,
 			channel_allocation, level_shift, down_mix);
-	if (IS_ERR_VALUE(rc)) {
+	if (IS_ERR_VALUE(rv)) {
 		dev_err(dai->dev,
 			"%s() HDMI core is not ready\n", __func__);
 	}
 
-	return rc;
+	return rv;
 }
 
 static void msm_hdmi_audio_codec_rx_dai_shutdown(
@@ -283,10 +280,22 @@ static struct snd_soc_codec_driver msm_hdmi_audio_codec_rx_soc_driver = {
 	.num_controls = ARRAY_SIZE(msm_hdmi_codec_rx_controls),
 };
 
-static int msm_hdmi_audio_codec_rx_plat_probe(
+static int __devinit msm_hdmi_audio_codec_rx_plat_probe(
 		struct platform_device *pdev)
 {
-	dev_dbg(&pdev->dev, "%s(): dev name %s\n", __func__,
+	dev_dbg(&pdev->dev, "%s(): orginal dev name  = %s, id = %d\n",
+		__func__, dev_name(&pdev->dev), pdev->id);
+
+	if (pdev->dev.of_node) {
+		dev_dbg(&pdev->dev, "%s(): node full name = %s,  name = %s\n",
+			__func__, pdev->dev.of_node->full_name,
+			pdev->dev.of_node->name);
+		dev_set_name(&pdev->dev, "%s", "msm-hdmi-audio-codec-rx");
+	} else
+		dev_err(&pdev->dev, "%s(): platfrom data not from device tree\n",
+				__func__);
+
+	dev_dbg(&pdev->dev, "%s(): new dev name %s\n", __func__,
 		dev_name(&pdev->dev));
 
 	return snd_soc_register_codec(&pdev->dev,
@@ -295,7 +304,7 @@ static int msm_hdmi_audio_codec_rx_plat_probe(
 		ARRAY_SIZE(msm_hdmi_audio_codec_rx_dais));
 }
 
-static int msm_hdmi_audio_codec_rx_plat_remove(
+static int __devexit msm_hdmi_audio_codec_rx_plat_remove(
 		struct platform_device *pdev)
 {
 	snd_soc_unregister_codec(&pdev->dev);
@@ -314,7 +323,7 @@ static struct platform_driver msm_hdmi_audio_codec_rx_driver = {
 		.of_match_table = msm_hdmi_audio_codec_rx_dt_match,
 	},
 	.probe = msm_hdmi_audio_codec_rx_plat_probe,
-	.remove = msm_hdmi_audio_codec_rx_plat_remove,
+	.remove = __devexit_p(msm_hdmi_audio_codec_rx_plat_remove),
 };
 
 static int __init msm_hdmi_audio_codec_rx_init(void)

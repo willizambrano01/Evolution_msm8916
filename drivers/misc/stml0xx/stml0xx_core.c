@@ -479,20 +479,12 @@ static struct stml0xx_platform_data *stml0xx_of_init(struct spi_device *spi)
 	of_property_read_u32(np, "headset_button_4_keycode",
 			     &pdata->headset_button_4_keycode);
 
-	pdata->cover_detect_polarity = 0;
-	of_property_read_u32(np, "cover_detect_polarity",
-			     &pdata->cover_detect_polarity);
-
 	pdata->accel_orientation_1 = 0;
 	pdata->accel_orientation_2 = 0;
 	of_property_read_u32(np, "accel_orientation_1",
 			     &pdata->accel_orientation_1);
 	of_property_read_u32(np, "accel_orientation_2",
 			     &pdata->accel_orientation_2);
-
-	pdata->accel_swap = 0;
-	of_property_read_u32(np, "accel_swap",
-			     &pdata->accel_swap);
 
 	return pdata;
 }
@@ -535,15 +527,14 @@ static int stml0xx_gpio_init(struct stml0xx_platform_data *pdata,
 			"stml0xx reset gpio_request failed: %d", err);
 		goto free_int;
 	}
-	gpio_direction_output(pdata->gpio_reset, 1);
 	if (pdata->reset_hw_type == 0) {
+		gpio_direction_output(pdata->gpio_reset, 1);
+		gpio_set_value(pdata->gpio_reset, 1);
 		err = gpio_export(pdata->gpio_reset, 0);
 	} else {
+		gpio_direction_input(pdata->gpio_reset);
 		err = gpio_export(pdata->gpio_reset, 1);
 	}
-	/* Keep the part in reset until the flasher uses NORMALMODE to tell us
-	 * we're good to go. */
-	gpio_set_value(pdata->gpio_reset, 0);
 	if (err) {
 		dev_err(&stml0xx_misc_data->spi->dev,
 			"reset gpio_export failed: %d", err);
@@ -856,17 +847,6 @@ static int stml0xx_probe(struct spi_device *spi)
 		dev_err(&spi->dev, "cannot create work queue: %d", err);
 		goto err1;
 	}
-	ps_stml0xx->ioctl_work_queue =
-		create_singlethread_workqueue("stml0xx_ioctl_wq");
-	if (!ps_stml0xx->ioctl_work_queue) {
-		err = -ENOMEM;
-		dev_err(
-			&spi->dev,
-			"cannot create ioctl work queue: %d\n",
-			err
-		);
-		goto err2;
-	}
 	ps_stml0xx->pdata = pdata;
 	spi_set_drvdata(spi, ps_stml0xx);
 
@@ -874,7 +854,7 @@ static int stml0xx_probe(struct spi_device *spi)
 		err = ps_stml0xx->pdata->init();
 		if (err < 0) {
 			dev_err(&spi->dev, "init failed: %d", err);
-			goto err_pdata_init;
+			goto err2;
 		}
 	}
 
@@ -1002,38 +982,9 @@ static int stml0xx_probe(struct spi_device *spi)
 		goto err9;
 	}
 
-	ps_stml0xx->led_cdev.name =  STML0XX_LED_NAME;
-	ps_stml0xx->led_cdev.brightness_set = stml0xx_brightness_set;
-	ps_stml0xx->led_cdev.brightness_get = stml0xx_brightness_get;
-	ps_stml0xx->led_cdev.blink_set = stml0xx_blink_set;
-	ps_stml0xx->led_cdev.blink_delay_on = 1000;
-	ps_stml0xx->led_cdev.blink_delay_off = 0;
-	ps_stml0xx->led_cdev.max_brightness = STML0XX_LED_MAX_BRIGHTNESS;
-	err = led_classdev_register(&spi->dev, &ps_stml0xx->led_cdev);
-	if (err < 0) {
-		dev_err(&ps_stml0xx->spi->dev,
-			"couldn't register \'%s\' LED class\n",
-			ps_stml0xx->led_cdev.name);
-		goto err10;
-	}
-	err = sysfs_create_group(&ps_stml0xx->led_cdev.dev->kobj,
-			&stml0xx_notification_attribute_group);
-	if (err < 0) {
-		dev_err(&ps_stml0xx->spi->dev,
-			"couldn't register LED attribute sysfs group\n");
-		goto err11;
-	}
-
 	ps_stml0xx->is_suspended = false;
 
-	/* We could call switch_stml0xx_mode(NORMALMODE) at this point, but
-	 * instead we will hold the part in reset and only go to NORMALMODE on a
-	 * request to do so from the flasher.  The flasher must be present, and
-	 * it must verify the firmware file is available before switching to
-	 * NORMALMODE. This is to prevent a build that is missing firmware or
-	 * flasher from behaving as a normal build (with factory firmware in the
-	 * part).
-	 */
+	switch_stml0xx_mode(NORMALMODE);
 
 #ifdef CONFIG_MMI_HALL_NOTIFICATIONS
 	ps_stml0xx->hall_data = mmi_hall_init();
@@ -1044,10 +995,6 @@ static int stml0xx_probe(struct spi_device *spi)
 	dev_dbg(&spi->dev, "probed finished");
 
 	return 0;
-err11:
-	led_classdev_unregister(&ps_stml0xx->led_cdev);
-err10:
-	input_free_device(ps_stml0xx->input_dev);
 err9:
 	input_free_device(ps_stml0xx->input_dev);
 err8:
@@ -1059,8 +1006,6 @@ err6:
 err4:
 	if (ps_stml0xx->pdata->exit)
 		ps_stml0xx->pdata->exit();
-err_pdata_init:
-	destroy_workqueue(ps_stml0xx->ioctl_work_queue);
 err2:
 	destroy_workqueue(ps_stml0xx->irq_work_queue);
 err1:
@@ -1093,8 +1038,6 @@ static int stml0xx_remove(struct spi_device *spi)
 {
 	struct stml0xx_data *ps_stml0xx = spi_get_drvdata(spi);
 
-	led_classdev_unregister(&ps_stml0xx->led_cdev);
-
 	switch_dev_unregister(&ps_stml0xx->dsdev);
 	switch_dev_unregister(&ps_stml0xx->edsdev);
 
@@ -1112,7 +1055,6 @@ static int stml0xx_remove(struct spi_device *spi)
 
 	stml0xx_gpio_free(ps_stml0xx->pdata);
 	destroy_workqueue(ps_stml0xx->irq_work_queue);
-	destroy_workqueue(ps_stml0xx->ioctl_work_queue);
 	mutex_destroy(&ps_stml0xx->lock);
 	wake_unlock(&ps_stml0xx->wakelock);
 	wake_lock_destroy(&ps_stml0xx->wakelock);

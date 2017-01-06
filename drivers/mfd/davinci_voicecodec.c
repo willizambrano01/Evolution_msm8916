@@ -129,7 +129,7 @@ static int __init davinci_vc_probe(struct platform_device *pdev)
 	cell->pdata_size = sizeof(*davinci_vc);
 
 	ret = mfd_add_devices(&pdev->dev, pdev->id, davinci_vc->cells,
-			      DAVINCI_VC_CELLS, NULL, 0, NULL);
+			      DAVINCI_VC_CELLS, NULL, 0);
 	if (ret != 0) {
 		dev_err(&pdev->dev, "fail to register client devices\n");
 		goto fail4;
@@ -151,7 +151,7 @@ fail1:
 	return ret;
 }
 
-static int davinci_vc_remove(struct platform_device *pdev)
+static int __devexit davinci_vc_remove(struct platform_device *pdev)
 {
 	struct davinci_vc *davinci_vc = platform_get_drvdata(pdev);
 
@@ -174,10 +174,20 @@ static struct platform_driver davinci_vc_driver = {
 		.name = "davinci_voicecodec",
 		.owner = THIS_MODULE,
 	},
-	.remove	= davinci_vc_remove,
+	.remove	= __devexit_p(davinci_vc_remove),
 };
 
-module_platform_driver_probe(davinci_vc_driver, davinci_vc_probe);
+static int __init davinci_vc_init(void)
+{
+	return platform_driver_probe(&davinci_vc_driver, davinci_vc_probe);
+}
+module_init(davinci_vc_init);
+
+static void __exit davinci_vc_exit(void)
+{
+	platform_driver_unregister(&davinci_vc_driver);
+}
+module_exit(davinci_vc_exit);
 
 MODULE_AUTHOR("Miguel Aguilar");
 MODULE_DESCRIPTION("Texas Instruments DaVinci Voice Codec Core Interface");

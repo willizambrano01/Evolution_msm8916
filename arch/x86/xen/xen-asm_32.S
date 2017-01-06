@@ -14,7 +14,6 @@
 #include <asm/thread_info.h>
 #include <asm/processor-flags.h>
 #include <asm/segment.h>
-#include <asm/asm.h>
 
 #include <xen/interface/xen.h>
 
@@ -138,7 +137,10 @@ iret_restore_end:
 
 1:	iret
 xen_iret_end_crit:
-	_ASM_EXTABLE(1b, iret_exc)
+.section __ex_table, "a"
+	.align 4
+	.long 1b, iret_exc
+.previous
 
 hyper_iret:
 	/* put this out of line since its very rarely used */

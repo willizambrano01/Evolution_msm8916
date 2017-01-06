@@ -148,22 +148,6 @@ static int mmc_ios_show(struct seq_file *s, void *data)
 	}
 	seq_printf(s, "timing spec:\t%u (%s)\n", ios->timing, str);
 
-	switch (ios->signal_voltage) {
-	case MMC_SIGNAL_VOLTAGE_330:
-		str = "3.30 V";
-		break;
-	case MMC_SIGNAL_VOLTAGE_180:
-		str = "1.80 V";
-		break;
-	case MMC_SIGNAL_VOLTAGE_120:
-		str = "1.20 V";
-		break;
-	default:
-		str = "invalid";
-		break;
-	}
-	seq_printf(s, "signal voltage:\t%u (%s)\n", ios->chip_select, str);
-
 	return 0;
 }
 
@@ -514,56 +498,6 @@ out:
 DEFINE_SIMPLE_ATTRIBUTE(mmc_max_clock_fops, mmc_max_clock_get,
 		mmc_max_clock_set, "%llu\n");
 
-static int mmc_host_caps_get(void *data, u64 *val)
-{
-	struct mmc_host *host = data;
-
-	*val = ((u64)host->caps2 << 32) | host->caps;
-
-	return 0;
-}
-
-static int mmc_host_caps_set(void *data, u64 val)
-{
-	struct mmc_host *host = data;
-
-	mmc_rpm_hold(host, &host->class_dev);
-	mmc_claim_host(host);
-	host->caps = (u32)val;
-	host->caps2 = (u32)(val >> 32);
-	mmc_release_host(host);
-	mmc_rpm_release(host, &host->class_dev);
-
-	return 0;
-}
-
-DEFINE_SIMPLE_ATTRIBUTE(mmc_host_caps_fops, mmc_host_caps_get,
-			mmc_host_caps_set, "0x%016llx\n");
-
-static int mmc_host_detect_get(void *data, u64 *val)
-{
-	struct mmc_host *host = data;
-
-	*val = (u64)(((host->rescan_entered & 1) << 3) |
-		     ((host->rescan_disable & 1) << 2) |
-		     ((host->bus_dead & 1) << 1) |
-		     (host->detect_change & 1));
-
-	return 0;
-}
-
-static int mmc_host_detect_set(void *data, u64 val)
-{
-	struct mmc_host *host = data;
-
-	mmc_detect_change(host, msecs_to_jiffies(val));
-
-	return 0;
-}
-
-DEFINE_SIMPLE_ATTRIBUTE(mmc_host_detect_fops, mmc_host_detect_get,
-			mmc_host_detect_set, "0x%016llx\n");
-
 void mmc_add_host_debugfs(struct mmc_host *host)
 {
 	struct dentry *root;
@@ -588,14 +522,6 @@ void mmc_add_host_debugfs(struct mmc_host *host)
 
 	if (!debugfs_create_file("max_clock", S_IRUSR | S_IWUSR, root, host,
 		&mmc_max_clock_fops))
-		goto err_node;
-
-	if (!debugfs_create_file("caps", S_IRUSR | S_IWUSR, root, host,
-			&mmc_host_caps_fops))
-		goto err_node;
-
-	if (!debugfs_create_file("detect", S_IRUSR | S_IWUSR, root, host,
-			&mmc_host_detect_fops))
 		goto err_node;
 
 #ifdef CONFIG_MMC_CLKGATE
@@ -686,7 +612,7 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 	if (err)
 		goto out_free;
 
-	for (i = 0; i < 512; i++)
+	for (i = 511; i >= 0; i--)
 		n += sprintf(buf + n, "%02x", ext_csd[i]);
 	n += sprintf(buf + n, "\n");
 	BUG_ON(n != EXT_CSD_STR_LEN);

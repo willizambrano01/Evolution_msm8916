@@ -13,8 +13,6 @@
  *
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/time.h>
@@ -49,7 +47,7 @@ compute_wday(efi_time_t *eft)
 	int ndays = 0;
 
 	if (eft->year < 1998) {
-		pr_err("EFI year < 1998, invalid date\n");
+		printk(KERN_ERR "efirtc: EFI year < 1998, invalid date\n");
 		return -1;
 	}
 
@@ -72,7 +70,7 @@ convert_to_efi_time(struct rtc_time *wtime, efi_time_t *eft)
 	eft->day	= wtime->tm_mday;
 	eft->hour	= wtime->tm_hour;
 	eft->minute	= wtime->tm_min;
-	eft->second	= wtime->tm_sec;
+	eft->second 	= wtime->tm_sec;
 	eft->nanosecond = 0;
 	eft->daylight	= wtime->tm_isdst ? EFI_ISDST : 0;
 	eft->timezone	= EFI_UNSPECIFIED_TIMEZONE;
@@ -144,7 +142,7 @@ static int efi_set_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 	 */
 	status = efi.set_wakeup_time((efi_bool_t)wkalrm->enabled, &eft);
 
-	dev_warn(dev, "write status is %d\n", (int)status);
+	printk(KERN_WARNING "write status is %d\n", (int)status);
 
 	return status == EFI_SUCCESS ? 0 : -EINVAL;
 }
@@ -159,7 +157,7 @@ static int efi_read_time(struct device *dev, struct rtc_time *tm)
 
 	if (status != EFI_SUCCESS) {
 		/* should never happen */
-		dev_err(dev, "can't read time\n");
+		printk(KERN_ERR "efitime: can't read time\n");
 		return -EINVAL;
 	}
 
@@ -191,7 +189,7 @@ static int __init efi_rtc_probe(struct platform_device *dev)
 {
 	struct rtc_device *rtc;
 
-	rtc = devm_rtc_device_register(&dev->dev, "rtc-efi", &efi_rtc_ops,
+	rtc = rtc_device_register("rtc-efi", &dev->dev, &efi_rtc_ops,
 					THIS_MODULE);
 	if (IS_ERR(rtc))
 		return PTR_ERR(rtc);
@@ -203,6 +201,10 @@ static int __init efi_rtc_probe(struct platform_device *dev)
 
 static int __exit efi_rtc_remove(struct platform_device *dev)
 {
+	struct rtc_device *rtc = platform_get_drvdata(dev);
+
+	rtc_device_unregister(rtc);
+
 	return 0;
 }
 
@@ -214,7 +216,18 @@ static struct platform_driver efi_rtc_driver = {
 	.remove = __exit_p(efi_rtc_remove),
 };
 
-module_platform_driver_probe(efi_rtc_driver, efi_rtc_probe);
+static int __init efi_rtc_init(void)
+{
+	return platform_driver_probe(&efi_rtc_driver, efi_rtc_probe);
+}
+
+static void __exit efi_rtc_exit(void)
+{
+	platform_driver_unregister(&efi_rtc_driver);
+}
+
+module_init(efi_rtc_init);
+module_exit(efi_rtc_exit);
 
 MODULE_AUTHOR("dann frazier <dannf@hp.com>");
 MODULE_LICENSE("GPL");

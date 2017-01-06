@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
 *
 * This program is free software; you can redistribute it and/or modify
 * it under the terms of the GNU General Public License version 2 and
@@ -18,19 +18,6 @@
 #include <media/v4l2-subdev.h>
 
 #define MDP_MAGIC_IOCTL 'M'
-
-/* Converts a dma_addr_t (which _might_ be 64 bits) to a 32 bit value.
- * This is required because hardware can only access 32 bit addresses,
- * and more importantly, the v4l2 spec only allows for 32 bit addresses.
- * However in the off chance that we actually manage to get an address
- * that can't fit into 32 bits, this macro triggers a WARN_ON and returns
- * the truncated 32 bit address */
-static inline u32 dma_addr_to_u32(dma_addr_t x)
-{
-	u32 temp = (u32)x;
-	WARN_ON((dma_addr_t)temp != x);
-	return temp;
-}
 
 struct mdp_buf_info {
 	void *inst;
@@ -75,20 +62,8 @@ static inline bool mdp_buf_info_equals(struct mdp_buf_info *a,
 #define MDP_SECURE  _IO(MDP_MAGIC_IOCTL, 9)
 
 
-#ifdef CONFIG_FB_MSM_MDSS_WRITEBACK
 extern int mdp_init(struct v4l2_subdev *sd, u32 val);
 extern long mdp_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg);
-#else
-static inline int mdp_init(struct v4l2_subdev *sd, u32 val)
-{
-	return -ENODEV;
-}
-static inline long mdp_ioctl(struct v4l2_subdev *sd, unsigned int cmd,
-			void *arg)
-{
-	return -ENODEV;
-}
-#endif
 
 
 #endif /* _WFD_MDP_SUBDEV_ */

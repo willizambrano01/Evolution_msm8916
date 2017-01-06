@@ -177,7 +177,7 @@ static int xen_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 		goto error;
 	i = 0;
 	list_for_each_entry(msidesc, &dev->msi_list, list) {
-		irq = xen_bind_pirq_msi_to_irq(dev, msidesc, v[i],
+		irq = xen_bind_pirq_msi_to_irq(dev, msidesc, v[i], 0,
 					       (type == PCI_CAP_ID_MSIX) ?
 					       "pcifront-msi-x" :
 					       "pcifront-msi",
@@ -244,7 +244,7 @@ static int xen_hvm_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 			dev_dbg(&dev->dev,
 				"xen: msi already bound to pirq=%d\n", pirq);
 		}
-		irq = xen_bind_pirq_msi_to_irq(dev, msidesc, pirq,
+		irq = xen_bind_pirq_msi_to_irq(dev, msidesc, pirq, 0,
 					       (type == PCI_CAP_ID_MSIX) ?
 					       "msi-x" : "msi",
 					       DOMID_SELF);
@@ -295,10 +295,11 @@ static int xen_initdom_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 			int pos;
 			u32 table_offset, bir;
 
-			pos = dev->msix_cap;
+			pos = pci_find_capability(dev, PCI_CAP_ID_MSIX);
+
 			pci_read_config_dword(dev, pos + PCI_MSIX_TABLE,
 					      &table_offset);
-			bir = (u8)(table_offset & PCI_MSIX_TABLE_BIR);
+			bir = (u8)(table_offset & PCI_MSIX_FLAGS_BIRMASK);
 
 			map_irq.table_base = pci_resource_start(dev, bir);
 			map_irq.entry_nr = msidesc->msi_attrib.entry_nr;
@@ -325,7 +326,7 @@ static int xen_initdom_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 		}
 
 		ret = xen_bind_pirq_msi_to_irq(dev, msidesc,
-					       map_irq.pirq,
+					       map_irq.pirq, map_irq.index,
 					       (type == PCI_CAP_ID_MSIX) ?
 					       "msi-x" : "msi",
 						domid);

@@ -87,6 +87,7 @@ struct rpc_task {
 				tk_cred_retry : 2,
 				tk_rebind_retry : 2;
 };
+#define tk_xprt			tk_client->cl_xprt
 
 /* support walking a list of tasks on a wait queue */
 #define	task_for_each(task, pos, head) \
@@ -130,7 +131,6 @@ struct rpc_task_setup {
 #define RPC_TASK_SOFTCONN	0x0400		/* Fail if can't connect */
 #define RPC_TASK_SENT		0x0800		/* message was sent */
 #define RPC_TASK_TIMEOUT	0x1000		/* fail with ETIMEDOUT on timeout */
-#define RPC_TASK_NOCONNECT	0x2000		/* return ENOTCONN if not connected */
 
 #define RPC_IS_ASYNC(t)		((t)->tk_flags & RPC_TASK_ASYNC)
 #define RPC_IS_SWAPPER(t)	((t)->tk_flags & RPC_TASK_SWAPPER)
@@ -150,18 +150,18 @@ struct rpc_task_setup {
 				test_and_set_bit(RPC_TASK_RUNNING, &(t)->tk_runstate)
 #define rpc_clear_running(t)	\
 	do { \
-		smp_mb__before_atomic(); \
+		smp_mb__before_clear_bit(); \
 		clear_bit(RPC_TASK_RUNNING, &(t)->tk_runstate); \
-		smp_mb__after_atomic(); \
+		smp_mb__after_clear_bit(); \
 	} while (0)
 
 #define RPC_IS_QUEUED(t)	test_bit(RPC_TASK_QUEUED, &(t)->tk_runstate)
 #define rpc_set_queued(t)	set_bit(RPC_TASK_QUEUED, &(t)->tk_runstate)
 #define rpc_clear_queued(t)	\
 	do { \
-		smp_mb__before_atomic(); \
+		smp_mb__before_clear_bit(); \
 		clear_bit(RPC_TASK_QUEUED, &(t)->tk_runstate); \
-		smp_mb__after_atomic(); \
+		smp_mb__after_clear_bit(); \
 	} while (0)
 
 #define RPC_IS_ACTIVATED(t)	test_bit(RPC_TASK_ACTIVE, &(t)->tk_runstate)
@@ -192,6 +192,7 @@ struct rpc_wait_queue {
 	pid_t			owner;			/* process id of last task serviced */
 	unsigned char		maxpriority;		/* maximum priority (0 if queue is not a priority queue) */
 	unsigned char		priority;		/* current priority */
+	unsigned char		count;			/* # task groups remaining serviced so far */
 	unsigned char		nr;			/* # tasks remaining for cookie */
 	unsigned short		qlen;			/* total # tasks waiting in queue */
 	struct rpc_timer	timer_list;

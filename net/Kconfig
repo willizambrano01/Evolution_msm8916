@@ -52,8 +52,6 @@ source "net/iucv/Kconfig"
 
 config INET
 	bool "TCP/IP networking"
-	select CRYPTO
-	select CRYPTO_AES
 	---help---
 	  These are the protocols used on the Internet and on most local
 	  Ethernets. It is highly recommended to say Y here (this will enlarge
@@ -104,6 +102,7 @@ config NETWORK_SECMARK
 
 config NETWORK_PHY_TIMESTAMPING
 	bool "Timestamping in PHY devices"
+	depends on EXPERIMENTAL
 	help
 	  This allows timestamping of network packets by PHYs with
 	  hardware timestamping capabilities. This option adds some
@@ -222,32 +221,30 @@ source "net/ipx/Kconfig"
 source "drivers/net/appletalk/Kconfig"
 source "net/x25/Kconfig"
 source "net/lapb/Kconfig"
+source "net/econet/Kconfig"
+source "net/wanrouter/Kconfig"
 source "net/phonet/Kconfig"
 source "net/ieee802154/Kconfig"
-source "net/mac802154/Kconfig"
 source "net/sched/Kconfig"
 source "net/dcb/Kconfig"
 source "net/dns_resolver/Kconfig"
 source "net/batman-adv/Kconfig"
 source "net/openvswitch/Kconfig"
-source "net/vmw_vsock/Kconfig"
-source "net/netlink/Kconfig"
-source "net/rmnet_data/Kconfig"
 
 config RPS
-	boolean
-	depends on SMP && SYSFS
+	boolean "RPS"
+	depends on SMP && SYSFS && USE_GENERIC_SMP_HELPERS
 	default y
 
 config RFS_ACCEL
 	boolean
-	depends on RPS
+	depends on RPS && GENERIC_HARDIRQS
 	select CPU_RMAP
 	default y
 
 config XPS
 	boolean
-	depends on SMP
+	depends on SMP && SYSFS && USE_GENERIC_SMP_HELPERS
 	default y
 
 config NETPRIO_CGROUP
@@ -263,6 +260,9 @@ config BQL
 	select DQL
 	default y
 
+config HAVE_BPF_JIT
+	bool
+
 config BPF_JIT
 	bool "enable BPF Just In Time compiler"
 	depends on HAVE_BPF_JIT
@@ -273,15 +273,6 @@ config BPF_JIT
 	  code when filter is loaded in memory. This should speedup
 	  packet sniffing (libpcap/tcpdump). Note : Admin should enable
 	  this feature changing /proc/sys/net/core/bpf_jit_enable
-
-config SOCKEV_NLMCAST
-	bool "Enable SOCKEV Netlink Multicast"
-	default n
-	---help---
-	  Default client for SOCKEV notifier events. Sends multicast netlink
-	  messages whenever the socket event notifier is invoked. Enable if
-	  user space entities need to be notified of socket events without
-	  having to poll /proc
 
 menu "Network testing"
 
@@ -302,7 +293,7 @@ config NET_PKTGEN
 
 config NET_TCPPROBE
 	tristate "TCP connection probing"
-	depends on INET && PROC_FS && KPROBES
+	depends on INET && EXPERIMENTAL && PROC_FS && KPROBES
 	---help---
 	This module allows for capturing the changes to TCP connection
 	state in response to incoming packets. It is used for debugging
@@ -318,8 +309,8 @@ config NET_TCPPROBE
 	module will be called tcp_probe.
 
 config NET_DROP_MONITOR
-	tristate "Network packet drop alerting service"
-	depends on INET && TRACEPOINTS
+	boolean "Network packet drop alerting service"
+	depends on INET && EXPERIMENTAL && TRACEPOINTS
 	---help---
 	This feature provides an alerting service to userspace in the
 	event that packets are discarded in the network stack.  Alerts
@@ -360,11 +351,6 @@ source "net/9p/Kconfig"
 source "net/caif/Kconfig"
 source "net/ceph/Kconfig"
 source "net/nfc/Kconfig"
-source "net/ipc_router/Kconfig"
 
 
 endif   # if NET
-
-# Used by archs to tell that they support BPF_JIT
-config HAVE_BPF_JIT
-	bool

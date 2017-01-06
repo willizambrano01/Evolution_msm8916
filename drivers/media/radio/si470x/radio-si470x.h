@@ -36,9 +36,6 @@
 #include <linux/mutex.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-ioctl.h>
-#include <media/v4l2-ctrls.h>
-#include <media/v4l2-event.h>
-#include <media/v4l2-device.h>
 #include <asm/unaligned.h>
 
 
@@ -87,7 +84,7 @@
 
 #define SYSCONFIG2		5	/* System Configuration 2 */
 #define SYSCONFIG2_SEEKTH	0xff00	/* bits 15..08: RSSI Seek Threshold */
-#define SYSCONFIG2_BAND		0x00c0	/* bits 07..06: Band Select */
+#define SYSCONFIG2_BAND		0x0080	/* bits 07..06: Band Select */
 #define SYSCONFIG2_SPACE	0x0030	/* bits 05..04: Channel Spacing */
 #define SYSCONFIG2_VOLUME	0x000f	/* bits 03..00: Volume */
 
@@ -144,10 +141,10 @@
  * si470x_device - private data
  */
 struct si470x_device {
-	struct v4l2_device v4l2_dev;
-	struct video_device videodev;
-	struct v4l2_ctrl_handler hdl;
-	int band;
+	struct video_device *videodev;
+
+	/* driver management */
+	unsigned int users;
 
 	/* Silabs internal registers (0..15) */
 	unsigned short registers[RADIO_REGISTER_NUM];
@@ -161,9 +158,9 @@ struct si470x_device {
 	unsigned int wr_index;
 
 	struct completion completion;
-	bool status_rssi_auto_update;	/* Does RSSI get updated automatic? */
+	bool stci_enabled;		/* Seek/Tune Complete Interrupt */
 
-#if IS_ENABLED(CONFIG_USB_SI470X)
+#if defined(CONFIG_USB_SI470X) || defined(CONFIG_USB_SI470X_MODULE)
 	/* reference to USB and video device */
 	struct usb_device *usbdev;
 	struct usb_interface *intf;
@@ -177,9 +174,12 @@ struct si470x_device {
 	/* scratch page */
 	unsigned char software_version;
 	unsigned char hardware_version;
+
+	/* driver management */
+	unsigned char disconnected;
 #endif
 
-#if IS_ENABLED(CONFIG_I2C_SI470X)
+#if defined(CONFIG_I2C_SI470X) || defined(CONFIG_I2C_SI470X_MODULE)
 	struct i2c_client *client;
 #endif
 };
@@ -190,7 +190,7 @@ struct si470x_device {
  * Firmware Versions
  **************************************************************************/
 
-#define RADIO_FW_VERSION	12
+#define RADIO_FW_VERSION	15
 
 
 
@@ -213,7 +213,6 @@ struct si470x_device {
  * Common Functions
  **************************************************************************/
 extern struct video_device si470x_viddev_template;
-extern const struct v4l2_ctrl_ops si470x_ctrl_ops;
 int si470x_get_register(struct si470x_device *radio, int regnr);
 int si470x_set_register(struct si470x_device *radio, int regnr);
 int si470x_disconnect_check(struct si470x_device *radio);

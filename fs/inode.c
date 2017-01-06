@@ -135,8 +135,8 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_fop = &empty_fops;
 	inode->__i_nlink = 1;
 	inode->i_opflags = 0;
-	i_uid_write(inode, 0);
-	i_gid_write(inode, 0);
+	inode->i_uid = 0;
+	inode->i_gid = 0;
 	atomic_set(&inode->i_writecount, 0);
 	inode->i_size = 0;
 	inode->i_blocks = 0;
@@ -165,7 +165,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	mapping->host = inode;
 	mapping->flags = 0;
 	mapping_set_gfp_mask(mapping, GFP_HIGHUSER_MOVABLE);
-	mapping->private_data = NULL;
+	mapping->assoc_mapping = NULL;
 	mapping->backing_dev_info = &default_backing_dev_info;
 	mapping->writeback_index = 0;
 
@@ -182,7 +182,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	}
 	inode->i_private = NULL;
 	inode->i_mapping = mapping;
-	INIT_HLIST_HEAD(&inode->i_dentry);	/* buggered by rcu freeing */
+	INIT_LIST_HEAD(&inode->i_dentry);	/* buggered by rcu freeing */
 #ifdef CONFIG_FS_POSIX_ACL
 	inode->i_acl = inode->i_default_acl = ACL_NOT_CACHED;
 #endif
@@ -348,7 +348,7 @@ void address_space_init_once(struct address_space *mapping)
 	mutex_init(&mapping->i_mmap_mutex);
 	INIT_LIST_HEAD(&mapping->private_list);
 	spin_lock_init(&mapping->private_lock);
-	mapping->i_mmap = RB_ROOT;
+	INIT_RAW_PRIO_TREE_ROOT(&mapping->i_mmap);
 	INIT_LIST_HEAD(&mapping->i_mmap_nonlinear);
 }
 EXPORT_SYMBOL(address_space_init_once);
@@ -407,19 +407,6 @@ static void inode_lru_list_add(struct inode *inode)
 	}
 	spin_unlock(&inode->i_sb->s_inode_lru_lock);
 }
-
-/*
- * Add inode to LRU if needed (inode is unused and clean).
- *
- * Needs inode->i_lock held.
- */
-void inode_add_lru(struct inode *inode)
-{
-	if (!(inode->i_state & (I_DIRTY | I_SYNC | I_FREEING | I_WILL_FREE)) &&
-	    !atomic_read(&inode->i_count) && inode->i_sb->s_flags & MS_ACTIVE)
-		inode_lru_list_add(inode);
-}
-
 
 static void inode_lru_list_del(struct inode *inode)
 {
@@ -499,7 +486,7 @@ void __remove_inode_hash(struct inode *inode)
 }
 EXPORT_SYMBOL(__remove_inode_hash);
 
-void clear_inode(struct inode *inode)
+void end_writeback(struct inode *inode)
 {
 	might_sleep();
 	/*
@@ -513,10 +500,11 @@ void clear_inode(struct inode *inode)
 	BUG_ON(!list_empty(&inode->i_data.private_list));
 	BUG_ON(!(inode->i_state & I_FREEING));
 	BUG_ON(inode->i_state & I_CLEAR);
+	inode_sync_wait(inode);
 	/* don't need i_lock here, no concurrent mods to i_state */
 	inode->i_state = I_FREEING | I_CLEAR;
 }
-EXPORT_SYMBOL(clear_inode);
+EXPORT_SYMBOL(end_writeback);
 
 /*
  * Free the inode passed in, removing it from the lists it is still connected
@@ -543,20 +531,12 @@ static void evict(struct inode *inode)
 
 	inode_sb_list_del(inode);
 
-	/*
-	 * Wait for flusher thread to be done with the inode so that filesystem
-	 * does not start destroying it while writeback is still running. Since
-	 * the inode has I_FREEING set, flusher thread won't start new work on
-	 * the inode.  We just have to wait for running writeback to finish.
-	 */
-	inode_wait_for_writeback(inode);
-
 	if (op->evict_inode) {
 		op->evict_inode(inode);
 	} else {
 		if (inode->i_data.nrpages)
 			truncate_inode_pages(&inode->i_data, 0);
-		clear_inode(inode);
+		end_writeback(inode);
 	}
 	if (S_ISBLK(inode->i_mode) && inode->i_bdev)
 		bd_forget(inode);
@@ -798,10 +778,11 @@ static struct inode *find_inode(struct super_block *sb,
 				int (*test)(struct inode *, void *),
 				void *data)
 {
+	struct hlist_node *node;
 	struct inode *inode = NULL;
 
 repeat:
-	hlist_for_each_entry(inode, head, i_hash) {
+	hlist_for_each_entry(inode, node, head, i_hash) {
 		spin_lock(&inode->i_lock);
 		if (inode->i_sb != sb) {
 			spin_unlock(&inode->i_lock);
@@ -829,10 +810,11 @@ repeat:
 static struct inode *find_inode_fast(struct super_block *sb,
 				struct hlist_head *head, unsigned long ino)
 {
+	struct hlist_node *node;
 	struct inode *inode = NULL;
 
 repeat:
-	hlist_for_each_entry(inode, head, i_hash) {
+	hlist_for_each_entry(inode, node, head, i_hash) {
 		spin_lock(&inode->i_lock);
 		if (inode->i_ino != ino) {
 			spin_unlock(&inode->i_lock);
@@ -1130,10 +1112,11 @@ EXPORT_SYMBOL(iget_locked);
 static int test_inode_iunique(struct super_block *sb, unsigned long ino)
 {
 	struct hlist_head *b = inode_hashtable + hash(sb, ino);
+	struct hlist_node *node;
 	struct inode *inode;
 
 	spin_lock(&inode_hash_lock);
-	hlist_for_each_entry(inode, b, i_hash) {
+	hlist_for_each_entry(inode, node, b, i_hash) {
 		if (inode->i_ino == ino && inode->i_sb == sb) {
 			spin_unlock(&inode_hash_lock);
 			return 0;
@@ -1288,9 +1271,10 @@ int insert_inode_locked(struct inode *inode)
 	struct hlist_head *head = inode_hashtable + hash(sb, ino);
 
 	while (1) {
+		struct hlist_node *node;
 		struct inode *old = NULL;
 		spin_lock(&inode_hash_lock);
-		hlist_for_each_entry(old, head, i_hash) {
+		hlist_for_each_entry(old, node, head, i_hash) {
 			if (old->i_ino != ino)
 				continue;
 			if (old->i_sb != sb)
@@ -1302,7 +1286,7 @@ int insert_inode_locked(struct inode *inode)
 			}
 			break;
 		}
-		if (likely(!old)) {
+		if (likely(!node)) {
 			spin_lock(&inode->i_lock);
 			inode->i_state |= I_NEW;
 			hlist_add_head(&inode->i_hash, head);
@@ -1330,10 +1314,11 @@ int insert_inode_locked4(struct inode *inode, unsigned long hashval,
 	struct hlist_head *head = inode_hashtable + hash(sb, hashval);
 
 	while (1) {
+		struct hlist_node *node;
 		struct inode *old = NULL;
 
 		spin_lock(&inode_hash_lock);
-		hlist_for_each_entry(old, head, i_hash) {
+		hlist_for_each_entry(old, node, head, i_hash) {
 			if (old->i_sb != sb)
 				continue;
 			if (!test(old, data))
@@ -1345,7 +1330,7 @@ int insert_inode_locked4(struct inode *inode, unsigned long hashval,
 			}
 			break;
 		}
-		if (likely(!old)) {
+		if (likely(!node)) {
 			spin_lock(&inode->i_lock);
 			inode->i_state |= I_NEW;
 			hlist_add_head(&inode->i_hash, head);
@@ -1398,7 +1383,8 @@ static void iput_final(struct inode *inode)
 
 	if (!drop && (sb->s_flags & MS_ACTIVE)) {
 		inode->i_state |= I_REFERENCED;
-		inode_add_lru(inode);
+		if (!(inode->i_state & (I_DIRTY|I_SYNC)))
+			inode_lru_list_add(inode);
 		spin_unlock(&inode->i_lock);
 		return;
 	}
@@ -1517,7 +1503,8 @@ static int update_time(struct inode *inode, struct timespec *time, int flags)
 
 /**
  *	touch_atime	-	update the access time
- *	@path: the &struct path to update
+ *	@mnt: mount the inode is accessed on
+ *	@dentry: dentry accessed
  *
  *	Update the accessed time on an inode and mark it for writeback.
  *	This function automatically handles read only file systems and media,
@@ -1549,91 +1536,20 @@ void touch_atime(struct path *path)
 	if (timespec_equal(&inode->i_atime, &now))
 		return;
 
-	if (!sb_start_write_trylock(inode->i_sb))
+	if (mnt_want_write(mnt))
 		return;
 
-	if (__mnt_want_write(mnt))
-		goto skip_update;
 	/*
 	 * File systems can error out when updating inodes if they need to
 	 * allocate new space to modify an inode (such is the case for
 	 * Btrfs), but since we touch atime while walking down the path we
 	 * really don't care if we failed to update the atime of the file,
 	 * so just ignore the return value.
-	 * We may also fail on filesystems that have the ability to make parts
-	 * of the fs read only, e.g. subvolumes in Btrfs.
 	 */
 	update_time(inode, &now, S_ATIME);
-	__mnt_drop_write(mnt);
-skip_update:
-	sb_end_write(inode->i_sb);
+	mnt_drop_write(mnt);
 }
 EXPORT_SYMBOL(touch_atime);
-
-/*
- * The logic we want is
- *
- *	if suid or (sgid and xgrp)
- *		remove privs
- */
-int should_remove_suid(struct dentry *dentry)
-{
-	umode_t mode = dentry->d_inode->i_mode;
-	int kill = 0;
-
-	/* suid always must be killed */
-	if (unlikely(mode & S_ISUID))
-		kill = ATTR_KILL_SUID;
-
-	/*
-	 * sgid without any exec bits is just a mandatory locking mark; leave
-	 * it alone.  If some exec bits are set, it's a real sgid; kill it.
-	 */
-	if (unlikely((mode & S_ISGID) && (mode & S_IXGRP)))
-		kill |= ATTR_KILL_SGID;
-
-	if (unlikely(kill && !capable(CAP_FSETID) && S_ISREG(mode)))
-		return kill;
-
-	return 0;
-}
-EXPORT_SYMBOL(should_remove_suid);
-
-static int __remove_suid(struct dentry *dentry, int kill)
-{
-	struct iattr newattrs;
-
-	newattrs.ia_valid = ATTR_FORCE | kill;
-	return notify_change(dentry, &newattrs);
-}
-
-int file_remove_suid(struct file *file)
-{
-	struct dentry *dentry = file->f_path.dentry;
-	struct inode *inode = dentry->d_inode;
-	int killsuid;
-	int killpriv;
-	int error = 0;
-
-	/* Fast path for nothing security related */
-	if (IS_NOSEC(inode))
-		return 0;
-
-	killsuid = should_remove_suid(dentry);
-	killpriv = security_inode_need_killpriv(dentry);
-
-	if (killpriv < 0)
-		return killpriv;
-	if (killpriv)
-		error = security_inode_killpriv(dentry);
-	if (!error && killsuid)
-		error = __remove_suid(dentry, killsuid);
-	if (!error && (inode->i_sb->s_flags & MS_NOSEC))
-		inode->i_flags |= S_NOSEC;
-
-	return error;
-}
-EXPORT_SYMBOL(file_remove_suid);
 
 /**
  *	file_update_time	-	update mtime and ctime time
@@ -1650,7 +1566,7 @@ EXPORT_SYMBOL(file_remove_suid);
 
 int file_update_time(struct file *file)
 {
-	struct inode *inode = file_inode(file);
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct timespec now;
 	int sync_it = 0;
 	int ret;
@@ -1673,11 +1589,11 @@ int file_update_time(struct file *file)
 		return 0;
 
 	/* Finally allowed to write? Takes lock. */
-	if (__mnt_want_write_file(file))
+	if (mnt_want_write_file(file))
 		return 0;
 
 	ret = update_time(inode, &now, sync_it);
-	__mnt_drop_write_file(file);
+	mnt_drop_write_file(file);
 
 	return ret;
 }
@@ -1755,7 +1671,6 @@ void __init inode_init_early(void)
 					HASH_EARLY,
 					&i_hash_shift,
 					&i_hash_mask,
-					0,
 					0);
 
 	for (loop = 0; loop < (1U << i_hash_shift); loop++)
@@ -1786,7 +1701,6 @@ void __init inode_init(void)
 					0,
 					&i_hash_shift,
 					&i_hash_mask,
-					0,
 					0);
 
 	for (loop = 0; loop < (1U << i_hash_shift); loop++)
@@ -1803,7 +1717,7 @@ void init_special_inode(struct inode *inode, umode_t mode, dev_t rdev)
 		inode->i_fop = &def_blk_fops;
 		inode->i_rdev = rdev;
 	} else if (S_ISFIFO(mode))
-		inode->i_fop = &pipefifo_fops;
+		inode->i_fop = &def_fifo_fops;
 	else if (S_ISSOCK(mode))
 		inode->i_fop = &bad_sock_fops;
 	else
@@ -1837,66 +1751,17 @@ EXPORT_SYMBOL(inode_init_owner);
  * inode_owner_or_capable - check current task permissions to inode
  * @inode: inode being checked
  *
- * Return true if current either has CAP_FOWNER in a namespace with the
- * inode owner uid mapped, or owns the file.
+ * Return true if current either has CAP_FOWNER to the inode, or
+ * owns the file.
  */
 bool inode_owner_or_capable(const struct inode *inode)
 {
-	struct user_namespace *ns;
+	struct user_namespace *ns = inode_userns(inode);
 
-	if (uid_eq(current_fsuid(), inode->i_uid))
+	if (current_user_ns() == ns && current_fsuid() == inode->i_uid)
 		return true;
-
-	ns = current_user_ns();
-	if (ns_capable(ns, CAP_FOWNER) && kuid_has_mapping(ns, inode->i_uid))
+	if (ns_capable(ns, CAP_FOWNER))
 		return true;
 	return false;
 }
 EXPORT_SYMBOL(inode_owner_or_capable);
-
-/*
- * Direct i/o helper functions
- */
-static void __inode_dio_wait(struct inode *inode)
-{
-	wait_queue_head_t *wq = bit_waitqueue(&inode->i_state, __I_DIO_WAKEUP);
-	DEFINE_WAIT_BIT(q, &inode->i_state, __I_DIO_WAKEUP);
-
-	do {
-		prepare_to_wait(wq, &q.wait, TASK_UNINTERRUPTIBLE);
-		if (atomic_read(&inode->i_dio_count))
-			schedule();
-	} while (atomic_read(&inode->i_dio_count));
-	finish_wait(wq, &q.wait);
-}
-
-/**
- * inode_dio_wait - wait for outstanding DIO requests to finish
- * @inode: inode to wait for
- *
- * Waits for all pending direct I/O requests to finish so that we can
- * proceed with a truncate or equivalent operation.
- *
- * Must be called under a lock that serializes taking new references
- * to i_dio_count, usually by inode->i_mutex.
- */
-void inode_dio_wait(struct inode *inode)
-{
-	if (atomic_read(&inode->i_dio_count))
-		__inode_dio_wait(inode);
-}
-EXPORT_SYMBOL(inode_dio_wait);
-
-/*
- * inode_dio_done - signal finish of a direct I/O requests
- * @inode: inode the direct I/O happens on
- *
- * This is called once we've finished processing a direct I/O request,
- * and is used to wake up callers waiting for direct I/O to be quiesced.
- */
-void inode_dio_done(struct inode *inode)
-{
-	if (atomic_dec_and_test(&inode->i_dio_count))
-		wake_up_bit(&inode->i_state, __I_DIO_WAKEUP);
-}
-EXPORT_SYMBOL(inode_dio_done);

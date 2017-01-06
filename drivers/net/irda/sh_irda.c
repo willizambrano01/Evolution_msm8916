@@ -33,7 +33,11 @@
 
 #define DRIVER_NAME "sh_irda"
 
+#if defined(CONFIG_ARCH_SH7367) || defined(CONFIG_ARCH_SH7377)
+#define __IRDARAM_LEN	0x13FF
+#else
 #define __IRDARAM_LEN	0x1039
+#endif
 
 #define IRTMR		0x1F00 /* Transfer mode */
 #define IRCFR		0x1F02 /* Configuration */
@@ -733,7 +737,7 @@ static int sh_irda_stop(struct net_device *ndev)
 	netif_stop_queue(ndev);
 	pm_runtime_put_sync(&self->pdev->dev);
 
-	dev_info(&ndev->dev, "stopped\n");
+	dev_info(&ndev->dev, "stoped\n");
 
 	return 0;
 }
@@ -753,7 +757,7 @@ static const struct net_device_ops sh_irda_ndo = {
 
 
 ************************************************************************/
-static int sh_irda_probe(struct platform_device *pdev)
+static int __devinit sh_irda_probe(struct platform_device *pdev)
 {
 	struct net_device *ndev;
 	struct sh_irda_self *self;
@@ -804,8 +808,8 @@ static int sh_irda_probe(struct platform_device *pdev)
 		goto err_mem_4;
 
 	platform_set_drvdata(pdev, ndev);
-	err = request_irq(irq, sh_irda_irq, IRQF_DISABLED, "sh_irda", self);
-	if (err) {
+
+	if (request_irq(irq, sh_irda_irq, IRQF_DISABLED, "sh_irda", self)) {
 		dev_warn(&pdev->dev, "Unable to attach sh_irda interrupt\n");
 		goto err_mem_4;
 	}
@@ -825,7 +829,7 @@ exit:
 	return err;
 }
 
-static int sh_irda_remove(struct platform_device *pdev)
+static int __devexit sh_irda_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct sh_irda_self *self = netdev_priv(ndev);
@@ -862,7 +866,7 @@ static const struct dev_pm_ops sh_irda_pm_ops = {
 
 static struct platform_driver sh_irda_driver = {
 	.probe	= sh_irda_probe,
-	.remove	= sh_irda_remove,
+	.remove	= __devexit_p(sh_irda_remove),
 	.driver	= {
 		.name	= DRIVER_NAME,
 		.pm	= &sh_irda_pm_ops,

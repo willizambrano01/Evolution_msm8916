@@ -1,7 +1,7 @@
 /* cfg80211 Interface for prism2_usb module */
 
 
-/* Prism2 channel/frequency/bitrate declarations */
+/* Prism2 channell/frequency/bitrate declarations */
 static const struct ieee80211_channel prism2_channels[] = {
 	{ .center_freq = 2412 },
 	{ .center_freq = 2417 },
@@ -127,9 +127,7 @@ int prism2_change_virtual_intf(struct wiphy *wiphy,
 	}
 
 	/* Set Operation mode to the PORT TYPE RID */
-	result = prism2_domibset_uint32(wlandev,
-					DIDmib_p2_p2Static_p2CnfPortType,
-					data);
+	result = prism2_domibset_uint32(wlandev, DIDmib_p2_p2Static_p2CnfPortType, data);
 
 	if (result)
 		err = -EFAULT;
@@ -327,14 +325,13 @@ int prism2_get_station(struct wiphy *wiphy, struct net_device *dev,
 	return result;
 }
 
-int prism2_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
+int prism2_scan(struct wiphy *wiphy, struct net_device *dev,
+		struct cfg80211_scan_request *request)
 {
-	struct net_device *dev;
 	struct prism2_wiphy_private *priv = wiphy_priv(wiphy);
-	wlandevice_t *wlandev;
+	wlandevice_t *wlandev = dev->ml_priv;
 	struct p80211msg_dot11req_scan msg1;
 	struct p80211msg_dot11req_scan_results msg2;
-	struct cfg80211_bss *bss;
 	int result;
 	int err = 0;
 	int numbss = 0;
@@ -344,9 +341,6 @@ int prism2_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
 
 	if (!request)
 		return -EINVAL;
-
-	dev = request->wdev->netdev;
-	wlandev = dev->ml_priv;
 
 	if (priv->scan_request && priv->scan_request != request)
 		return -EBUSY;
@@ -368,8 +362,7 @@ int prism2_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
 	if (request->n_ssids > 0) {
 		msg1.scantype.data = P80211ENUM_scantype_active;
 		msg1.ssid.data.len = request->ssids->ssid_len;
-		memcpy(msg1.ssid.data.data,
-			request->ssids->ssid, request->ssids->ssid_len);
+		memcpy(msg1.ssid.data.data, request->ssids->ssid, request->ssids->ssid_len);
 	} else {
 		msg1.scantype.data = 0;
 	}
@@ -408,7 +401,7 @@ int prism2_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
 		ie_buf[1] = msg2.ssid.data.len;
 		ie_len = ie_buf[1] + 2;
 		memcpy(&ie_buf[2], &(msg2.ssid.data.data), msg2.ssid.data.len);
-		bss = cfg80211_inform_bss(wiphy,
+		cfg80211_inform_bss(wiphy,
 			ieee80211_get_channel(wiphy, ieee80211_dsss_chan_to_freq(msg2.dschannel.data)),
 			(const u8 *) &(msg2.bssid.data.data),
 			msg2.timestamp.data, msg2.capinfo.data,
@@ -418,13 +411,6 @@ int prism2_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
 			(msg2.signal.data - 65536) * 100, /* Conversion to signed type */
 			GFP_KERNEL
 		);
-
-		if (!bss) {
-			err = -ENOMEM;
-			goto exit;
-		}
-
-		cfg80211_put_bss(wiphy, bss);
 	}
 
 	if (result)
@@ -502,7 +488,7 @@ int prism2_connect(struct wiphy *wiphy, struct net_device *dev,
 			goto exit;
 	}
 
-	/* Set the authorization */
+	/* Set the authorisation */
 	if ((sme->auth_type == NL80211_AUTHTYPE_OPEN_SYSTEM) ||
 		((sme->auth_type == NL80211_AUTHTYPE_AUTOMATIC) && !is_wep))
 			msg_join.authtype.data = P80211ENUM_authalg_opensystem;
@@ -546,9 +532,7 @@ int prism2_connect(struct wiphy *wiphy, struct net_device *dev,
 				goto exit;
 			}
 
-			result = prism2_domibset_pstr32(wlandev,
-							did, sme->key_len,
-							(u8 *)sme->key);
+			result = prism2_domibset_pstr32(wlandev, did, sme->key_len, (u8 *) sme->key);
 			if (result)
 				goto exit;
 
@@ -638,8 +622,8 @@ int prism2_leave_ibss(struct wiphy *wiphy, struct net_device *dev)
 }
 
 
-int prism2_set_tx_power(struct wiphy *wiphy, struct wireless_dev *wdev,
-			enum nl80211_tx_power_setting type, int mbm)
+int prism2_set_tx_power(struct wiphy *wiphy, enum nl80211_tx_power_setting type,
+			int mbm)
 {
 	struct prism2_wiphy_private *priv = wiphy_priv(wiphy);
 	wlandevice_t *wlandev = priv->wlandev;
@@ -665,17 +649,15 @@ exit:
 	return err;
 }
 
-int prism2_get_tx_power(struct wiphy *wiphy, struct wireless_dev *wdev,
-			int *dbm)
+int prism2_get_tx_power(struct wiphy *wiphy, int *dbm)
 {
 	struct prism2_wiphy_private *priv = wiphy_priv(wiphy);
 	wlandevice_t *wlandev = priv->wlandev;
 	struct p80211msg_dot11req_mibget msg;
-	p80211item_uint32_t *mibitem;
+	p80211item_uint32_t *mibitem = (p80211item_uint32_t *) &msg.mibattribute.data;
 	int result;
 	int err = 0;
 
-	mibitem = (p80211item_uint32_t *) &msg.mibattribute.data;
 	msg.msgcode = DIDmsg_dot11req_mibget;
 	mibitem->did =
 	    DIDmib_dot11phy_dot11PhyTxPowerTable_dot11CurrentTxPowerLevel;
@@ -699,8 +681,7 @@ exit:
 /* Interface callback functions, passing data back up to the cfg80211 layer */
 void prism2_connect_result(wlandevice_t *wlandev, u8 failed)
 {
-	u16 status = failed ?
-		     WLAN_STATUS_UNSPECIFIED_FAILURE : WLAN_STATUS_SUCCESS;
+	u16 status = failed ? WLAN_STATUS_UNSPECIFIED_FAILURE : WLAN_STATUS_SUCCESS;
 
 	cfg80211_connect_result(wlandev->netdev, wlandev->bssid,
 				NULL, 0, NULL, 0, status, GFP_KERNEL);
@@ -743,8 +724,7 @@ struct wiphy *wlan_create_wiphy(struct device *dev, wlandevice_t *wlandev)
 {
 	struct wiphy *wiphy;
 	struct prism2_wiphy_private *priv;
-
-	wiphy = wiphy_new(&prism2_usb_cfg_ops, sizeof(*priv));
+	wiphy = wiphy_new(&prism2_usb_cfg_ops, sizeof(struct prism2_wiphy_private));
 	if (!wiphy)
 		return NULL;
 

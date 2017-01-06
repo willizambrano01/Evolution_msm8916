@@ -21,6 +21,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/memblock.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/rtc.h>
@@ -46,7 +47,7 @@ static __initdata struct of_device_id ppc47x_of_bus[] = {
 
 /* The EEPROM is missing and the default values are bogus.  This forces USB in
  * to EHCI mode */
-static void quirk_ppc_currituck_usb_fixup(struct pci_dev *dev)
+static void __devinit quirk_ppc_currituck_usb_fixup(struct pci_dev *dev)
 {
 	if (of_machine_is_compatible("ibm,currituck")) {
 		pci_write_config_dword(dev, 0xe0, 0x0114231f);
@@ -158,8 +159,13 @@ static void __init ppc47x_setup_arch(void)
 
 	/* No need to check the DMA config as we /know/ our windows are all of
  	 * RAM.  Lets hope that doesn't change */
-	swiotlb_detect_4g();
-
+#ifdef CONFIG_SWIOTLB
+	if (memblock_end_of_DRAM() > 0xffffffff) {
+		ppc_swiotlb_enable = 1;
+		set_pci_dma_ops(&swiotlb_dma_ops);
+		ppc_md.pci_dma_dev_setup = pci_dma_dev_setup_swiotlb;
+	}
+#endif
 	ppc47x_smp_init();
 }
 

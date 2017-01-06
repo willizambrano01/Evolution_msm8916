@@ -120,7 +120,7 @@ static int acpi_system_alarm_seq_show(struct seq_file *seq, void *offset)
 
 static int acpi_system_alarm_open_fs(struct inode *inode, struct file *file)
 {
-	return single_open(file, acpi_system_alarm_seq_show, PDE_DATA(inode));
+	return single_open(file, acpi_system_alarm_seq_show, PDE(inode)->data);
 }
 
 static int get_date_field(char **p, u32 * value)
@@ -302,46 +302,26 @@ acpi_system_wakeup_device_seq_show(struct seq_file *seq, void *offset)
 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
 		struct acpi_device *dev =
 		    container_of(node, struct acpi_device, wakeup_list);
-		struct acpi_device_physical_node *entry;
+		struct device *ldev;
 
 		if (!dev->wakeup.flags.valid)
 			continue;
 
-		seq_printf(seq, "%s\t  S%d\t",
+		ldev = acpi_get_physical_device(dev->handle);
+		seq_printf(seq, "%s\t  S%d\t%c%-8s  ",
 			   dev->pnp.bus_id,
-			   (u32) dev->wakeup.sleep_state);
+			   (u32) dev->wakeup.sleep_state,
+			   dev->wakeup.flags.run_wake ? '*' : ' ',
+			   (device_may_wakeup(&dev->dev)
+			     || (ldev && device_may_wakeup(ldev))) ?
+			       "enabled" : "disabled");
+		if (ldev)
+			seq_printf(seq, "%s:%s",
+				   ldev->bus ? ldev->bus->name : "no-bus",
+				   dev_name(ldev));
+		seq_printf(seq, "\n");
+		put_device(ldev);
 
-		mutex_lock(&dev->physical_node_lock);
-
-		if (!dev->physical_node_count) {
-			seq_printf(seq, "%c%-8s\n",
-				dev->wakeup.flags.run_wake ? '*' : ' ',
-				device_may_wakeup(&dev->dev) ?
-					"enabled" : "disabled");
-		} else {
-			struct device *ldev;
-			list_for_each_entry(entry, &dev->physical_node_list,
-					node) {
-				ldev = get_device(entry->dev);
-				if (!ldev)
-					continue;
-
-				if (&entry->node !=
-						dev->physical_node_list.next)
-					seq_printf(seq, "\t\t");
-
-				seq_printf(seq, "%c%-8s  %s:%s\n",
-					dev->wakeup.flags.run_wake ? '*' : ' ',
-					(device_may_wakeup(&dev->dev) ||
-					(ldev && device_may_wakeup(ldev))) ?
-					"enabled" : "disabled",
-					ldev->bus ? ldev->bus->name :
-					"no-bus", dev_name(ldev));
-				put_device(ldev);
-			}
-		}
-
-		mutex_unlock(&dev->physical_node_lock);
 	}
 	mutex_unlock(&acpi_device_lock);
 	return 0;
@@ -349,18 +329,12 @@ acpi_system_wakeup_device_seq_show(struct seq_file *seq, void *offset)
 
 static void physical_device_enable_wakeup(struct acpi_device *adev)
 {
-	struct acpi_device_physical_node *entry;
+	struct device *dev = acpi_get_physical_device(adev->handle);
 
-	mutex_lock(&adev->physical_node_lock);
-
-	list_for_each_entry(entry,
-		&adev->physical_node_list, node)
-		if (entry->dev && device_can_wakeup(entry->dev)) {
-			bool enable = !device_may_wakeup(entry->dev);
-			device_set_wakeup_enable(entry->dev, enable);
-		}
-
-	mutex_unlock(&adev->physical_node_lock);
+	if (dev && device_can_wakeup(dev)) {
+		bool enable = !device_may_wakeup(dev);
+		device_set_wakeup_enable(dev, enable);
+	}
 }
 
 static ssize_t
@@ -371,13 +345,16 @@ acpi_system_write_wakeup_device(struct file *file,
 	struct list_head *node, *next;
 	char strbuf[5];
 	char str[5] = "";
+	unsigned int len = count;
 
-	if (count > 4)
-		count = 4;
-
-	if (copy_from_user(strbuf, buffer, count))
+	if (len > 4)
+		len = 4;
+	if (len < 0)
 		return -EFAULT;
-	strbuf[count] = '\0';
+
+	if (copy_from_user(strbuf, buffer, len))
+		return -EFAULT;
+	strbuf[len] = '\0';
 	sscanf(strbuf, "%s", str);
 
 	mutex_lock(&acpi_device_lock);
@@ -405,7 +382,7 @@ static int
 acpi_system_wakeup_device_open_fs(struct inode *inode, struct file *file)
 {
 	return single_open(file, acpi_system_wakeup_device_seq_show,
-			   PDE_DATA(inode));
+			   PDE(inode)->data);
 }
 
 static const struct file_operations acpi_system_wakeup_device_fops = {

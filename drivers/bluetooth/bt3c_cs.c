@@ -39,6 +39,7 @@
 #include <linux/serial.h>
 #include <linux/serial_reg.h>
 #include <linux/bitops.h>
+#include <asm/system.h>
 #include <asm/io.h>
 
 #include <linux/device.h>
@@ -186,9 +187,9 @@ static void bt3c_write_wakeup(bt3c_info_t *info)
 		return;
 
 	do {
-		unsigned int iobase = info->p_dev->resource[0]->start;
+		register unsigned int iobase = info->p_dev->resource[0]->start;
 		register struct sk_buff *skb;
-		int len;
+		register int len;
 
 		if (!pcmcia_dev_present(info->p_dev))
 			break;
@@ -388,7 +389,7 @@ static irqreturn_t bt3c_interrupt(int irq, void *dev_inst)
 
 static int bt3c_hci_flush(struct hci_dev *hdev)
 {
-	bt3c_info_t *info = hci_get_drvdata(hdev);
+	bt3c_info_t *info = (bt3c_info_t *)(hdev->driver_data);
 
 	/* Drop TX queue */
 	skb_queue_purge(&(info->txq));
@@ -427,7 +428,7 @@ static int bt3c_hci_send_frame(struct sk_buff *skb)
 		return -ENODEV;
 	}
 
-	info = hci_get_drvdata(hdev);
+	info = (bt3c_info_t *) (hdev->driver_data);
 
 	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
@@ -452,6 +453,11 @@ static int bt3c_hci_send_frame(struct sk_buff *skb)
 	spin_unlock_irqrestore(&(info->lock), flags);
 
 	return 0;
+}
+
+
+static void bt3c_hci_destruct(struct hci_dev *hdev)
+{
 }
 
 
@@ -574,14 +580,17 @@ static int bt3c_open(bt3c_info_t *info)
 	info->hdev = hdev;
 
 	hdev->bus = HCI_PCCARD;
-	hci_set_drvdata(hdev, info);
+	hdev->driver_data = info;
 	SET_HCIDEV_DEV(hdev, &info->p_dev->dev);
 
 	hdev->open     = bt3c_hci_open;
 	hdev->close    = bt3c_hci_close;
 	hdev->flush    = bt3c_hci_flush;
 	hdev->send     = bt3c_hci_send_frame;
+	hdev->destruct = bt3c_hci_destruct;
 	hdev->ioctl    = bt3c_hci_ioctl;
+
+	hdev->owner = THIS_MODULE;
 
 	/* Load firmware */
 	err = request_firmware(&firmware, "BT3CPCC.bin", &info->p_dev->dev);
@@ -627,7 +636,9 @@ static int bt3c_close(bt3c_info_t *info)
 
 	bt3c_hci_close(hdev);
 
-	hci_unregister_dev(hdev);
+	if (hci_unregister_dev(hdev) < 0)
+		BT_ERR("Can't unregister HCI device %s", hdev->name);
+
 	hci_free_dev(hdev);
 
 	return 0;
@@ -638,7 +649,7 @@ static int bt3c_probe(struct pcmcia_device *link)
 	bt3c_info_t *info;
 
 	/* Create new info device */
-	info = devm_kzalloc(&link->dev, sizeof(*info), GFP_KERNEL);
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
 
@@ -654,14 +665,17 @@ static int bt3c_probe(struct pcmcia_device *link)
 
 static void bt3c_detach(struct pcmcia_device *link)
 {
+	bt3c_info_t *info = link->priv;
+
 	bt3c_release(link);
+	kfree(info);
 }
 
 static int bt3c_check_config(struct pcmcia_device *p_dev, void *priv_data)
 {
 	int *try = priv_data;
 
-	if (!try)
+	if (try == 0)
 		p_dev->io_lines = 16;
 
 	if ((p_dev->resource[0]->end != 8) || (p_dev->resource[0]->start == 0))
@@ -747,7 +761,7 @@ static void bt3c_release(struct pcmcia_device *link)
 }
 
 
-static const struct pcmcia_device_id bt3c_ids[] = {
+static struct pcmcia_device_id bt3c_ids[] = {
 	PCMCIA_DEVICE_PROD_ID13("3COM", "Bluetooth PC Card", 0xefce0a31, 0xd4ce9b02),
 	PCMCIA_DEVICE_NULL
 };
@@ -760,4 +774,17 @@ static struct pcmcia_driver bt3c_driver = {
 	.remove		= bt3c_detach,
 	.id_table	= bt3c_ids,
 };
-module_pcmcia_driver(bt3c_driver);
+
+static int __init init_bt3c_cs(void)
+{
+	return pcmcia_register_driver(&bt3c_driver);
+}
+
+
+static void __exit exit_bt3c_cs(void)
+{
+	pcmcia_unregister_driver(&bt3c_driver);
+}
+
+module_init(init_bt3c_cs);
+module_exit(exit_bt3c_cs);

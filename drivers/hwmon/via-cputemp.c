@@ -121,17 +121,19 @@ static const struct attribute_group via_cputemp_group = {
 /* Optional attributes */
 static DEVICE_ATTR(cpu0_vid, S_IRUGO, show_cpu_vid, NULL);
 
-static int via_cputemp_probe(struct platform_device *pdev)
+static int __devinit via_cputemp_probe(struct platform_device *pdev)
 {
 	struct via_cputemp_data *data;
 	struct cpuinfo_x86 *c = &cpu_data(pdev->id);
 	int err;
 	u32 eax, edx;
 
-	data = devm_kzalloc(&pdev->dev, sizeof(struct via_cputemp_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct via_cputemp_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		dev_err(&pdev->dev, "Out of memory\n");
+		goto exit;
+	}
 
 	data->id = pdev->id;
 	data->name = "via_cputemp";
@@ -149,7 +151,8 @@ static int via_cputemp_probe(struct platform_device *pdev)
 		data->msr_temp = 0x1423;
 		break;
 	default:
-		return -ENODEV;
+		err = -ENODEV;
+		goto exit_free;
 	}
 
 	/* test if we can access the TEMPERATURE MSR */
@@ -157,14 +160,14 @@ static int via_cputemp_probe(struct platform_device *pdev)
 	if (err) {
 		dev_err(&pdev->dev,
 			"Unable to access TEMPERATURE MSR, giving up\n");
-		return err;
+		goto exit_free;
 	}
 
 	platform_set_drvdata(pdev, data);
 
 	err = sysfs_create_group(&pdev->dev.kobj, &via_cputemp_group);
 	if (err)
-		return err;
+		goto exit_free;
 
 	if (data->msr_vid)
 		data->vrm = vid_which_vrm();
@@ -189,10 +192,14 @@ exit_remove:
 	if (data->vrm)
 		device_remove_file(&pdev->dev, &dev_attr_cpu0_vid);
 	sysfs_remove_group(&pdev->dev.kobj, &via_cputemp_group);
+exit_free:
+	platform_set_drvdata(pdev, NULL);
+	kfree(data);
+exit:
 	return err;
 }
 
-static int via_cputemp_remove(struct platform_device *pdev)
+static int __devexit via_cputemp_remove(struct platform_device *pdev)
 {
 	struct via_cputemp_data *data = platform_get_drvdata(pdev);
 
@@ -200,6 +207,8 @@ static int via_cputemp_remove(struct platform_device *pdev)
 	if (data->vrm)
 		device_remove_file(&pdev->dev, &dev_attr_cpu0_vid);
 	sysfs_remove_group(&pdev->dev.kobj, &via_cputemp_group);
+	platform_set_drvdata(pdev, NULL);
+	kfree(data);
 	return 0;
 }
 
@@ -209,7 +218,7 @@ static struct platform_driver via_cputemp_driver = {
 		.name = DRVNAME,
 	},
 	.probe = via_cputemp_probe,
-	.remove = via_cputemp_remove,
+	.remove = __devexit_p(via_cputemp_remove),
 };
 
 struct pdev_entry {
@@ -300,7 +309,7 @@ static struct notifier_block via_cputemp_cpu_notifier __refdata = {
 	.notifier_call = via_cputemp_cpu_callback,
 };
 
-static const struct x86_cpu_id __initconst cputemp_ids[] = {
+static const struct x86_cpu_id cputemp_ids[] = {
 	{ X86_VENDOR_CENTAUR, 6, 0xa, }, /* C7 A */
 	{ X86_VENDOR_CENTAUR, 6, 0xd, }, /* C7 D */
 	{ X86_VENDOR_CENTAUR, 6, 0xf, }, /* Nano */
@@ -319,7 +328,6 @@ static int __init via_cputemp_init(void)
 	if (err)
 		goto exit;
 
-	get_online_cpus();
 	for_each_online_cpu(i) {
 		struct cpuinfo_x86 *c = &cpu_data(i);
 
@@ -339,14 +347,12 @@ static int __init via_cputemp_init(void)
 
 #ifndef CONFIG_HOTPLUG_CPU
 	if (list_empty(&pdev_list)) {
-		put_online_cpus();
 		err = -ENODEV;
 		goto exit_driver_unreg;
 	}
 #endif
 
 	register_hotcpu_notifier(&via_cputemp_cpu_notifier);
-	put_online_cpus();
 	return 0;
 
 #ifndef CONFIG_HOTPLUG_CPU
@@ -361,7 +367,6 @@ static void __exit via_cputemp_exit(void)
 {
 	struct pdev_entry *p, *n;
 
-	get_online_cpus();
 	unregister_hotcpu_notifier(&via_cputemp_cpu_notifier);
 	mutex_lock(&pdev_list_mutex);
 	list_for_each_entry_safe(p, n, &pdev_list, list) {
@@ -370,7 +375,6 @@ static void __exit via_cputemp_exit(void)
 		kfree(p);
 	}
 	mutex_unlock(&pdev_list_mutex);
-	put_online_cpus();
 	platform_driver_unregister(&via_cputemp_driver);
 }
 

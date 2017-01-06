@@ -74,7 +74,7 @@ static const int rpm_ranges[] = { 2000, 4000, 8000, 16000 };
 
 #define FAN_FROM_REG(val, rpm_range)	((val) == 0 || (val) == 255 ? \
 				0 : (rpm_ranges[rpm_range] * 30) / (val))
-#define TEMP_LIMIT_TO_REG(val)	clamp_val((val) / 1000, 0, 255)
+#define TEMP_LIMIT_TO_REG(val)	SENSORS_LIMIT((val) / 1000, 0, 255)
 
 /*
  * Client data (each client gets its own)
@@ -312,7 +312,7 @@ static ssize_t set_pwm(struct device *dev,
 	if (res)
 		return res;
 
-	val = clamp_val(val, 0, 255);
+	val = SENSORS_LIMIT(val, 0, 255);
 
 	mutex_lock(&data->update_lock);
 	data->pwm[attr->index] = (u8)(val * 120 / 255);
@@ -548,10 +548,11 @@ static int max6639_probe(struct i2c_client *client,
 	struct max6639_data *data;
 	int err;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct max6639_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct max6639_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->update_lock);
@@ -559,12 +560,12 @@ static int max6639_probe(struct i2c_client *client,
 	/* Initialize the max6639 chip */
 	err = max6639_init_client(client);
 	if (err < 0)
-		return err;
+		goto error_free;
 
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&client->dev.kobj, &max6639_group);
 	if (err)
-		return err;
+		goto error_free;
 
 	data->hwmon_dev = hwmon_device_register(&client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -578,6 +579,9 @@ static int max6639_probe(struct i2c_client *client,
 
 error_remove:
 	sysfs_remove_group(&client->dev.kobj, &max6639_group);
+error_free:
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -588,6 +592,7 @@ static int max6639_remove(struct i2c_client *client)
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &max6639_group);
 
+	kfree(data);
 	return 0;
 }
 

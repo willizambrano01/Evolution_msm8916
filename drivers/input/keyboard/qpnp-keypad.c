@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -413,7 +413,7 @@ static irqreturn_t qpnp_kp_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static int qpnp_kpd_init(struct qpnp_kp *kp)
+static int __devinit qpnp_kpd_init(struct qpnp_kp *kp)
 {
 	int bits, rc, cycles;
 	u8 kpd_scan_cntl, kpd_size_cntl;
@@ -526,7 +526,7 @@ static void qpnp_kp_close(struct input_dev *dev)
 	qpnp_kp_disable(kp);
 }
 
-static int qpnp_keypad_parse_dt(struct qpnp_kp *kp)
+static int __devinit qpnp_keypad_parse_dt(struct qpnp_kp *kp)
 {
 	struct matrix_keymap_data *keymap_data;
 	int rc, keymap_len, i;
@@ -612,7 +612,7 @@ static int qpnp_keypad_parse_dt(struct qpnp_kp *kp)
 	return 0;
 }
 
-static int qpnp_kp_probe(struct spmi_device *spmi)
+static int __devinit qpnp_kp_probe(struct spmi_device *spmi)
 {
 	struct qpnp_kp *kp;
 	struct resource *keypad_base;
@@ -725,9 +725,8 @@ static int qpnp_kp_probe(struct spmi_device *spmi)
 	kp->input->open		= qpnp_kp_open;
 	kp->input->close	= qpnp_kp_close;
 
-	matrix_keypad_build_keymap(kp->keymap_data, NULL,
-					kp->num_rows, kp->num_cols,
-					kp->keycodes, kp->input);
+	matrix_keypad_build_keymap(kp->keymap_data, QPNP_ROW_SHIFT,
+					kp->keycodes, kp->input->keybit);
 
 	input_set_capability(kp->input, EV_MSC, MSC_SCAN);
 	input_set_drvdata(kp->input, kp);
@@ -828,7 +827,7 @@ static struct of_device_id spmi_match_table[] = {
 
 static struct spmi_driver qpnp_kp_driver = {
 	.probe		= qpnp_kp_probe,
-	.remove		= qpnp_kp_remove,
+	.remove		= __devexit_p(qpnp_kp_remove),
 	.driver		= {
 		.name = "qcom,qpnp-keypad",
 		.of_match_table = spmi_match_table,

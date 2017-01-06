@@ -59,13 +59,14 @@ static struct {
 /* Offset from where switcher.S was compiled to where we've copied it */
 static unsigned long switcher_offset(void)
 {
-	return switcher_addr - (unsigned long)start_switcher_text;
+	return SWITCHER_ADDR - (unsigned long)start_switcher_text;
 }
 
-/* This cpu's struct lguest_pages (after the Switcher text page) */
+/* This cpu's struct lguest_pages. */
 static struct lguest_pages *lguest_pages(unsigned int cpu)
 {
-	return &(((struct lguest_pages *)(switcher_addr + PAGE_SIZE))[cpu]);
+	return &(((struct lguest_pages *)
+		  (SWITCHER_ADDR + SHARED_SWITCHER_PAGES*PAGE_SIZE))[cpu]);
 }
 
 static DEFINE_PER_CPU(struct lg_cpu *, lg_last_cpu);
@@ -202,8 +203,8 @@ void lguest_arch_run_guest(struct lg_cpu *cpu)
 	 * we set it now, so we can trap and pass that trap to the Guest if it
 	 * uses the FPU.
 	 */
-	if (cpu->ts && user_has_fpu())
-		stts();
+	if (cpu->ts)
+		unlazy_fpu(current);
 
 	/*
 	 * SYSENTER is an optimized way of doing system calls.  We can't allow
@@ -233,10 +234,6 @@ void lguest_arch_run_guest(struct lg_cpu *cpu)
 	 if (boot_cpu_has(X86_FEATURE_SEP))
 		wrmsr(MSR_IA32_SYSENTER_CS, __KERNEL_CS, 0);
 
-	/* Clear the host TS bit if it was set above. */
-	if (cpu->ts && user_has_fpu())
-		clts();
-
 	/*
 	 * If the Guest page faulted, then the cr2 register will tell us the
 	 * bad virtual address.  We have to grab this now, because once we
@@ -252,7 +249,7 @@ void lguest_arch_run_guest(struct lg_cpu *cpu)
 	 * a different CPU. So all the critical stuff should be done
 	 * before this.
 	 */
-	else if (cpu->regs->trapnum == 7 && !user_has_fpu())
+	else if (cpu->regs->trapnum == 7)
 		math_state_restore();
 }
 

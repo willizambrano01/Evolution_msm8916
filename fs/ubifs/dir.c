@@ -148,14 +148,13 @@ struct inode *ubifs_new_inode(struct ubifs_info *c, const struct inode *dir,
 	if (c->highest_inum >= INUM_WARN_WATERMARK) {
 		if (c->highest_inum >= INUM_WATERMARK) {
 			spin_unlock(&c->cnt_lock);
-			ubifs_err("out of inode numbers", c->vi.ubi_num);
+			ubifs_err("out of inode numbers");
 			make_bad_inode(inode);
 			iput(inode);
 			return ERR_PTR(-EINVAL);
 		}
 		ubifs_warn("running out of inode numbers (current %lu, max %d)",
-				c->vi.ubi_num, (unsigned long)c->highest_inum,
-				INUM_WATERMARK);
+			   (unsigned long)c->highest_inum, INUM_WATERMARK);
 	}
 
 	inode->i_ino = ++c->highest_inum;
@@ -171,6 +170,8 @@ struct inode *ubifs_new_inode(struct ubifs_info *c, const struct inode *dir,
 	return inode;
 }
 
+#ifdef CONFIG_UBIFS_FS_DEBUG
+
 static int dbg_check_name(const struct ubifs_info *c,
 			  const struct ubifs_dent_node *dent,
 			  const struct qstr *nm)
@@ -184,8 +185,14 @@ static int dbg_check_name(const struct ubifs_info *c,
 	return 0;
 }
 
+#else
+
+#define dbg_check_name(c, dent, nm) 0
+
+#endif
+
 static struct dentry *ubifs_lookup(struct inode *dir, struct dentry *dentry,
-				   unsigned int flags)
+				   struct nameidata *nd)
 {
 	int err;
 	union ubifs_key key;
@@ -227,8 +234,7 @@ static struct dentry *ubifs_lookup(struct inode *dir, struct dentry *dentry,
 		 */
 		err = PTR_ERR(inode);
 		ubifs_err("dead directory entry '%.*s', error %d",
-			  c->vi.ubi_num, dentry->d_name.len,
-			  dentry->d_name.name, err);
+			  dentry->d_name.len, dentry->d_name.name, err);
 		ubifs_ro_mode(c, err);
 		goto out;
 	}
@@ -248,7 +254,7 @@ out:
 }
 
 static int ubifs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
-			bool excl)
+			struct nameidata *nd)
 {
 	struct inode *inode;
 	struct ubifs_info *c = dir->i_sb->s_fs_info;
@@ -297,7 +303,7 @@ out_cancel:
 	iput(inode);
 out_budg:
 	ubifs_release_budget(c, &req);
-	ubifs_err("cannot create regular file, error %d", c->vi.ubi_num, err);
+	ubifs_err("cannot create regular file, error %d", err);
 	return err;
 }
 
@@ -351,50 +357,31 @@ static unsigned int vfs_dent_type(uint8_t type)
 static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 {
 	int err, over = 0;
-	loff_t pos = file->f_pos;
 	struct qstr nm;
 	union ubifs_key key;
 	struct ubifs_dent_node *dent;
-	struct inode *dir = file_inode(file);
+	struct inode *dir = file->f_path.dentry->d_inode;
 	struct ubifs_info *c = dir->i_sb->s_fs_info;
 
-	dbg_gen("dir ino %lu, f_pos %#llx", dir->i_ino, pos);
+	dbg_gen("dir ino %lu, f_pos %#llx", dir->i_ino, file->f_pos);
 
-	if (pos > UBIFS_S_KEY_HASH_MASK || pos == 2)
+	if (file->f_pos > UBIFS_S_KEY_HASH_MASK || file->f_pos == 2)
 		/*
 		 * The directory was seek'ed to a senseless position or there
 		 * are no more entries.
 		 */
 		return 0;
 
-	if (file->f_version == 0) {
-		/*
-		 * The file was seek'ed, which means that @file->private_data
-		 * is now invalid. This may also be just the first
-		 * 'ubifs_readdir()' invocation, in which case
-		 * @file->private_data is NULL, and the below code is
-		 * basically a no-op.
-		 */
-		kfree(file->private_data);
-		file->private_data = NULL;
-	}
-
-	/*
-	 * 'generic_file_llseek()' unconditionally sets @file->f_version to
-	 * zero, and we use this for detecting whether the file was seek'ed.
-	 */
-	file->f_version = 1;
-
 	/* File positions 0 and 1 correspond to "." and ".." */
-	if (pos == 0) {
+	if (file->f_pos == 0) {
 		ubifs_assert(!file->private_data);
 		over = filldir(dirent, ".", 1, 0, dir->i_ino, DT_DIR);
 		if (over)
 			return 0;
-		file->f_pos = pos = 1;
+		file->f_pos = 1;
 	}
 
-	if (pos == 1) {
+	if (file->f_pos == 1) {
 		ubifs_assert(!file->private_data);
 		over = filldir(dirent, "..", 2, 1,
 			       parent_ino(file->f_path.dentry), DT_DIR);
@@ -410,7 +397,7 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 			goto out;
 		}
 
-		file->f_pos = pos = key_hash_flash(c, &dent->key);
+		file->f_pos = key_hash_flash(c, &dent->key);
 		file->private_data = dent;
 	}
 
@@ -418,16 +405,17 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	if (!dent) {
 		/*
 		 * The directory was seek'ed to and is now readdir'ed.
-		 * Find the entry corresponding to @pos or the closest one.
+		 * Find the entry corresponding to @file->f_pos or the
+		 * closest one.
 		 */
-		dent_key_init_hash(c, &key, dir->i_ino, pos);
+		dent_key_init_hash(c, &key, dir->i_ino, file->f_pos);
 		nm.name = NULL;
 		dent = ubifs_tnc_next_ent(c, &key, &nm);
 		if (IS_ERR(dent)) {
 			err = PTR_ERR(dent);
 			goto out;
 		}
-		file->f_pos = pos = key_hash_flash(c, &dent->key);
+		file->f_pos = key_hash_flash(c, &dent->key);
 		file->private_data = dent;
 	}
 
@@ -439,7 +427,7 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 			     ubifs_inode(dir)->creat_sqnum);
 
 		nm.len = le16_to_cpu(dent->nlen);
-		over = filldir(dirent, dent->name, nm.len, pos,
+		over = filldir(dirent, dent->name, nm.len, file->f_pos,
 			       le64_to_cpu(dent->inum),
 			       vfs_dent_type(dent->type));
 		if (over)
@@ -455,36 +443,29 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 		}
 
 		kfree(file->private_data);
-		file->f_pos = pos = key_hash_flash(c, &dent->key);
+		file->f_pos = key_hash_flash(c, &dent->key);
 		file->private_data = dent;
 		cond_resched();
-
-		if (file->f_version == 0)
-			/*
-			 * The file was seek'ed meanwhile, lets return and start
-			 * reading direntries from the new position on the next
-			 * invocation.
-			 */
-			return 0;
 	}
 
 out:
 	if (err != -ENOENT) {
-		ubifs_err("cannot find next direntry, error %d", c->vi.ubi_num,
-				err);
+		ubifs_err("cannot find next direntry, error %d", err);
 		return err;
 	}
 
 	kfree(file->private_data);
 	file->private_data = NULL;
-	/* 2 is a special value indicating that there are no more direntries */
 	file->f_pos = 2;
 	return 0;
 }
 
-static loff_t ubifs_dir_llseek(struct file *file, loff_t offset, int whence)
+/* If a directory is seeked, we have to free saved readdir() state */
+static loff_t ubifs_dir_llseek(struct file *file, loff_t offset, int origin)
 {
-	return generic_file_llseek(file, offset, whence);
+	kfree(file->private_data);
+	file->private_data = NULL;
+	return generic_file_llseek(file, offset, origin);
 }
 
 /* Free saved readdir() state when the directory is closed */
@@ -766,8 +747,7 @@ static int ubifs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	dir->i_mtime = dir->i_ctime = inode->i_ctime;
 	err = ubifs_jnl_update(c, dir, &dentry->d_name, inode, 0, 0);
 	if (err) {
-		ubifs_err("cannot create directory, error %d", c->vi.ubi_num,
-				err);
+		ubifs_err("cannot create directory, error %d", err);
 		goto out_cancel;
 	}
 	mutex_unlock(&dir_ui->ui_mutex);
@@ -1008,8 +988,8 @@ static int ubifs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	 * separately.
 	 */
 
-	dbg_gen("dent '%.*s' ino %lu in dir ino %lu to dent '%.*s' in dir ino %lu",
-		old_dentry->d_name.len, old_dentry->d_name.name,
+	dbg_gen("dent '%.*s' ino %lu in dir ino %lu to dent '%.*s' in "
+		"dir ino %lu", old_dentry->d_name.len, old_dentry->d_name.name,
 		old_inode->i_ino, old_dir->i_ino, new_dentry->d_name.len,
 		new_dentry->d_name.name, new_dir->i_ino);
 	ubifs_assert(mutex_is_locked(&old_dir->i_mutex));
@@ -1155,7 +1135,16 @@ int ubifs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	struct ubifs_inode *ui = ubifs_inode(inode);
 
 	mutex_lock(&ui->ui_mutex);
-	generic_fillattr(inode, stat);
+	stat->dev = inode->i_sb->s_dev;
+	stat->ino = inode->i_ino;
+	stat->mode = inode->i_mode;
+	stat->nlink = inode->i_nlink;
+	stat->uid = inode->i_uid;
+	stat->gid = inode->i_gid;
+	stat->rdev = inode->i_rdev;
+	stat->atime = inode->i_atime;
+	stat->mtime = inode->i_mtime;
+	stat->ctime = inode->i_ctime;
 	stat->blksize = UBIFS_BLOCK_SIZE;
 	stat->size = ui->ui_size;
 
@@ -1198,10 +1187,12 @@ const struct inode_operations ubifs_dir_inode_operations = {
 	.rename      = ubifs_rename,
 	.setattr     = ubifs_setattr,
 	.getattr     = ubifs_getattr,
+#ifdef CONFIG_UBIFS_FS_XATTR
 	.setxattr    = ubifs_setxattr,
 	.getxattr    = ubifs_getxattr,
 	.listxattr   = ubifs_listxattr,
 	.removexattr = ubifs_removexattr,
+#endif
 };
 
 const struct file_operations ubifs_dir_operations = {

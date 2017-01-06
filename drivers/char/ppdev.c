@@ -107,7 +107,7 @@ static inline void pp_enable_irq (struct pp_struct *pp)
 static ssize_t pp_read (struct file * file, char __user * buf, size_t count,
 			loff_t * ppos)
 {
-	unsigned int minor = iminor(file_inode(file));
+	unsigned int minor = iminor(file->f_path.dentry->d_inode);
 	struct pp_struct *pp = file->private_data;
 	char * kbuffer;
 	ssize_t bytes_read = 0;
@@ -189,7 +189,7 @@ static ssize_t pp_read (struct file * file, char __user * buf, size_t count,
 static ssize_t pp_write (struct file * file, const char __user * buf,
 			 size_t count, loff_t * ppos)
 {
-	unsigned int minor = iminor(file_inode(file));
+	unsigned int minor = iminor(file->f_path.dentry->d_inode);
 	struct pp_struct *pp = file->private_data;
 	char * kbuffer;
 	ssize_t bytes_written = 0;
@@ -251,8 +251,12 @@ static ssize_t pp_write (struct file * file, const char __user * buf,
 			break;
 		}
 
-		if (signal_pending (current))
+		if (signal_pending (current)) {
+			if (!bytes_written) {
+				bytes_written = -EINTR;
+			}
 			break;
+		}
 
 		cond_resched();
 	}
@@ -324,7 +328,7 @@ static enum ieee1284_phase init_phase (int mode)
 
 static int pp_do_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	unsigned int minor = iminor(file_inode(file));
+	unsigned int minor = iminor(file->f_path.dentry->d_inode);
 	struct pp_struct *pp = file->private_data;
 	struct parport * port;
 	void __user *argp = (void __user *)arg;
@@ -779,8 +783,7 @@ static int __init ppdev_init (void)
 		err = PTR_ERR(ppdev_class);
 		goto out_chrdev;
 	}
-	err = parport_register_driver(&pp_driver);
-	if (err < 0) {
+	if (parport_register_driver(&pp_driver)) {
 		printk (KERN_WARNING CHRDEV ": unable to register with parport\n");
 		goto out_class;
 	}

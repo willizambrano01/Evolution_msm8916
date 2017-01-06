@@ -170,11 +170,7 @@ static struct snd_soc_dai_driver txx9aclc_ac97_dai = {
 	},
 };
 
-static const struct snd_soc_component_driver txx9aclc_ac97_component = {
-	.name		= "txx9aclc-ac97",
-};
-
-static int txx9aclc_ac97_dev_probe(struct platform_device *pdev)
+static int __devinit txx9aclc_ac97_dev_probe(struct platform_device *pdev)
 {
 	struct txx9aclc_plat_drvdata *drvdata;
 	struct resource *r;
@@ -209,19 +205,18 @@ static int txx9aclc_ac97_dev_probe(struct platform_device *pdev)
 	if (err < 0)
 		return err;
 
-	return snd_soc_register_component(&pdev->dev, &txx9aclc_ac97_component,
-					  &txx9aclc_ac97_dai, 1);
+	return snd_soc_register_dai(&pdev->dev, &txx9aclc_ac97_dai);
 }
 
-static int txx9aclc_ac97_dev_remove(struct platform_device *pdev)
+static int __devexit txx9aclc_ac97_dev_remove(struct platform_device *pdev)
 {
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dai(&pdev->dev);
 	return 0;
 }
 
 static struct platform_driver txx9aclc_ac97_driver = {
 	.probe		= txx9aclc_ac97_dev_probe,
-	.remove		= txx9aclc_ac97_dev_remove,
+	.remove		= __devexit_p(txx9aclc_ac97_dev_remove),
 	.driver		= {
 		.name	= "txx9aclc-ac97",
 		.owner	= THIS_MODULE,

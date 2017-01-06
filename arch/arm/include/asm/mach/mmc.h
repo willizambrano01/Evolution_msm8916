@@ -8,7 +8,7 @@
 #include <linux/mmc/card.h>
 #include <linux/mmc/sdio_func.h>
 #include <mach/gpio.h>
-#include <linux/msm-bus.h>
+#include <mach/msm_bus.h>
 
 #define SDC_DAT1_DISABLE 0
 #define SDC_DAT1_ENABLE  1
@@ -156,6 +156,7 @@ struct mmc_platform_data {
 	unsigned int msmsdcc_fmin;
 	unsigned int msmsdcc_fmid;
 	unsigned int msmsdcc_fmax;
+	unsigned int msmsdcc_max_pwrclass;
 	bool nonremovable;
 	bool is_emmc;
 	unsigned int mpm_sdiowakeup_int;

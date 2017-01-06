@@ -1343,14 +1343,15 @@ static struct attribute *f71805f_attr_pwm[] = {
  * Device registration and initialization
  */
 
-static void f71805f_init_device(struct f71805f_data *data)
+static void __devinit f71805f_init_device(struct f71805f_data *data)
 {
 	u8 reg;
 	int i;
 
 	reg = f71805f_read8(data, F71805F_REG_START);
 	if ((reg & 0x41) != 0x01) {
-		pr_debug("Starting monitoring operations\n");
+		printk(KERN_DEBUG DRVNAME ": Starting monitoring "
+		       "operations\n");
 		f71805f_write8(data, F71805F_REG_START, (reg | 0x01) & ~0x40);
 	}
 
@@ -1373,7 +1374,7 @@ static void f71805f_init_device(struct f71805f_data *data)
 	}
 }
 
-static int f71805f_probe(struct platform_device *pdev)
+static int __devinit f71805f_probe(struct platform_device *pdev)
 {
 	struct f71805f_sio_data *sio_data = pdev->dev.platform_data;
 	struct f71805f_data *data;
@@ -1385,20 +1386,20 @@ static int f71805f_probe(struct platform_device *pdev)
 		"f71872f",
 	};
 
-	data = devm_kzalloc(&pdev->dev, sizeof(struct f71805f_data),
-			    GFP_KERNEL);
+	data = kzalloc(sizeof(struct f71805f_data), GFP_KERNEL);
 	if (!data) {
+		err = -ENOMEM;
 		pr_err("Out of memory\n");
-		return -ENOMEM;
+		goto exit;
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
-	if (!devm_request_region(&pdev->dev, res->start + ADDR_REG_OFFSET, 2,
-				 DRVNAME)) {
+	if (!request_region(res->start + ADDR_REG_OFFSET, 2, DRVNAME)) {
+		err = -EBUSY;
 		dev_err(&pdev->dev, "Failed to request region 0x%lx-0x%lx\n",
 			(unsigned long)(res->start + ADDR_REG_OFFSET),
 			(unsigned long)(res->start + ADDR_REG_OFFSET + 1));
-		return -EBUSY;
+		goto exit_free;
 	}
 	data->addr = res->start;
 	data->name = names[sio_data->kind];
@@ -1426,7 +1427,7 @@ static int f71805f_probe(struct platform_device *pdev)
 	/* Register sysfs interface files */
 	err = sysfs_create_group(&pdev->dev.kobj, &f71805f_group);
 	if (err)
-		return err;
+		goto exit_release_region;
 	if (data->has_in & (1 << 4)) { /* in4 */
 		err = sysfs_create_group(&pdev->dev.kobj,
 					 &f71805f_group_optin[0]);
@@ -1486,12 +1487,19 @@ exit_remove_files:
 	for (i = 0; i < 4; i++)
 		sysfs_remove_group(&pdev->dev.kobj, &f71805f_group_optin[i]);
 	sysfs_remove_group(&pdev->dev.kobj, &f71805f_group_pwm_freq);
+exit_release_region:
+	release_region(res->start + ADDR_REG_OFFSET, 2);
+exit_free:
+	platform_set_drvdata(pdev, NULL);
+	kfree(data);
+exit:
 	return err;
 }
 
-static int f71805f_remove(struct platform_device *pdev)
+static int __devexit f71805f_remove(struct platform_device *pdev)
 {
 	struct f71805f_data *data = platform_get_drvdata(pdev);
+	struct resource *res;
 	int i;
 
 	hwmon_device_unregister(data->hwmon_dev);
@@ -1499,6 +1507,11 @@ static int f71805f_remove(struct platform_device *pdev)
 	for (i = 0; i < 4; i++)
 		sysfs_remove_group(&pdev->dev.kobj, &f71805f_group_optin[i]);
 	sysfs_remove_group(&pdev->dev.kobj, &f71805f_group_pwm_freq);
+	platform_set_drvdata(pdev, NULL);
+	kfree(data);
+
+	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
+	release_region(res->start + ADDR_REG_OFFSET, 2);
 
 	return 0;
 }
@@ -1509,7 +1522,7 @@ static struct platform_driver f71805f_driver = {
 		.name	= DRVNAME,
 	},
 	.probe		= f71805f_probe,
-	.remove		= f71805f_remove,
+	.remove		= __devexit_p(f71805f_remove),
 };
 
 static int __init f71805f_device_add(unsigned short address,

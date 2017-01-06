@@ -1,4 +1,5 @@
-/* Copyright (C) 2007-2013 B.A.T.M.A.N. contributors:
+/*
+ * Copyright (C) 2007-2012 B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
  *
@@ -15,13 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA
+ *
  */
 
 #ifndef _NET_BATMAN_ADV_RING_BUFFER_H_
 #define _NET_BATMAN_ADV_RING_BUFFER_H_
 
-void batadv_ring_buffer_set(uint8_t lq_recv[], uint8_t *lq_index,
-			    uint8_t value);
-uint8_t batadv_ring_buffer_avg(const uint8_t lq_recv[]);
+void ring_buffer_set(uint8_t lq_recv[], uint8_t *lq_index, uint8_t value);
+uint8_t ring_buffer_avg(const uint8_t lq_recv[]);
 
 #endif /* _NET_BATMAN_ADV_RING_BUFFER_H_ */

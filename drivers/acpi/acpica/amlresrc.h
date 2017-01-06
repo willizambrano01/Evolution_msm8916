@@ -1,3 +1,4 @@
+
 /******************************************************************************
  *
  * Module Name: amlresrc.h - AML resource descriptors
@@ -5,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2013, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -97,7 +98,7 @@
 #define ACPI_RESTAG_TRANSLATION                 "_TRA"
 #define ACPI_RESTAG_TRANSTYPE                   "_TRS"	/* Sparse(1), Dense(0) */
 #define ACPI_RESTAG_TYPE                        "_TTP"	/* Translation(1), Static (0) */
-#define ACPI_RESTAG_XFERTYPE                    "_SIZ"	/* 8(0), 8And16(1), 16(2) */
+#define ACPI_RESTAG_XFERTYPE                    "_SIZ"	/* 8(0), 8_and16(1), 16(2) */
 #define ACPI_RESTAG_VENDORDATA                  "_VEN"
 
 /* Default sizes for "small" resource descriptors */
@@ -199,12 +200,6 @@ struct aml_resource_fixed_dma {
 struct aml_resource_large_header {
 AML_RESOURCE_LARGE_HEADER_COMMON};
 
-/* General Flags for address space resource descriptors */
-
-#define ACPI_RESOURCE_FLAG_DEC      2
-#define ACPI_RESOURCE_FLAG_MIF      4
-#define ACPI_RESOURCE_FLAG_MAF      8
-
 struct aml_resource_memory24 {
 	AML_RESOURCE_LARGE_HEADER_COMMON u8 flags;
 	u16 minimum;
@@ -240,7 +235,7 @@ AML_RESOURCE_LARGE_HEADER_COMMON AML_RESOURCE_ADDRESS_COMMON};
 
 struct aml_resource_extended_address64 {
 	AML_RESOURCE_LARGE_HEADER_COMMON
-	    AML_RESOURCE_ADDRESS_COMMON u8 revision_ID;
+	    AML_RESOURCE_ADDRESS_COMMON u8 revision_iD;
 	u8 reserved;
 	u64 granularity;
 	u64 minimum;

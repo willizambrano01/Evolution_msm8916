@@ -240,7 +240,10 @@ void p80211netdev_rx(wlandevice_t *wlandev, struct sk_buff *skb)
 {
 	/* Enqueue for post-irq processing */
 	skb_queue_tail(&wlandev->nsd_rxq, skb);
+
 	tasklet_schedule(&wlandev->rx_bh);
+
+	return;
 }
 
 /*----------------------------------------------------------------
@@ -350,8 +353,6 @@ static int p80211knetdev_hard_start_xmit(struct sk_buff *skb,
 	wlandevice_t *wlandev = netdev->ml_priv;
 	union p80211_hdr p80211_hdr;
 	struct p80211_metawep p80211_wep;
-
-	p80211_wep.data = NULL;
 
 	if (skb == NULL)
 		return NETDEV_TX_OK;
@@ -463,7 +464,7 @@ failed:
 /*----------------------------------------------------------------
 * p80211knetdev_set_multicast_list
 *
-* Called from higher layers whenever there's a need to set/clear
+* Called from higher lavers whenever there's a need to set/clear
 * promiscuous mode or rewrite the multicast list.
 *
 * Arguments:
@@ -643,7 +644,7 @@ static int p80211knetdev_set_mac_address(netdevice_t *dev, void *addr)
 	p80211item_unk392_t *mibattr;
 	p80211item_pstr6_t *macaddr;
 	p80211item_uint32_t *resultcode;
-	int result;
+	int result = 0;
 
 	/* If we're running, we don't allow MAC address changes */
 	if (netif_running(dev))
@@ -805,13 +806,15 @@ int wlan_setup(wlandevice_t *wlandev, struct device *physdev)
 * Arguments:
 *	wlandev		ptr to the wlandev structure for the
 *			interface.
+* Returns:
+*	zero on success, non-zero otherwise.
 * Call Context:
 *	Should be process thread.  We'll assume it might be
 *	interrupt though.  When we add support for statically
 *	compiled drivers, this function will be called in the
 *	context of the kernel startup code.
 ----------------------------------------------------------------*/
-void wlan_unsetup(wlandevice_t *wlandev)
+int wlan_unsetup(wlandevice_t *wlandev)
 {
 	struct wireless_dev *wdev;
 
@@ -824,6 +827,8 @@ void wlan_unsetup(wlandevice_t *wlandev)
 		free_netdev(wlandev->netdev);
 		wlandev->netdev = NULL;
 	}
+
+	return 0;
 }
 
 /*----------------------------------------------------------------
@@ -847,7 +852,13 @@ void wlan_unsetup(wlandevice_t *wlandev)
 ----------------------------------------------------------------*/
 int register_wlandev(wlandevice_t *wlandev)
 {
-	return register_netdev(wlandev->netdev);
+	int i = 0;
+
+	i = register_netdev(wlandev->netdev);
+	if (i)
+		return i;
+
+	return 0;
 }
 
 /*----------------------------------------------------------------

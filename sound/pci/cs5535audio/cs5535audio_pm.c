@@ -55,10 +55,9 @@ static void snd_cs5535audio_stop_hardware(struct cs5535audio *cs5535au)
 
 }
 
-static int snd_cs5535audio_suspend(struct device *dev)
+int snd_cs5535audio_suspend(struct pci_dev *pci, pm_message_t state)
 {
-	struct pci_dev *pci = to_pci_dev(dev);
-	struct snd_card *card = dev_get_drvdata(dev);
+	struct snd_card *card = pci_get_drvdata(pci);
 	struct cs5535audio *cs5535au = card->private_data;
 	int i;
 
@@ -78,14 +77,13 @@ static int snd_cs5535audio_suspend(struct device *dev)
 		return -EIO;
 	}
 	pci_disable_device(pci);
-	pci_set_power_state(pci, PCI_D3hot);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
-static int snd_cs5535audio_resume(struct device *dev)
+int snd_cs5535audio_resume(struct pci_dev *pci)
 {
-	struct pci_dev *pci = to_pci_dev(dev);
-	struct snd_card *card = dev_get_drvdata(dev);
+	struct snd_card *card = pci_get_drvdata(pci);
 	struct cs5535audio *cs5535au = card->private_data;
 	u32 tmp;
 	int timeout;
@@ -131,4 +129,3 @@ static int snd_cs5535audio_resume(struct device *dev)
 	return 0;
 }
 
-SIMPLE_DEV_PM_OPS(snd_cs5535audio_pm, snd_cs5535audio_suspend, snd_cs5535audio_resume);

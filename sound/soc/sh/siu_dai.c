@@ -726,11 +726,7 @@ static struct snd_soc_dai_driver siu_i2s_dai = {
 	.ops = &siu_dai_ops,
 };
 
-static const struct snd_soc_component_driver siu_i2s_component = {
-	.name		= "siu-i2s",
-};
-
-static int siu_probe(struct platform_device *pdev)
+static int __devinit siu_probe(struct platform_device *pdev)
 {
 	const struct firmware *fw_entry;
 	struct resource *res, *region;
@@ -787,8 +783,7 @@ static int siu_probe(struct platform_device *pdev)
 	dev_set_drvdata(&pdev->dev, info);
 
 	/* register using ARRAY version so we can keep dai name */
-	ret = snd_soc_register_component(&pdev->dev, &siu_i2s_component,
-					 &siu_i2s_dai, 1);
+	ret = snd_soc_register_dais(&pdev->dev, &siu_i2s_dai, 1);
 	if (ret < 0)
 		goto edaiinit;
 
@@ -801,7 +796,7 @@ static int siu_probe(struct platform_device *pdev)
 	return ret;
 
 esocregp:
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dai(&pdev->dev);
 edaiinit:
 	iounmap(info->reg);
 emapreg:
@@ -820,7 +815,7 @@ ereqfw:
 	return ret;
 }
 
-static int siu_remove(struct platform_device *pdev)
+static int __devexit siu_remove(struct platform_device *pdev)
 {
 	struct siu_info *info = dev_get_drvdata(&pdev->dev);
 	struct resource *res;
@@ -828,7 +823,7 @@ static int siu_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 
 	snd_soc_unregister_platform(&pdev->dev);
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dai(&pdev->dev);
 
 	iounmap(info->reg);
 	iounmap(info->yram);
@@ -848,7 +843,7 @@ static struct platform_driver siu_driver = {
 		.name	= "siu-pcm-audio",
 	},
 	.probe		= siu_probe,
-	.remove		= siu_remove,
+	.remove		= __devexit_p(siu_remove),
 };
 
 module_platform_driver(siu_driver);

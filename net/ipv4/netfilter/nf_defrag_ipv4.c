@@ -22,6 +22,7 @@
 #endif
 #include <net/netfilter/nf_conntrack_zones.h>
 
+/* Returns new sk_buff, or NULL */
 static int nf_ct_ipv4_gather_frags(struct sk_buff *skb, u_int32_t user)
 {
 	int err;
@@ -32,10 +33,8 @@ static int nf_ct_ipv4_gather_frags(struct sk_buff *skb, u_int32_t user)
 	err = ip_defrag(skb, user);
 	local_bh_enable();
 
-	if (!err) {
+	if (!err)
 		ip_send_check(ip_hdr(skb));
-		skb->local_df = 1;
-	}
 
 	return err;
 }
@@ -95,14 +94,14 @@ static struct nf_hook_ops ipv4_defrag_ops[] = {
 	{
 		.hook		= ipv4_conntrack_defrag,
 		.owner		= THIS_MODULE,
-		.pf		= NFPROTO_IPV4,
+		.pf		= PF_INET,
 		.hooknum	= NF_INET_PRE_ROUTING,
 		.priority	= NF_IP_PRI_CONNTRACK_DEFRAG,
 	},
 	{
 		.hook           = ipv4_conntrack_defrag,
 		.owner          = THIS_MODULE,
-		.pf             = NFPROTO_IPV4,
+		.pf             = PF_INET,
 		.hooknum        = NF_INET_LOCAL_OUT,
 		.priority       = NF_IP_PRI_CONNTRACK_DEFRAG,
 	},

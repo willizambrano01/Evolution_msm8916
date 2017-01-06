@@ -176,7 +176,7 @@ sun4v_tsb_miss_common:
 
 	sub	%g2, TRAP_PER_CPU_FAULT_INFO, %g2
 
-#if defined(CONFIG_HUGETLB_PAGE) || defined(CONFIG_TRANSPARENT_HUGEPAGE)
+#ifdef CONFIG_HUGETLB_PAGE
 	mov	SCRATCHPAD_UTSBREG2, %g5
 	ldxa	[%g5] ASI_SCRATCHPAD, %g5
 	cmp	%g5, -1

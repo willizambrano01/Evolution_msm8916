@@ -6,12 +6,10 @@ ifeq ($(CONFIG_CRYPTO_DEV_QCE50), y)
 	obj-$(CONFIG_CRYPTO_DEV_QCE) += qce50.o
 else
 	ifeq ($(CONFIG_CRYPTO_DEV_QCE40), y)
+		obj-$(CONFIG_CRYPTO_DEV_QCE) += qce40.o
 	else
 		obj-$(CONFIG_CRYPTO_DEV_QCE) += qce.o
 	endif
-endif
-ifdef CONFIG_COMPAT
-obj-$(CONFIG_CRYPTO_DEV_QCE) += compat_qcedev.o
 endif
 ifeq ($(CONFIG_FIPS_ENABLE), y)
 	obj-$(CONFIG_CRYPTO_DEV_QCRYPTO) += qcrypto_fips.o

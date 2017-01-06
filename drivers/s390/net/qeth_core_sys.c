@@ -1,4 +1,6 @@
 /*
+ *  drivers/s390/net/qeth_core_sys.c
+ *
  *    Copyright IBM Corp. 2007
  *    Author(s): Utz Bacher <utz.bacher@de.ibm.com>,
  *		 Frank Pavlic <fpavlic@de.ibm.com>,
@@ -432,8 +434,8 @@ static ssize_t qeth_dev_layer2_store(struct device *dev,
 		goto out;
 	else {
 		card->info.mac_bits  = 0;
-		if (card->discipline) {
-			card->discipline->remove(card->gdev);
+		if (card->discipline.ccwgdriver) {
+			card->discipline.ccwgdriver->remove(card->gdev);
 			qeth_core_free_discipline(card);
 		}
 	}
@@ -442,7 +444,7 @@ static ssize_t qeth_dev_layer2_store(struct device *dev,
 	if (rc)
 		goto out;
 
-	rc = card->discipline->setup(card->gdev);
+	rc = card->discipline.ccwgdriver->probe(card->gdev);
 out:
 	mutex_unlock(&card->discipline_mutex);
 	return rc ? rc : count;
@@ -513,11 +515,10 @@ static ssize_t qeth_dev_isolation_store(struct device *dev,
 	rc = count;
 
 	/* defer IP assist if device is offline (until discipline->set_online)*/
-	card->options.prev_isolation = card->options.isolation;
 	card->options.isolation = isolation;
 	if (card->state == CARD_STATE_SOFTSETUP ||
 	    card->state == CARD_STATE_UP) {
-		int ipa_rc = qeth_set_access_ctrl_online(card, 1);
+		int ipa_rc = qeth_set_access_ctrl_online(card);
 		if (ipa_rc != 0)
 			rc = ipa_rc;
 	}
@@ -692,6 +693,7 @@ static struct attribute *qeth_blkt_device_attrs[] = {
 	&dev_attr_inter_jumbo.attr,
 	NULL,
 };
+
 static struct attribute_group qeth_device_blkt_group = {
 	.name = "blkt",
 	.attrs = qeth_blkt_device_attrs,
@@ -714,14 +716,9 @@ static struct attribute *qeth_device_attrs[] = {
 	&dev_attr_hw_trap.attr,
 	NULL,
 };
+
 static struct attribute_group qeth_device_attr_group = {
 	.attrs = qeth_device_attrs,
-};
-
-const struct attribute_group *qeth_generic_attr_groups[] = {
-	&qeth_device_attr_group,
-	&qeth_device_blkt_group,
-	NULL,
 };
 
 static struct attribute *qeth_osn_device_attrs[] = {
@@ -733,10 +730,37 @@ static struct attribute *qeth_osn_device_attrs[] = {
 	&dev_attr_recover.attr,
 	NULL,
 };
+
 static struct attribute_group qeth_osn_device_attr_group = {
 	.attrs = qeth_osn_device_attrs,
 };
-const struct attribute_group *qeth_osn_attr_groups[] = {
-	&qeth_osn_device_attr_group,
-	NULL,
-};
+
+int qeth_core_create_device_attributes(struct device *dev)
+{
+	int ret;
+	ret = sysfs_create_group(&dev->kobj, &qeth_device_attr_group);
+	if (ret)
+		return ret;
+	ret = sysfs_create_group(&dev->kobj, &qeth_device_blkt_group);
+	if (ret)
+		sysfs_remove_group(&dev->kobj, &qeth_device_attr_group);
+
+	return 0;
+}
+
+void qeth_core_remove_device_attributes(struct device *dev)
+{
+	sysfs_remove_group(&dev->kobj, &qeth_device_attr_group);
+	sysfs_remove_group(&dev->kobj, &qeth_device_blkt_group);
+}
+
+int qeth_core_create_osn_attributes(struct device *dev)
+{
+	return sysfs_create_group(&dev->kobj, &qeth_osn_device_attr_group);
+}
+
+void qeth_core_remove_osn_attributes(struct device *dev)
+{
+	sysfs_remove_group(&dev->kobj, &qeth_osn_device_attr_group);
+	return;
+}

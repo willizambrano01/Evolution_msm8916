@@ -164,7 +164,11 @@ static int __init nforce2_s4985_init(void)
 	}
 
 	/* Unregister physical bus */
-	i2c_del_adapter(nforce2_smbus);
+	error = i2c_del_adapter(nforce2_smbus);
+	if (error) {
+		dev_err(&nforce2_smbus->dev, "Physical bus removal failed\n");
+		goto ERROR0;
+	}
 
 	printk(KERN_INFO "Enabling SMBus multiplexing for Tyan S4985\n");
 	/* Define the 5 virtual adapters and algorithms structures */

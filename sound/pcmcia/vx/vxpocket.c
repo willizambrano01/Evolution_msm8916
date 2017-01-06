@@ -260,7 +260,7 @@ static int vxp_suspend(struct pcmcia_device *link)
 	snd_printdd(KERN_DEBUG "SUSPEND\n");
 	if (chip) {
 		snd_printdd(KERN_DEBUG "snd_vx_suspend calling\n");
-		snd_vx_suspend(chip);
+		snd_vx_suspend(chip, PMSG_SUSPEND);
 	}
 
 	return 0;
@@ -367,4 +367,16 @@ static struct pcmcia_driver vxp_cs_driver = {
 	.resume		= vxp_resume,
 #endif
 };
-module_pcmcia_driver(vxp_cs_driver);
+
+static int __init init_vxpocket(void)
+{
+	return pcmcia_register_driver(&vxp_cs_driver);
+}
+
+static void __exit exit_vxpocket(void)
+{
+	pcmcia_unregister_driver(&vxp_cs_driver);
+}
+
+module_init(init_vxpocket);
+module_exit(exit_vxpocket);

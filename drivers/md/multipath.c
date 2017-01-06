@@ -335,9 +335,8 @@ abort:
  *	3.	Performs writes following reads for array syncronising.
  */
 
-static void multipathd(struct md_thread *thread)
+static void multipathd (struct mddev *mddev)
 {
-	struct mddev *mddev = thread->mddev;
 	struct multipath_bh *mp_bh;
 	struct bio *bio;
 	unsigned long flags;
@@ -475,8 +474,7 @@ static int multipath_run (struct mddev *mddev)
 	}
 
 	{
-		mddev->thread = md_register_thread(multipathd, mddev,
-						   "multipath");
+		mddev->thread = md_register_thread(multipathd, mddev, NULL);
 		if (!mddev->thread) {
 			printk(KERN_ERR "multipath: couldn't allocate thread"
 				" for %s\n", mdname(mddev));

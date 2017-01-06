@@ -2,9 +2,9 @@
 #define _ASM_X86_USER_H
 
 #ifdef CONFIG_X86_32
-# include <asm/user_32.h>
+# include "user_32.h"
 #else
-# include <asm/user_64.h>
+# include "user_64.h"
 #endif
 
 #include <asm/types.h>

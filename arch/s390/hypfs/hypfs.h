@@ -1,7 +1,8 @@
 /*
+ *  arch/s390/hypfs/hypfs.h
  *    Hypervisor filesystem for Linux on s390.
  *
- *    Copyright IBM Corp. 2006
+ *    Copyright (C) IBM Corp. 2006
  *    Author(s): Michael Holzheu <holzheu@de.ibm.com>
  */
 

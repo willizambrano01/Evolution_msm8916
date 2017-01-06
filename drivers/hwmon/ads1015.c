@@ -156,6 +156,7 @@ static int ads1015_remove(struct i2c_client *client)
 	hwmon_device_unregister(data->hwmon_dev);
 	for (k = 0; k < ADS1015_CHANNELS; ++k)
 		device_remove_file(&client->dev, &ads1015_in[k].dev_attr);
+	kfree(data);
 	return 0;
 }
 
@@ -253,10 +254,11 @@ static int ads1015_probe(struct i2c_client *client,
 	int err;
 	unsigned int k;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct ads1015_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct ads1015_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->update_lock);
@@ -282,6 +284,8 @@ static int ads1015_probe(struct i2c_client *client,
 exit_remove:
 	for (k = 0; k < ADS1015_CHANNELS; ++k)
 		device_remove_file(&client->dev, &ads1015_in[k].dev_attr);
+	kfree(data);
+exit:
 	return err;
 }
 

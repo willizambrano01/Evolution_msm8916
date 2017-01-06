@@ -68,7 +68,7 @@ enum ipi_message_type {
 };
 
 /* Set to a secondary's cpuid when it comes online.  */
-static int smp_secondary_alive = 0;
+static int smp_secondary_alive __devinitdata = 0;
 
 int smp_num_probed;		/* Internal processor count */
 int smp_num_cpus = 1;		/* Number that came online.  */
@@ -166,12 +166,12 @@ smp_callin(void)
 	DBGS(("smp_callin: commencing CPU %d current %p active_mm %p\n",
 	      cpuid, current, current->active_mm));
 
-	preempt_disable();
-	cpu_startup_entry(CPUHP_ONLINE);
+	/* Do nothing.  */
+	cpu_idle();
 }
 
 /* Wait until hwrpb->txrdy is clear for cpu.  Return -1 on timeout.  */
-static int
+static int __devinit
 wait_for_txrdy (unsigned long cpumask)
 {
 	unsigned long timeout;
@@ -357,9 +357,23 @@ secondary_cpu_start(int cpuid, struct task_struct *idle)
  * Bring one cpu online.
  */
 static int __cpuinit
-smp_boot_one_cpu(int cpuid, struct task_struct *idle)
+smp_boot_one_cpu(int cpuid)
 {
+	struct task_struct *idle;
 	unsigned long timeout;
+
+	/* Cook up an idler for this guy.  Note that the address we
+	   give to kernel_thread is irrelevant -- it's going to start
+	   where HWRPB.CPU_restart says to start.  But this gets all
+	   the other task-y sort of data structures set up like we
+	   wish.  We can't use kernel_thread since we must avoid
+	   rescheduling the child.  */
+	idle = fork_idle(cpuid);
+	if (IS_ERR(idle))
+		panic("failed fork for CPU %d", cpuid);
+
+	DBGS(("smp_boot_one_cpu: CPU %d state 0x%lx flags 0x%lx\n",
+	      cpuid, idle->state, idle->flags));
 
 	/* Signal the secondary to wait a moment.  */
 	smp_secondary_alive = -1;
@@ -467,15 +481,15 @@ smp_prepare_cpus(unsigned int max_cpus)
 	smp_num_cpus = smp_num_probed;
 }
 
-void
+void __devinit
 smp_prepare_boot_cpu(void)
 {
 }
 
 int __cpuinit
-__cpu_up(unsigned int cpu, struct task_struct *tidle)
+__cpu_up(unsigned int cpu)
 {
-	smp_boot_one_cpu(cpu, tidle);
+	smp_boot_one_cpu(cpu);
 
 	return cpu_online(cpu) ? 0 : -ENOSYS;
 }

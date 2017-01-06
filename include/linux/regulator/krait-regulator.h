@@ -24,7 +24,7 @@
  * success and error on failure.
  */
 
-#ifdef CONFIG_KRAIT_REGULATOR
+#ifdef CONFIG_ARCH_MSM8974
 int __init krait_power_init(void);
 void secondary_cpu_hs_init(void *base_ptr, int cpu);
 #else

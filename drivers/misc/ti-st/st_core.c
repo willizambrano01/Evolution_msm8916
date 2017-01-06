@@ -30,13 +30,11 @@
 
 #include <linux/ti_wilink_st.h>
 
-extern void st_kim_recv(void *, const unsigned char *, long);
-void st_int_recv(void *, const unsigned char *, long);
 /* function pointer pointing to either,
  * st_kim_recv during registration to receive fw download responses
  * st_int_recv after registration to receive proto stack responses
  */
-static void (*st_recv) (void *, const unsigned char *, long);
+void (*st_recv) (void*, const unsigned char*, long);
 
 /********************************************************************/
 static void add_channel_to_table(struct st_data_s *st_gdata,
@@ -102,7 +100,7 @@ int st_int_write(struct st_data_s *st_gdata,
  * push the skb received to relevant
  * protocol stacks
  */
-static void st_send_frame(unsigned char chnl_id, struct st_data_s *st_gdata)
+void st_send_frame(unsigned char chnl_id, struct st_data_s *st_gdata)
 {
 	pr_debug(" %s(prot:%d) ", __func__, chnl_id);
 
@@ -142,7 +140,7 @@ static void st_send_frame(unsigned char chnl_id, struct st_data_s *st_gdata)
  * This function is being called with spin lock held, protocol drivers are
  * only expected to complete their waits and do nothing more than that.
  */
-static void st_reg_complete(struct st_data_s *st_gdata, char err)
+void st_reg_complete(struct st_data_s *st_gdata, char err)
 {
 	unsigned char i = 0;
 	pr_info(" %s ", __func__);
@@ -240,8 +238,7 @@ void st_int_recv(void *disc_data,
 	char *ptr;
 	struct st_proto_s *proto;
 	unsigned short payload_len = 0;
-	int len = 0;
-	unsigned char type = 0;
+	int len = 0, type = 0;
 	unsigned char *plen;
 	struct st_data_s *st_gdata = (struct st_data_s *)disc_data;
 	unsigned long flags;
@@ -352,11 +349,6 @@ void st_int_recv(void *disc_data,
 			st_gdata->rx_skb = alloc_skb(
 					st_gdata->list[type]->max_frame_size,
 					GFP_ATOMIC);
-			if (st_gdata->rx_skb == NULL) {
-				pr_err("out of memory: dropping\n");
-				goto done;
-			}
-
 			skb_reserve(st_gdata->rx_skb,
 					st_gdata->list[type]->reserve);
 			/* next 2 required for BT only */
@@ -382,7 +374,7 @@ done:
  *	completely, return that skb which has the pending data.
  *	In normal cases, return top of txq.
  */
-static struct sk_buff *st_int_dequeue(struct st_data_s *st_gdata)
+struct sk_buff *st_int_dequeue(struct st_data_s *st_gdata)
 {
 	struct sk_buff *returning_skb;
 
@@ -404,7 +396,7 @@ static struct sk_buff *st_int_dequeue(struct st_data_s *st_gdata)
  *	txq and waitq needs protection since the other contexts
  *	may be sending data, waking up chip.
  */
-static void st_int_enqueue(struct st_data_s *st_gdata, struct sk_buff *skb)
+void st_int_enqueue(struct st_data_s *st_gdata, struct sk_buff *skb)
 {
 	unsigned long flags = 0;
 
@@ -512,6 +504,7 @@ long st_register(struct st_proto_s *new_proto)
 	unsigned long flags = 0;
 
 	st_kim_ref(&st_gdata, 0);
+	pr_info("%s(%d) ", __func__, new_proto->chnl_id);
 	if (st_gdata == NULL || new_proto == NULL || new_proto->recv == NULL
 	    || new_proto->reg_complete_cb == NULL) {
 		pr_err("gdata/new_proto/recv or reg_complete_cb not ready");

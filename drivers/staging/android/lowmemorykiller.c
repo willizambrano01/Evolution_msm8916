@@ -30,6 +30,8 @@
  *
  */
 
+#define REALLY_WANT_TRACEPOINTS
+
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/module.h>
@@ -47,11 +49,17 @@
 #include <linux/show_mem_notifier.h>
 #include <linux/vmpressure.h>
 
-#include <trace/events/memkill.h>
-
 #define CREATE_TRACE_POINTS
 #include <trace/events/almk.h>
 
+#if BITS_PER_LONG == 32
+#define INT_DIGITS     (10)
+#else
+#define INT_DIGITS     (20)
+#endif
+/* "NODE_ID:ZONE_ID:NR_FREE:NR_FILE " */
+#define ZINFO_DIGITS   ((INT_DIGITS + 1) * 4)  /* end with ignorable ' ' */
+#define ZINFO_LENGTH   (ZINFO_DIGITS * MAX_NR_ZONES * MAX_NUMNODES)
 
 #ifdef CONFIG_HIGHMEM
 #define _ZONE ZONE_HIGHMEM
@@ -60,7 +68,7 @@
 #endif
 
 static uint32_t lowmem_debug_level = 1;
-static short lowmem_adj[6] = {
+static int lowmem_adj[6] = {
 	0,
 	1,
 	6,
@@ -142,7 +150,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 	if (pressure >= 95) {
 		other_file = global_page_state(NR_FILE_PAGES) -
 			global_page_state(NR_SHMEM) -
-			total_swapcache_pages();
+			total_swapcache_pages;
 		other_free = global_page_state(NR_FREE_PAGES);
 
 		atomic_set(&shift_adj, 1);
@@ -155,7 +163,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 
 		other_file = global_page_state(NR_FILE_PAGES) -
 			global_page_state(NR_SHMEM) -
-			total_swapcache_pages();
+			total_swapcache_pages;
 
 		other_free = global_page_state(NR_FREE_PAGES);
 
@@ -185,16 +193,16 @@ static struct notifier_block lmk_vmpr_nb = {
 
 static int test_task_flag(struct task_struct *p, int flag)
 {
-	struct task_struct *t = p;
+	struct task_struct *t;
 
-	do {
+	for_each_thread(p, t) {
 		task_lock(t);
 		if (test_tsk_thread_flag(t, flag)) {
 			task_unlock(t);
 			return 1;
 		}
 		task_unlock(t);
-	} while_each_thread(p, t);
+	}
 
 	return 0;
 }
@@ -249,7 +257,8 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 		za = &zall[node_idx][zone_idx];
 		za->free = zone_page_state(zone, NR_FREE_PAGES);
 		za->file = zone_page_state(zone, NR_FILE_PAGES)
-					- zone_page_state(zone, NR_SHMEM);
+					- zone_page_state(zone, NR_SHMEM)
+					- zone_page_state(zone, NR_SWAPCACHE);
 		if (zone_idx == ZONE_MOVABLE) {
 			if (!use_cma_pages && other_free) {
 				unsigned long free_cma = zone_page_state(zone,
@@ -285,10 +294,9 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 					za->free -= lowmem_reserve;
 				}
 			} else {
-				if (other_free) {
+				if (other_free)
 					*other_free -= za->free;
-					za->free = 0;
-				}
+				za->free = 0;
 			}
 		}
 	}
@@ -413,7 +421,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	short min_score_adj = OOM_SCORE_ADJ_MAX + 1;
 	int minfree = 0;
 	int selected_tasksize = 0;
-	short selected_oom_score_adj;
+	int selected_oom_score_adj;
 	int array_size = ARRAY_SIZE(lowmem_adj);
 	int other_free;
 	int other_file;
@@ -436,11 +444,11 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 
 	other_free = global_page_state(NR_FREE_PAGES);
 
-	if (global_page_state(NR_SHMEM) + total_swapcache_pages() <
+	if (global_page_state(NR_SHMEM) + total_swapcache_pages <
 		global_page_state(NR_FILE_PAGES))
 		other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM) -
-						total_swapcache_pages();
+						total_swapcache_pages;
 	else
 		other_file = 0;
 
@@ -485,6 +493,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	selected_oom_score_adj = min_score_adj;
 
 	rcu_read_lock();
+
 #ifdef CONFIG_ANDROID_LMK_ADJ_RBTREE
 	for (tsk = pick_first_task();
 		tsk != pick_last_task() && tsk != NULL;
@@ -493,7 +502,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	for_each_process(tsk) {
 #endif
 		struct task_struct *p;
-		short oom_score_adj;
+		int oom_score_adj;
 
 		if (tsk->flags & PF_KTHREAD)
 			continue;
@@ -563,7 +572,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 		int i, j;
 		char zinfo[ZINFO_LENGTH];
 		char *p = zinfo;
-		lowmem_print(1, "Killing '%s' (%d), adj %hd,\n" \
+		lowmem_print(1, "Killing '%s' (%d), adj %d,\n" \
 				"   to free %ldkB on behalf of '%s' (%d) because\n" \
 				"   cache %ldkB is below limit %ldkB for oom_score_adj %hd\n" \
 				"   Free memory is %ldkB above reserved.\n" \
@@ -571,13 +580,9 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 				"   Total reserve is %ldkB\n" \
 				"   Total free pages is %ldkB\n" \
 				"   Total file cache is %ldkB\n" \
-				"   Total anon is %ldkB\n" \
 				"   Slab Reclaimable is %ldkB\n" \
 				"   Slab UnReclaimable is %ldkB\n" \
 				"   Total Slab is %ldkB\n" \
-				"   ION is %ldkB\n" \
-				"   ION_POOL is %ldkB\n" \
-				"   ION_CMA is %ldkB\n" \
 				"   GFP mask is 0x%x\n",
 			     selected->comm, selected->pid,
 			     selected_oom_score_adj,
@@ -594,8 +599,6 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 				(long)(PAGE_SIZE / 1024),
 			     global_page_state(NR_FILE_PAGES) *
 				(long)(PAGE_SIZE / 1024),
-			     global_page_state(NR_ANON_PAGES) *
-				(long)(PAGE_SIZE / 1024),
 			     global_page_state(NR_SLAB_RECLAIMABLE) *
 				(long)(PAGE_SIZE / 1024),
 			     global_page_state(NR_SLAB_UNRECLAIMABLE) *
@@ -603,12 +606,6 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			     global_page_state(NR_SLAB_RECLAIMABLE) *
 				(long)(PAGE_SIZE / 1024) +
 			     global_page_state(NR_SLAB_UNRECLAIMABLE) *
-				(long)(PAGE_SIZE / 1024),
-			     global_page_state(NR_ION_PAGES) *
-				(long)(PAGE_SIZE / 1024),
-			     global_page_state(NR_ION_POOL_PAGES) *
-				(long)(PAGE_SIZE / 1024),
-			     global_page_state(NR_ION_CMA_PAGES) *
 				(long)(PAGE_SIZE / 1024),
 			     sc->gfp_mask);
 
@@ -620,8 +617,9 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 
 		lowmem_deathpending_timeout = jiffies + HZ;
 
-		/* For easy parsing, show all zones info even its free & file
-		 * are zero. It will show as the following examples:
+		/* Due to MotoCare parser can't handle unfixed column,
+		 * show all zones info even its free & file are zero.
+		 * it will show as the following examples:
 		 *   0:0:756:1127 0:1:0:0 0:2:0:0
 		 *   0:0:767:322 0:1:152:2364 0:2:0:0
 		 */
@@ -632,11 +630,8 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 					zall[i][j].free,
 					zall[i][j].file);
 
-		trace_lmk_kill(selected->pid, selected->comm,
-				selected_oom_score_adj, selected_tasksize,
-				min_score_adj, sc->gfp_mask, zinfo);
-		set_tsk_thread_flag(selected, TIF_MEMDIE);
 		send_sig(SIGKILL, selected, 0);
+		set_tsk_thread_flag(selected, TIF_MEMDIE);
 		rem -= selected_tasksize;
 		rcu_read_unlock();
 		/* give the system time to free up the memory */
@@ -659,20 +654,47 @@ static struct shrinker lowmem_shrinker = {
 	.seeks = DEFAULT_SEEKS * 16
 };
 
+#ifdef CONFIG_ANDROID_BG_SCAN_MEM
+static int lmk_task_migration_notify(struct notifier_block *nb,
+					unsigned long data, void *arg)
+{
+	struct shrink_control sc = {
+		.gfp_mask = GFP_KERNEL,
+		.nr_to_scan = 1,
+	};
+
+	lowmem_shrink(&lowmem_shrinker, &sc);
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block tsk_migration_nb = {
+	.notifier_call = lmk_task_migration_notify,
+};
+#endif
+
 static int __init lowmem_init(void)
 {
 	register_shrinker(&lowmem_shrinker);
 	vmpressure_notifier_register(&lmk_vmpr_nb);
+#ifdef CONFIG_ANDROID_BG_SCAN_MEM
+	raw_notifier_chain_register(&bgtsk_migration_notifier_head,
+					&tsk_migration_nb);
+#endif
 	return 0;
 }
 
 static void __exit lowmem_exit(void)
 {
 	unregister_shrinker(&lowmem_shrinker);
+#ifdef CONFIG_ANDROID_BG_SCAN_MEM
+	raw_notifier_chain_unregister(&bgtsk_migration_notifier_head,
+					&tsk_migration_nb);
+#endif
 }
 
 #ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_AUTODETECT_OOM_ADJ_VALUES
-static short lowmem_oom_adj_to_oom_score_adj(short oom_adj)
+static int lowmem_oom_adj_to_oom_score_adj(int oom_adj)
 {
 	if (oom_adj == OOM_ADJUST_MAX)
 		return OOM_SCORE_ADJ_MAX;
@@ -683,8 +705,8 @@ static short lowmem_oom_adj_to_oom_score_adj(short oom_adj)
 static void lowmem_autodetect_oom_adj_values(void)
 {
 	int i;
-	short oom_adj;
-	short oom_score_adj;
+	int oom_adj;
+	int oom_score_adj;
 	int array_size = ARRAY_SIZE(lowmem_adj);
 
 	if (lowmem_adj_size < array_size)
@@ -742,7 +764,7 @@ static struct kernel_param_ops lowmem_adj_array_ops = {
 static const struct kparam_array __param_arr_adj = {
 	.max = ARRAY_SIZE(lowmem_adj),
 	.num = &lowmem_adj_size,
-	.ops = &param_ops_short,
+	.ops = &param_ops_int,
 	.elemsize = sizeof(lowmem_adj[0]),
 	.elem = lowmem_adj,
 };
@@ -794,6 +816,7 @@ void delete_from_adj_tree(struct task_struct *task)
 	spin_unlock(&lmk_lock);
 }
 
+
 static struct task_struct *pick_next_from_adj_tree(struct task_struct *task)
 {
 	struct rb_node *next;
@@ -825,6 +848,7 @@ static struct task_struct *pick_first_task(void)
 	first_tsk_sig = rb_entry(left, struct signal_struct, adj_node);
 	return first_tsk_sig->curr_target->group_leader;
 }
+
 static struct task_struct *pick_last_task(void)
 {
 	struct rb_node *right;
@@ -842,16 +866,15 @@ static struct task_struct *pick_last_task(void)
 }
 #endif
 
-
 module_param_named(cost, lowmem_shrinker.seeks, int, S_IRUGO | S_IWUSR);
 #ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_AUTODETECT_OOM_ADJ_VALUES
 __module_param_call(MODULE_PARAM_PREFIX, adj,
 		    &lowmem_adj_array_ops,
 		    .arr = &__param_arr_adj,
 		    S_IRUGO | S_IWUSR, -1);
-__MODULE_PARM_TYPE(adj, "array of short");
+__MODULE_PARM_TYPE(adj, "array of int");
 #else
-module_param_array_named(adj, lowmem_adj, short, &lowmem_adj_size,
+module_param_array_named(adj, lowmem_adj, int, &lowmem_adj_size,
 			 S_IRUGO | S_IWUSR);
 #endif
 module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,

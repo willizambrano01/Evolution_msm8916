@@ -113,6 +113,5 @@ struct bms_battery_data QRD_4v35_2000mAh_data = {
 	.fcc_sf_lut				= &fcc_sf,
 	.pc_temp_ocv_lut		= &pc_temp_ocv,
 	.rbatt_sf_lut			= &rbatt_sf,
-	.default_rbatt_mohm	= 172,
-	.battery_type			= "qrd_4v35_2000mah",
+	.default_rbatt_mohm	= 172
 };

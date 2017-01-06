@@ -5,8 +5,8 @@
  *
  * Copyright (C) 2008 Nokia Corporation.
  *
- * Authors: Sakari Ailus <sakari.ailus@nokia.com>
- *          Remi Denis-Courmont
+ * Contact: Remi Denis-Courmont <remi.denis-courmont@nokia.com>
+ * Original author: Sakari Ailus <sakari.ailus@nokia.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,7 +33,7 @@
 /* Device address handling */
 
 static int fill_addr(struct sk_buff *skb, struct net_device *dev, u8 addr,
-		     u32 portid, u32 seq, int event);
+		     u32 pid, u32 seq, int event);
 
 void phonet_address_notify(int event, struct net_device *dev, u8 addr)
 {
@@ -61,7 +61,7 @@ static const struct nla_policy ifa_phonet_policy[IFA_MAX+1] = {
 	[IFA_LOCAL] = { .type = NLA_U8 },
 };
 
-static int addr_doit(struct sk_buff *skb, struct nlmsghdr *nlh)
+static int addr_doit(struct sk_buff *skb, struct nlmsghdr *nlh, void *attr)
 {
 	struct net *net = sock_net(skb->sk);
 	struct nlattr *tb[IFA_MAX+1];
@@ -70,10 +70,7 @@ static int addr_doit(struct sk_buff *skb, struct nlmsghdr *nlh)
 	int err;
 	u8 pnaddr;
 
-	if (!netlink_capable(skb, CAP_NET_ADMIN))
-		return -EPERM;
-
-	if (!netlink_capable(skb, CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	ASSERT_RTNL();
@@ -104,12 +101,12 @@ static int addr_doit(struct sk_buff *skb, struct nlmsghdr *nlh)
 }
 
 static int fill_addr(struct sk_buff *skb, struct net_device *dev, u8 addr,
-			u32 portid, u32 seq, int event)
+			u32 pid, u32 seq, int event)
 {
 	struct ifaddrmsg *ifm;
 	struct nlmsghdr *nlh;
 
-	nlh = nlmsg_put(skb, portid, seq, event, sizeof(*ifm), 0);
+	nlh = nlmsg_put(skb, pid, seq, event, sizeof(*ifm), 0);
 	if (nlh == NULL)
 		return -EMSGSIZE;
 
@@ -119,8 +116,7 @@ static int fill_addr(struct sk_buff *skb, struct net_device *dev, u8 addr,
 	ifm->ifa_flags = IFA_F_PERMANENT;
 	ifm->ifa_scope = RT_SCOPE_LINK;
 	ifm->ifa_index = dev->ifindex;
-	if (nla_put_u8(skb, IFA_LOCAL, addr))
-		goto nla_put_failure;
+	NLA_PUT_U8(skb, IFA_LOCAL, addr);
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
@@ -151,7 +147,7 @@ static int getaddr_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 				continue;
 
 			if (fill_addr(skb, pnd->netdev, addr << 2,
-					 NETLINK_CB(cb->skb).portid,
+					 NETLINK_CB(cb->skb).pid,
 					cb->nlh->nlmsg_seq, RTM_NEWADDR) < 0)
 				goto out;
 		}
@@ -168,12 +164,12 @@ out:
 /* Routes handling */
 
 static int fill_route(struct sk_buff *skb, struct net_device *dev, u8 dst,
-			u32 portid, u32 seq, int event)
+			u32 pid, u32 seq, int event)
 {
 	struct rtmsg *rtm;
 	struct nlmsghdr *nlh;
 
-	nlh = nlmsg_put(skb, portid, seq, event, sizeof(*rtm), 0);
+	nlh = nlmsg_put(skb, pid, seq, event, sizeof(*rtm), 0);
 	if (nlh == NULL)
 		return -EMSGSIZE;
 
@@ -187,9 +183,8 @@ static int fill_route(struct sk_buff *skb, struct net_device *dev, u8 dst,
 	rtm->rtm_scope = RT_SCOPE_UNIVERSE;
 	rtm->rtm_type = RTN_UNICAST;
 	rtm->rtm_flags = 0;
-	if (nla_put_u8(skb, RTA_DST, dst) ||
-	    nla_put_u32(skb, RTA_OIF, dev->ifindex))
-		goto nla_put_failure;
+	NLA_PUT_U8(skb, RTA_DST, dst);
+	NLA_PUT_U32(skb, RTA_OIF, dev->ifindex);
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
@@ -224,7 +219,7 @@ static const struct nla_policy rtm_phonet_policy[RTA_MAX+1] = {
 	[RTA_OIF] = { .type = NLA_U32 },
 };
 
-static int route_doit(struct sk_buff *skb, struct nlmsghdr *nlh)
+static int route_doit(struct sk_buff *skb, struct nlmsghdr *nlh, void *attr)
 {
 	struct net *net = sock_net(skb->sk);
 	struct nlattr *tb[RTA_MAX+1];
@@ -233,10 +228,7 @@ static int route_doit(struct sk_buff *skb, struct nlmsghdr *nlh)
 	int err;
 	u8 dst;
 
-	if (!netlink_capable(skb, CAP_NET_ADMIN))
-		return -EPERM;
-
-	if (!netlink_capable(skb, CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	ASSERT_RTNL();
@@ -282,7 +274,7 @@ static int route_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 
 		if (addr_idx++ < addr_start_idx)
 			continue;
-		if (fill_route(skb, dev, addr << 2, NETLINK_CB(cb->skb).portid,
+		if (fill_route(skb, dev, addr << 2, NETLINK_CB(cb->skb).pid,
 				cb->nlh->nlmsg_seq, RTM_NEWROUTE))
 			goto out;
 	}

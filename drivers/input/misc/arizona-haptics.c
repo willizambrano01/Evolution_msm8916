@@ -37,7 +37,7 @@ static void arizona_haptics_work(struct work_struct *work)
 						       struct arizona_haptics,
 						       work);
 	struct arizona *arizona = haptics->arizona;
-	struct mutex *dapm_mutex = &arizona->dapm->card->dapm_mutex;
+	struct mutex *dapm_mutex = &arizona->dapm->codec->mutex;
 	int ret;
 
 	if (!haptics->arizona->dapm) {
@@ -67,7 +67,7 @@ static void arizona_haptics_work(struct work_struct *work)
 			return;
 		}
 
-		mutex_lock_nested(dapm_mutex, SND_SOC_DAPM_CLASS_RUNTIME);
+		mutex_lock(dapm_mutex);
 
 		ret = snd_soc_dapm_enable_pin(arizona->dapm, "HAPTICS");
 		if (ret != 0) {
@@ -77,17 +77,19 @@ static void arizona_haptics_work(struct work_struct *work)
 			return;
 		}
 
-		mutex_unlock(dapm_mutex);
-
 		ret = snd_soc_dapm_sync(arizona->dapm);
 		if (ret != 0) {
 			dev_err(arizona->dev, "Failed to sync DAPM: %d\n",
 				ret);
+			mutex_unlock(dapm_mutex);
 			return;
 		}
+
+		mutex_unlock(dapm_mutex);
+
 	} else {
 		/* This disable sequence will be a noop if already enabled */
-		mutex_lock_nested(dapm_mutex, SND_SOC_DAPM_CLASS_RUNTIME);
+		mutex_lock(dapm_mutex);
 
 		ret = snd_soc_dapm_disable_pin(arizona->dapm, "HAPTICS");
 		if (ret != 0) {
@@ -97,14 +99,15 @@ static void arizona_haptics_work(struct work_struct *work)
 			return;
 		}
 
-		mutex_unlock(dapm_mutex);
-
 		ret = snd_soc_dapm_sync(arizona->dapm);
 		if (ret != 0) {
 			dev_err(arizona->dev, "Failed to sync DAPM: %d\n",
 				ret);
+			mutex_unlock(dapm_mutex);
 			return;
 		}
+
+		mutex_unlock(dapm_mutex);
 
 		ret = regmap_update_bits(arizona->regmap,
 					 ARIZONA_HAPTICS_CONTROL_1,
@@ -132,13 +135,13 @@ static int arizona_haptics_play(struct input_dev *input, void *data,
 	if (effect->u.rumble.strong_magnitude) {
 		/* Scale the magnitude into the range the device supports */
 		if (arizona->pdata.hap_act) {
-			haptics->intensity =
-				effect->u.rumble.strong_magnitude >> 9;
+			haptics->intensity = effect->u.rumble.strong_magnitude
+				>> 9;
 			if (effect->direction < 0x8000)
 				haptics->intensity += 0x7f;
 		} else {
-			haptics->intensity =
-				effect->u.rumble.strong_magnitude >> 8;
+			haptics->intensity = effect->u.rumble.strong_magnitude
+				>> 8;
 		}
 	} else {
 		haptics->intensity = 0;
@@ -152,11 +155,11 @@ static int arizona_haptics_play(struct input_dev *input, void *data,
 static void arizona_haptics_close(struct input_dev *input)
 {
 	struct arizona_haptics *haptics = input_get_drvdata(input);
-	struct mutex *dapm_mutex = &haptics->arizona->dapm->card->dapm_mutex;
+	struct mutex *dapm_mutex = &haptics->arizona->dapm->codec->mutex;
 
 	cancel_work_sync(&haptics->work);
 
-	mutex_lock_nested(dapm_mutex, SND_SOC_DAPM_CLASS_RUNTIME);
+	mutex_lock(dapm_mutex);
 
 	if (haptics->arizona->dapm)
 		snd_soc_dapm_disable_pin(haptics->arizona->dapm, "HAPTICS");

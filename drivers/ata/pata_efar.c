@@ -295,10 +295,22 @@ static struct pci_driver efar_pci_driver = {
 #endif
 };
 
-module_pci_driver(efar_pci_driver);
+static int __init efar_init(void)
+{
+	return pci_register_driver(&efar_pci_driver);
+}
+
+static void __exit efar_exit(void)
+{
+	pci_unregister_driver(&efar_pci_driver);
+}
+
+module_init(efar_init);
+module_exit(efar_exit);
 
 MODULE_AUTHOR("Alan Cox");
 MODULE_DESCRIPTION("SCSI low-level driver for EFAR PIIX clones");
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(pci, efar_pci_tbl);
 MODULE_VERSION(DRV_VERSION);
+

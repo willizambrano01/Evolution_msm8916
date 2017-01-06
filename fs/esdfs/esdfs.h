@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1998-2014 Erez Zadok
+ * Copyright (c) 1998-2013 Erez Zadok
  * Copyright (c) 2009	   Shrikar Archak
- * Copyright (c) 2003-2014 Stony Brook University
- * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2003-2013 Stony Brook University
+ * Copyright (c) 2003-2013 The Research Foundation of SUNY
  * Copyright (C) 2013-2014 Motorola Mobility, LLC
  *
  * This program is free software; you can redistribute it and/or modify
@@ -32,10 +32,6 @@
 /* the file system name */
 #define ESDFS_NAME "esdfs"
 
-/* ioctl command */
-#define ESDFS_IOCTL_MAGIC	'e'
-#define ESDFS_IOC_DIS_ACCESS	_IO(ESDFS_IOCTL_MAGIC, 1)
-
 /* esdfs root inode number */
 #define ESDFS_ROOT_INO     1
 
@@ -48,7 +44,6 @@
 #define ESDFS_MOUNT_DERIVE_MULTI	0x00000004
 #define ESDFS_MOUNT_DERIVE_PUBLIC	0x00000008
 #define ESDFS_MOUNT_DERIVE_CONFINE	0x00000010
-#define ESDFS_MOUNT_ACCESS_DISABLE	0x00000020
 
 #define clear_opt(sbi, option)	(sbi->options &= ~ESDFS_MOUNT_##option)
 #define set_opt(sbi, option)	(sbi->options |= ESDFS_MOUNT_##option)
@@ -112,9 +107,8 @@ extern int esdfs_init_dentry_cache(void);
 extern void esdfs_destroy_dentry_cache(void);
 extern int new_dentry_private_data(struct dentry *dentry);
 extern void free_dentry_private_data(struct dentry *dentry);
-extern int init_lower_nd(struct nameidata *nd, unsigned int flags);
 extern struct dentry *esdfs_lookup(struct inode *dir, struct dentry *dentry,
-				   unsigned int flags);
+				   struct nameidata *nd);
 extern struct inode *esdfs_iget(struct super_block *sb,
 				struct inode *lower_inode);
 extern int esdfs_interpose(struct dentry *dentry, struct super_block *sb,
@@ -163,8 +157,6 @@ struct esdfs_dentry_info {
 /* esdfs super-block data in memory */
 struct esdfs_sb_info {
 	struct super_block *lower_sb;
-	struct super_block *s_sb;
-	struct list_head s_list;
 	u32 lower_secid;
 	struct esdfs_perms lower_perms;
 	struct esdfs_perms upper_perms;	/* root in derived mode */
@@ -174,10 +166,6 @@ struct esdfs_sb_info {
 
 extern struct esdfs_perms esdfs_perms_table[ESDFS_PERMS_TABLE_SIZE];
 extern unsigned esdfs_package_list_version;
-
-void esdfs_drop_shared_icache(struct super_block *, struct inode *);
-void esdfs_drop_sb_icache(struct super_block *, unsigned long);
-void esdfs_add_super(struct esdfs_sb_info *, struct super_block *);
 
 #define ESDFS_INODE_IS_STALE(i) ((i)->version != esdfs_package_list_version)
 #define ESDFS_INODE_CAN_LINK(i) (test_opt(ESDFS_SB((i)->i_sb), \

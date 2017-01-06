@@ -14,20 +14,20 @@
 #include "util/parse-events.h"
 #include "util/cache.h"
 
-int cmd_list(int argc, const char **argv, const char *prefix __maybe_unused)
+int cmd_list(int argc, const char **argv, const char *prefix __used)
 {
 	setup_pager();
 
 	if (argc == 1)
-		print_events(NULL, false);
+		print_events(NULL);
 	else {
 		int i;
 
 		for (i = 1; i < argc; ++i) {
-			if (i > 2)
+			if (i > 1)
 				putchar('\n');
 			if (strncmp(argv[i], "tracepoint", 10) == 0)
-				print_tracepoint_events(NULL, NULL, false);
+				print_tracepoint_events(NULL, NULL);
 			else if (strcmp(argv[i], "hw") == 0 ||
 				 strcmp(argv[i], "hardware") == 0)
 				print_events_type(PERF_TYPE_HARDWARE);
@@ -36,15 +36,13 @@ int cmd_list(int argc, const char **argv, const char *prefix __maybe_unused)
 				print_events_type(PERF_TYPE_SOFTWARE);
 			else if (strcmp(argv[i], "cache") == 0 ||
 				 strcmp(argv[i], "hwcache") == 0)
-				print_hwcache_events(NULL, false);
-			else if (strcmp(argv[i], "--raw-dump") == 0)
-				print_events(NULL, true);
+				print_hwcache_events(NULL);
 			else {
 				char *sep = strchr(argv[i], ':'), *s;
 				int sep_idx;
 
 				if (sep == NULL) {
-					print_events(argv[i], false);
+					print_events(argv[i]);
 					continue;
 				}
 				sep_idx = sep - argv[i];
@@ -53,7 +51,7 @@ int cmd_list(int argc, const char **argv, const char *prefix __maybe_unused)
 					return -1;
 
 				s[sep_idx] = '\0';
-				print_tracepoint_events(s, s + sep_idx + 1, false);
+				print_tracepoint_events(s, s + sep_idx + 1);
 				free(s);
 			}
 		}

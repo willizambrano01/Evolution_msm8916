@@ -62,6 +62,7 @@
 #include <asm/cputable.h>
 #include <asm/sections.h>
 #include <asm/iommu.h>
+#include <asm/abs_addr.h>
 #include <asm/vdso.h>
 
 #include "mmu_decl.h"
@@ -129,7 +130,8 @@ void pgtable_cache_add(unsigned shift, void (*ctor)(void *))
 	align = max_t(unsigned long, align, minalign);
 	name = kasprintf(GFP_KERNEL, "pgtable-2^%d", shift);
 	new = kmem_cache_create(name, table_size, align, 0, ctor);
-	pgtable_cache[shift - 1] = new;
+	PGT_CACHE(shift) = new;
+
 	pr_debug("Allocated pgtable cache for order %d\n", shift);
 }
 
@@ -215,8 +217,7 @@ static void __meminit vmemmap_create_mapping(unsigned long start,
 					     unsigned long phys)
 {
 	int  mapped = htab_bolt_mapping(start, start + page_size, phys,
-					pgprot_val(PAGE_KERNEL),
-					mmu_vmemmap_psize,
+					PAGE_KERNEL, mmu_vmemmap_psize,
 					mmu_kernel_ssize);
 	BUG_ON(mapped < 0);
 }
@@ -263,14 +264,19 @@ static __meminit void vmemmap_list_populate(unsigned long phys,
 	vmemmap_list = vmem_back;
 }
 
-int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node)
+int __meminit vmemmap_populate(struct page *start_page,
+			       unsigned long nr_pages, int node)
 {
+	unsigned long start = (unsigned long)start_page;
+	unsigned long end = (unsigned long)(start_page + nr_pages);
 	unsigned long page_size = 1 << mmu_psize_defs[mmu_vmemmap_psize].shift;
 
 	/* Align to the page size of the linear mapping. */
 	start = _ALIGN_DOWN(start, page_size);
 
-	pr_debug("vmemmap_populate %lx..%lx, node %d\n", start, end, node);
+	pr_debug("vmemmap_populate page %p, %ld pages, node %d\n",
+		 start_page, nr_pages, node);
+	pr_debug(" -> map %lx..%lx\n", start, end);
 
 	for (; start < end; start += page_size) {
 		void *p;
@@ -292,10 +298,5 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node)
 
 	return 0;
 }
-
-void vmemmap_free(unsigned long start, unsigned long end)
-{
-}
-
 #endif /* CONFIG_SPARSEMEM_VMEMMAP */
 

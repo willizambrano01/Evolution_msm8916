@@ -38,7 +38,7 @@ void __init sanity_check_meminfo(void)
  * paging_init() sets up the page tables, initialises the zone memory
  * maps, and sets up the zero page, bad page and bad page tables.
  */
-void __init paging_init(const struct machine_desc *mdesc)
+void __init paging_init(struct machine_desc *mdesc)
 {
 	early_trap_init((void *)CONFIG_VECTORS_BASE);
 	bootmem_init();
@@ -56,12 +56,6 @@ void flush_dcache_page(struct page *page)
 	__cpuc_flush_dcache_area(page_address(page), PAGE_SIZE);
 }
 EXPORT_SYMBOL(flush_dcache_page);
-
-void flush_kernel_dcache_page(struct page *page)
-{
-	__cpuc_flush_dcache_area(page_address(page), PAGE_SIZE);
-}
-EXPORT_SYMBOL(flush_kernel_dcache_page);
 
 void copy_to_user_page(struct vm_area_struct *vma, struct page *page,
 		       unsigned long uaddr, void *dst, const void *src,
@@ -87,16 +81,16 @@ void __iomem *__arm_ioremap_pfn_caller(unsigned long pfn, unsigned long offset,
 	return __arm_ioremap_pfn(pfn, offset, size, mtype);
 }
 
-void __iomem *__arm_ioremap(phys_addr_t phys_addr, size_t size,
+void __iomem *__arm_ioremap(unsigned long phys_addr, size_t size,
 			    unsigned int mtype)
 {
 	return (void __iomem *)phys_addr;
 }
 EXPORT_SYMBOL(__arm_ioremap);
 
-void __iomem * (*arch_ioremap_caller)(phys_addr_t, size_t, unsigned int, void *);
+void __iomem * (*arch_ioremap_caller)(unsigned long, size_t, unsigned int, void *);
 
-void __iomem *__arm_ioremap_caller(phys_addr_t phys_addr, size_t size,
+void __iomem *__arm_ioremap_caller(unsigned long phys_addr, size_t size,
 				   unsigned int mtype, void *caller)
 {
 	return __arm_ioremap(phys_addr, size, mtype);

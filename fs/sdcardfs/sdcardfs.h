@@ -75,7 +75,6 @@
 		(x)->i_mode = ((x)->i_mode & S_IFMT) | get_mode(SDCARDFS_I(x));\
 	} while (0)
 
-
 /* OVERRIDE_CRED() and REVERT_CRED()
  * 	OVERRID_CRED()
  * 		backup original task->cred
@@ -149,7 +148,7 @@ extern void sdcardfs_destroy_dentry_cache(void);
 extern int new_dentry_private_data(struct dentry *dentry);
 extern void free_dentry_private_data(struct dentry *dentry);
 extern struct dentry *sdcardfs_lookup(struct inode *dir, struct dentry *dentry,
-				unsigned int flags);
+				    struct nameidata *nd);
 extern struct inode *sdcardfs_iget(struct super_block *sb,
 				 struct inode *lower_inode, userid_t id);
 extern int sdcardfs_interpose(struct dentry *dentry, struct super_block *sb,
@@ -468,6 +467,7 @@ out_unlock:
 	/* parent dentry locked by lookup_create */
 	mutex_unlock(&parent.dentry->d_inode->i_mutex);
 	path_put(&parent);
+
 	return err;
 }
 

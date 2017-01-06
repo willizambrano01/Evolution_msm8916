@@ -18,7 +18,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <linux/rcupdate.h>
 
 /**
  * enum environment_cap - Environment parsed from country IE
@@ -36,7 +35,6 @@ enum environment_cap {
 /**
  * struct regulatory_request - used to keep track of regulatory requests
  *
- * @rcu_head: RCU head struct used to free the request
  * @wiphy_idx: this is set if this request's initiator is
  * 	%REGDOM_SET_BY_COUNTRY_IE or %REGDOM_SET_BY_DRIVER. This
  * 	can be used by the wireless core to deal with conflicts
@@ -54,10 +52,6 @@ enum environment_cap {
  *	DFS master operation on a known DFS region (NL80211_DFS_*),
  *	dfs_region represents that region. Drivers can use this and the
  *	@alpha2 to adjust their device's DFS parameters as required.
- * @user_reg_hint_type: if the @initiator was of type
- *	%NL80211_REGDOM_SET_BY_USER, this classifies the type
- *	of hint passed. This could be any of the %NL80211_USER_REG_HINT_*
- *	types.
  * @intersect: indicates whether the wireless core should intersect
  * 	the requested regulatory domain with the presently set regulatory
  * 	domain.
@@ -74,10 +68,8 @@ enum environment_cap {
  * @list: used to insert into the reg_requests_list linked list
  */
 struct regulatory_request {
-	struct rcu_head rcu_head;
 	int wiphy_idx;
 	enum nl80211_reg_initiator initiator;
-	enum nl80211_user_reg_hint_type user_reg_hint_type;
 	char alpha2[2];
 	u8 dfs_region;
 	bool intersect;
@@ -104,7 +96,6 @@ struct ieee80211_reg_rule {
 };
 
 struct ieee80211_regdomain {
-	struct rcu_head rcu_head;
 	u32 n_reg_rules;
 	char alpha2[2];
 	u8 dfs_region;

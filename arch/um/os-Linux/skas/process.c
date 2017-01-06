@@ -11,17 +11,17 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <asm/unistd.h>
-#include <as-layout.h>
-#include <init.h>
-#include <kern_util.h>
-#include <mem.h>
-#include <os.h>
-#include <proc_mm.h>
-#include <ptrace_user.h>
-#include <registers.h>
-#include <skas.h>
-#include <skas_ptrace.h>
-#include <sysdep/stub.h>
+#include "as-layout.h"
+#include "init.h"
+#include "kern_util.h"
+#include "mem.h"
+#include "os.h"
+#include "proc_mm.h"
+#include "ptrace_user.h"
+#include "registers.h"
+#include "skas.h"
+#include "skas_ptrace.h"
+#include "sysdep/stub.h"
 
 int is_skas_winch(int pid, int fd, void *data)
 {
@@ -346,10 +346,6 @@ void userspace(struct uml_pt_regs *regs)
 	int err, status, op, pid = userspace_pid[0];
 	/* To prevent races if using_sysemu changes under us.*/
 	int local_using_sysemu;
-	siginfo_t si;
-
-	/* Handle any immediate reschedules or signals */
-	interrupt_end();
 
 	if (getitimer(ITIMER_VIRTUAL, &timer))
 		printk(UM_KERN_ERR "Failed to get itimer, errno = %d\n", errno);
@@ -408,17 +404,13 @@ void userspace(struct uml_pt_regs *regs)
 
 		if (WIFSTOPPED(status)) {
 			int sig = WSTOPSIG(status);
-
-			ptrace(PTRACE_GETSIGINFO, pid, 0, &si);
-
 			switch (sig) {
 			case SIGSEGV:
 				if (PTRACE_FULL_FAULTINFO ||
 				    !ptrace_faultinfo) {
 					get_skas_faultinfo(pid,
 							   &regs->faultinfo);
-					(*sig_info[SIGSEGV])(SIGSEGV, &si,
-							     regs);
+					(*sig_info[SIGSEGV])(SIGSEGV, regs);
 				}
 				else handle_segv(pid, regs);
 				break;
@@ -426,14 +418,14 @@ void userspace(struct uml_pt_regs *regs)
 			        handle_trap(pid, regs, local_using_sysemu);
 				break;
 			case SIGTRAP:
-				relay_signal(SIGTRAP, &si, regs);
+				relay_signal(SIGTRAP, regs);
 				break;
 			case SIGVTALRM:
 				now = os_nsecs();
 				if (now < nsecs)
 					break;
 				block_signals();
-				(*sig_info[sig])(sig, &si, regs);
+				(*sig_info[sig])(sig, regs);
 				unblock_signals();
 				nsecs = timer.it_value.tv_sec *
 					UM_NSEC_PER_SEC +
@@ -447,7 +439,7 @@ void userspace(struct uml_pt_regs *regs)
 			case SIGFPE:
 			case SIGWINCH:
 				block_signals();
-				(*sig_info[sig])(sig, &si, regs);
+				(*sig_info[sig])(sig, regs);
 				unblock_signals();
 				break;
 			default:

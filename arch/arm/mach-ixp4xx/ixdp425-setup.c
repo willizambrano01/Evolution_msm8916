@@ -60,6 +60,8 @@ static struct platform_device ixdp425_flash = {
 #if defined(CONFIG_MTD_NAND_PLATFORM) || \
     defined(CONFIG_MTD_NAND_PLATFORM_MODULE)
 
+const char *part_probes[] = { "cmdlinepart", NULL };
+
 static struct mtd_partition ixdp425_partitions[] = {
 	{
 		.name	= "ixp400 NAND FS 0",
@@ -98,6 +100,8 @@ static struct platform_nand_data ixdp425_flash_nand_data = {
 	.chip = {
 		.nr_chips		= 1,
 		.chip_delay		= 30,
+		.options		= NAND_NO_AUTOINCR,
+		.part_probe_types 	= part_probes,
 		.partitions	 	= ixdp425_partitions,
 		.nr_partitions	 	= ARRAY_SIZE(ixdp425_partitions),
 	},
@@ -252,7 +256,7 @@ MACHINE_START(IXDP425, "Intel IXDP425 Development Platform")
 	.map_io		= ixp4xx_map_io,
 	.init_early	= ixp4xx_init_early,
 	.init_irq	= ixp4xx_init_irq,
-	.init_time	= ixp4xx_timer_init,
+	.timer		= &ixp4xx_timer,
 	.atag_offset	= 0x100,
 	.init_machine	= ixdp425_init,
 #if defined(CONFIG_PCI)
@@ -268,7 +272,7 @@ MACHINE_START(IXDP465, "Intel IXDP465 Development Platform")
 	.map_io		= ixp4xx_map_io,
 	.init_early	= ixp4xx_init_early,
 	.init_irq	= ixp4xx_init_irq,
-	.init_time	= ixp4xx_timer_init,
+	.timer		= &ixp4xx_timer,
 	.atag_offset	= 0x100,
 	.init_machine	= ixdp425_init,
 #if defined(CONFIG_PCI)
@@ -283,7 +287,7 @@ MACHINE_START(IXCDP1100, "Intel IXCDP1100 Development Platform")
 	.map_io		= ixp4xx_map_io,
 	.init_early	= ixp4xx_init_early,
 	.init_irq	= ixp4xx_init_irq,
-	.init_time	= ixp4xx_timer_init,
+	.timer		= &ixp4xx_timer,
 	.atag_offset	= 0x100,
 	.init_machine	= ixdp425_init,
 #if defined(CONFIG_PCI)
@@ -298,7 +302,7 @@ MACHINE_START(KIXRP435, "Intel KIXRP435 Reference Platform")
 	.map_io		= ixp4xx_map_io,
 	.init_early	= ixp4xx_init_early,
 	.init_irq	= ixp4xx_init_irq,
-	.init_time	= ixp4xx_timer_init,
+	.timer		= &ixp4xx_timer,
 	.atag_offset	= 0x100,
 	.init_machine	= ixdp425_init,
 #if defined(CONFIG_PCI)

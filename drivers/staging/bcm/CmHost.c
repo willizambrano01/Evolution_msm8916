@@ -4,6 +4,7 @@
  * Management.
  ************************************************************/
 
+/* #define CONN_MSG */
 #include "headers.h"
 
 enum E_CLASSIFIER_ACTION {
@@ -13,7 +14,7 @@ enum E_CLASSIFIER_ACTION {
 	eDeleteClassifier
 };
 
-static ULONG GetNextTargetBufferLocation(struct bcm_mini_adapter *Adapter, B_UINT16 tid);
+static ULONG GetNextTargetBufferLocation(PMINI_ADAPTER Adapter, B_UINT16 tid);
 
 /************************************************************
  * Function - SearchSfid
@@ -27,7 +28,7 @@ static ULONG GetNextTargetBufferLocation(struct bcm_mini_adapter *Adapter, B_UIN
  * Returns - Queue index for this SFID(If matched)
  *  Else Invalid Queue Index(If Not matched)
  ************************************************************/
-int SearchSfid(struct bcm_mini_adapter *Adapter, UINT uiSfid)
+int SearchSfid(PMINI_ADAPTER Adapter, UINT uiSfid)
 {
 	int i;
 
@@ -48,7 +49,7 @@ int SearchSfid(struct bcm_mini_adapter *Adapter, UINT uiSfid)
  * Returns - Queue index for the free SFID
  *  Else returns Invalid Index.
  ****************************************************************/
-static int SearchFreeSfid(struct bcm_mini_adapter *Adapter)
+static int SearchFreeSfid(PMINI_ADAPTER Adapter)
 {
 	int i;
 
@@ -62,12 +63,12 @@ static int SearchFreeSfid(struct bcm_mini_adapter *Adapter)
 /*
  * Function: SearchClsid
  * Description:	This routinue would search Classifier  having specified ClassifierID as input parameter
- * Input parameters: struct bcm_mini_adapter *Adapter - Adapter Context
+ * Input parameters: PMINI_ADAPTER Adapter - Adapter Context
  *  unsigned int uiSfid   - The SF in which the classifier is to searched
  *  B_UINT16  uiClassifierID - The classifier ID to be searched
  * Return: int :Classifier table index of matching entry
  */
-static int SearchClsid(struct bcm_mini_adapter *Adapter, ULONG ulSFID, B_UINT16  uiClassifierID)
+static int SearchClsid(PMINI_ADAPTER Adapter, ULONG ulSFID, B_UINT16  uiClassifierID)
 {
 	int i;
 
@@ -86,7 +87,7 @@ static int SearchClsid(struct bcm_mini_adapter *Adapter, ULONG ulSFID, B_UINT16 
  * This routinue would search Free available Classifier entry in classifier table.
  * @return free Classifier Entry index in classifier table for specified SF
  */
-static int SearchFreeClsid(struct bcm_mini_adapter *Adapter /**Adapter Context*/)
+static int SearchFreeClsid(PMINI_ADAPTER Adapter /**Adapter Context*/)
 {
 	int i;
 
@@ -98,7 +99,7 @@ static int SearchFreeClsid(struct bcm_mini_adapter *Adapter /**Adapter Context*/
 	return MAX_CLASSIFIERS+1;
 }
 
-static VOID deleteSFBySfid(struct bcm_mini_adapter *Adapter, UINT uiSearchRuleIndex)
+static VOID deleteSFBySfid(PMINI_ADAPTER Adapter, UINT uiSearchRuleIndex)
 {
 	/* deleting all the packet held in the SF */
 	flush_queue(Adapter, uiSearchRuleIndex);
@@ -107,19 +108,19 @@ static VOID deleteSFBySfid(struct bcm_mini_adapter *Adapter, UINT uiSearchRuleIn
 	DeleteAllClassifiersForSF(Adapter, uiSearchRuleIndex);
 
 	/* Resetting only MIBS related entries in the SF */
-	memset((PVOID)&Adapter->PackInfo[uiSearchRuleIndex], 0, sizeof(struct bcm_mibs_table));
+	memset((PVOID)&Adapter->PackInfo[uiSearchRuleIndex], 0, sizeof(S_MIBS_SERVICEFLOW_TABLE));
 }
 
 static inline VOID
-CopyIpAddrToClassifier(struct bcm_classifier_rule *pstClassifierEntry,
+CopyIpAddrToClassifier(S_CLASSIFIER_RULE *pstClassifierEntry,
 		B_UINT8 u8IpAddressLen, B_UINT8 *pu8IpAddressMaskSrc,
-		BOOLEAN bIpVersion6, enum bcm_ipaddr_context eIpAddrContext)
+		BOOLEAN bIpVersion6, E_IPADDR_CONTEXT eIpAddrContext)
 {
 	int i = 0;
 	UINT nSizeOfIPAddressInBytes = IP_LENGTH_OF_ADDRESS;
 	UCHAR *ptrClassifierIpAddress = NULL;
 	UCHAR *ptrClassifierIpMask = NULL;
-	struct bcm_mini_adapter *Adapter = GET_BCM_ADAPTER(gblpnetdev);
+	PMINI_ADAPTER Adapter = GET_BCM_ADAPTER(gblpnetdev);
 
 	if (bIpVersion6)
 		nSizeOfIPAddressInBytes = IPV6_ADDRESS_SIZEINBYTES;
@@ -213,7 +214,7 @@ CopyIpAddrToClassifier(struct bcm_classifier_rule *pstClassifierEntry,
 	}
 }
 
-void ClearTargetDSXBuffer(struct bcm_mini_adapter *Adapter, B_UINT16 TID, BOOLEAN bFreeAll)
+void ClearTargetDSXBuffer(PMINI_ADAPTER Adapter, B_UINT16 TID, BOOLEAN bFreeAll)
 {
 	int i;
 
@@ -235,9 +236,9 @@ void ClearTargetDSXBuffer(struct bcm_mini_adapter *Adapter, B_UINT16 TID, BOOLEA
  * @ingroup ctrl_pkt_functions
  * copy classifier rule into the specified SF index
  */
-static inline VOID CopyClassifierRuleToSF(struct bcm_mini_adapter *Adapter, struct bcm_convergence_types *psfCSType, UINT uiSearchRuleIndex, UINT nClassifierIndex)
+static inline VOID CopyClassifierRuleToSF(PMINI_ADAPTER Adapter, stConvergenceSLTypes  *psfCSType, UINT uiSearchRuleIndex, UINT nClassifierIndex)
 {
-	struct bcm_classifier_rule *pstClassifierEntry = NULL;
+	S_CLASSIFIER_RULE *pstClassifierEntry = NULL;
 	/* VOID *pvPhsContext = NULL; */
 	int i;
 	/* UCHAR ucProtocolLength=0; */
@@ -364,9 +365,9 @@ static inline VOID CopyClassifierRuleToSF(struct bcm_mini_adapter *Adapter, stru
 /*
  * @ingroup ctrl_pkt_functions
  */
-static inline VOID DeleteClassifierRuleFromSF(struct bcm_mini_adapter *Adapter, UINT uiSearchRuleIndex, UINT nClassifierIndex)
+static inline VOID DeleteClassifierRuleFromSF(PMINI_ADAPTER Adapter, UINT uiSearchRuleIndex, UINT nClassifierIndex)
 {
-	struct bcm_classifier_rule *pstClassifierEntry = NULL;
+	S_CLASSIFIER_RULE *pstClassifierEntry = NULL;
 	B_UINT16 u16PacketClassificationRuleIndex;
 	USHORT usVCID;
 	/* VOID *pvPhsContext = NULL; */
@@ -385,7 +386,7 @@ static inline VOID DeleteClassifierRuleFromSF(struct bcm_mini_adapter *Adapter, 
 	if (pstClassifierEntry) {
 		pstClassifierEntry->bUsed = FALSE;
 		pstClassifierEntry->uiClassifierRuleIndex = 0;
-		memset(pstClassifierEntry, 0, sizeof(struct bcm_classifier_rule));
+		memset(pstClassifierEntry, 0, sizeof(S_CLASSIFIER_RULE));
 
 		/* Delete the PHS Rule for this classifier */
 		PhsDeleteClassifierRule(&Adapter->stBCMPhsContext, usVCID, u16PacketClassificationRuleIndex);
@@ -395,9 +396,9 @@ static inline VOID DeleteClassifierRuleFromSF(struct bcm_mini_adapter *Adapter, 
 /*
  * @ingroup ctrl_pkt_functions
  */
-VOID DeleteAllClassifiersForSF(struct bcm_mini_adapter *Adapter, UINT uiSearchRuleIndex)
+VOID DeleteAllClassifiersForSF(PMINI_ADAPTER Adapter, UINT uiSearchRuleIndex)
 {
-	struct bcm_classifier_rule *pstClassifierEntry = NULL;
+	S_CLASSIFIER_RULE *pstClassifierEntry = NULL;
 	int i;
 	/* B_UINT16  u16PacketClassificationRuleIndex; */
 	USHORT ulVCID;
@@ -427,11 +428,11 @@ VOID DeleteAllClassifiersForSF(struct bcm_mini_adapter *Adapter, UINT uiSearchRu
  * related data into the Adapter structure.
  * @ingroup ctrl_pkt_functions
  */
-static VOID CopyToAdapter(register struct bcm_mini_adapter *Adapter, /* <Pointer to the Adapter structure */
-			register struct bcm_connect_mgr_params *psfLocalSet, /* Pointer to the connection manager parameters structure */
+static VOID CopyToAdapter(register PMINI_ADAPTER Adapter, /* <Pointer to the Adapter structure */
+			register pstServiceFlowParamSI psfLocalSet, /* <Pointer to the ServiceFlowParamSI structure */
 			register UINT uiSearchRuleIndex, /* <Index of Queue, to which this data belongs */
 			register UCHAR ucDsxType,
-			struct bcm_add_indication_alt *pstAddIndication) {
+			stLocalSFAddIndicationAlt *pstAddIndication) {
 
 	/* UCHAR ucProtocolLength = 0; */
 	ULONG ulSFID;
@@ -439,8 +440,8 @@ static VOID CopyToAdapter(register struct bcm_mini_adapter *Adapter, /* <Pointer
 	enum E_CLASSIFIER_ACTION eClassifierAction = eInvalidClassifierAction;
 	B_UINT16 u16PacketClassificationRuleIndex = 0;
 	int i;
-	struct bcm_convergence_types *psfCSType = NULL;
-	struct bcm_phs_rule sPhsRule;
+	stConvergenceSLTypes *psfCSType = NULL;
+	S_PHS_RULE sPhsRule;
 	USHORT uVCID = Adapter->PackInfo[uiSearchRuleIndex].usVCID_Value;
 	UINT UGIValue = 0;
 
@@ -703,7 +704,7 @@ static VOID CopyToAdapter(register struct bcm_mini_adapter *Adapter, /* <Pointer
 							/* Update PHS Rule For the Classifier */
 							if (sPhsRule.u8PHSI) {
 								Adapter->astClassifierTable[uiClassifierIndex].u32PHSRuleID = sPhsRule.u8PHSI;
-								memcpy(&Adapter->astClassifierTable[uiClassifierIndex].sPhsRule, &sPhsRule, sizeof(struct bcm_phs_rule));
+								memcpy(&Adapter->astClassifierTable[uiClassifierIndex].sPhsRule, &sPhsRule, sizeof(S_PHS_RULE));
 							}
 						}
 					}
@@ -833,11 +834,11 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 {
 	int uiLoopIndex;
 	int nIndex;
-	struct bcm_add_indication_alt *pstAddIndication;
+	stLocalSFAddIndicationAlt *pstAddIndication;
 	UINT nCurClassifierCnt;
-	struct bcm_mini_adapter *Adapter = GET_BCM_ADAPTER(gblpnetdev);
+	PMINI_ADAPTER Adapter = GET_BCM_ADAPTER(gblpnetdev);
 
-	pstAddIndication = (struct bcm_add_indication_alt *)pvBuffer;
+	pstAddIndication = (stLocalSFAddIndicationAlt *)pvBuffer;
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "======>");
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8Type: 0x%X", pstAddIndication->u8Type);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8Direction: 0x%X", pstAddIndication->u8Direction);
@@ -915,7 +916,7 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 	if (!pstAddIndication->sfAuthorizedSet.bValid)
 		pstAddIndication->sfAuthorizedSet.bValid = 1;
 	for (nIndex = 0; nIndex < nCurClassifierCnt; nIndex++) {
-		struct bcm_convergence_types *psfCSType = NULL;
+		stConvergenceSLTypes *psfCSType = NULL;
 		psfCSType =  &pstAddIndication->sfAuthorizedSet.cConvergenceSLTypes[nIndex];
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "psfCSType = %p", psfCSType);
@@ -966,18 +967,24 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetDestMacAddressLength: 0x%02X ",
 				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddressLength);
 
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8EthernetDestMacAddress[6]: %pM",
-				psfCSType->cCPacketClassificationRule.
-						u8EthernetDestMacAddress);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetDestMacAddress[6]: 0x %02X %02X %02X %02X %02X %02X",
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[0],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[1],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[2],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[3],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[4],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[5]);
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetSourceMACAddressLength: 0x%02X ",
 				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddressLength);
 
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8EthernetSourceMACAddress[6]: "
-				"%pM", psfCSType->cCPacketClassificationRule.
-						u8EthernetSourceMACAddress);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetSourceMACAddress[6]: 0x %02X %02X %02X %02X %02X %02X",
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[0],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[1],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[2],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[3],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[4],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[5]);
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthertypeLength: 0x%02X ",
 				psfCSType->cCPacketClassificationRule.u8EthertypeLength);
@@ -999,10 +1006,13 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 #ifdef VERSION_D5
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8IPv6FlowLableLength: 0x%X ",
 				psfCSType->cCPacketClassificationRule.u8IPv6FlowLableLength);
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8IPv6FlowLable[6]: 0x%*ph ",
-				6, psfCSType->cCPacketClassificationRule.
-					      u8IPv6FlowLable);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8IPv6FlowLable[6]: 0x %02X %02X %02X %02X %02X %02X ",
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[0],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[1],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[2],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[3],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[4],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[5]);
 #endif
 	}
 
@@ -1012,9 +1022,13 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u16CID: 0x%X", pstAddIndication->sfAdmittedSet.u16CID);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ServiceClassNameLength: 0x%X",
 			pstAddIndication->sfAdmittedSet.u8ServiceClassNameLength);
-	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL,
-			"u8ServiceClassName: 0x%*ph",
-			6, pstAddIndication->sfAdmittedSet.u8ServiceClassName);
+	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ServiceClassName: 0x %02X %02X %02X %02X %02X %02X",
+			pstAddIndication->sfAdmittedSet.u8ServiceClassName[0],
+			pstAddIndication->sfAdmittedSet.u8ServiceClassName[1],
+			pstAddIndication->sfAdmittedSet.u8ServiceClassName[2],
+			pstAddIndication->sfAdmittedSet.u8ServiceClassName[3],
+			pstAddIndication->sfAdmittedSet.u8ServiceClassName[4],
+			pstAddIndication->sfAdmittedSet.u8ServiceClassName[5]);
 
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8MBSService: 0x%02X", pstAddIndication->sfAdmittedSet.u8MBSService);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8QosParamSet: 0x%02X", pstAddIndication->sfAdmittedSet.u8QosParamSet);
@@ -1059,7 +1073,7 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 		nCurClassifierCnt = MAX_CLASSIFIERS_IN_SF;
 
 	for (nIndex = 0; nIndex < nCurClassifierCnt; nIndex++) {
-		struct bcm_convergence_types *psfCSType = NULL;
+		stConvergenceSLTypes *psfCSType = NULL;
 
 		psfCSType =  &pstAddIndication->sfAdmittedSet.cConvergenceSLTypes[nIndex];
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, " CCPacketClassificationRuleSI====>");
@@ -1067,10 +1081,10 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 				psfCSType->cCPacketClassificationRule.u8ClassifierRulePriority);
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8IPTypeOfServiceLength: 0x%02X",
 				psfCSType->cCPacketClassificationRule.u8IPTypeOfServiceLength);
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8IPTypeOfService[3]: 0x%*ph",
-				3, psfCSType->cCPacketClassificationRule.
-					      u8IPTypeOfService);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8IPTypeOfService[3]: 0x%02X %02X %02X",
+				psfCSType->cCPacketClassificationRule.u8IPTypeOfService[0],
+				psfCSType->cCPacketClassificationRule.u8IPTypeOfService[1],
+				psfCSType->cCPacketClassificationRule.u8IPTypeOfService[2]);
 		for (uiLoopIndex = 0; uiLoopIndex < 1; uiLoopIndex++)
 			BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8Protocol: 0x%02X ", psfCSType->cCPacketClassificationRule.u8Protocol);
 
@@ -1091,42 +1105,48 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ProtocolSourcePortRangeLength: 0x%02X ",
 				psfCSType->cCPacketClassificationRule.u8ProtocolSourcePortRangeLength);
 
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8ProtocolSourcePortRange[4]: "
-				"0x%*ph ", 4, psfCSType->
-						cCPacketClassificationRule.
-						u8ProtocolSourcePortRange);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ProtocolSourcePortRange[4]: 0x %02X %02X %02X %02X ",
+				psfCSType->cCPacketClassificationRule.u8ProtocolSourcePortRange[0],
+				psfCSType->cCPacketClassificationRule.u8ProtocolSourcePortRange[1],
+				psfCSType->cCPacketClassificationRule.u8ProtocolSourcePortRange[2],
+				psfCSType->cCPacketClassificationRule.u8ProtocolSourcePortRange[3]);
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ProtocolDestPortRangeLength: 0x%02X ",
 				psfCSType->cCPacketClassificationRule.u8ProtocolDestPortRangeLength);
 
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8ProtocolDestPortRange[4]: "
-				"0x%*ph ", 4, psfCSType->
-						cCPacketClassificationRule.
-						u8ProtocolDestPortRange);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ProtocolDestPortRange[4]: 0x %02X %02X %02X %02X ",
+				psfCSType->cCPacketClassificationRule.u8ProtocolDestPortRange[0],
+				psfCSType->cCPacketClassificationRule.u8ProtocolDestPortRange[1],
+				psfCSType->cCPacketClassificationRule.u8ProtocolDestPortRange[2],
+				psfCSType->cCPacketClassificationRule.u8ProtocolDestPortRange[3]);
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetDestMacAddressLength: 0x%02X ",
 				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddressLength);
 
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8EthernetDestMacAddress[6]: %pM",
-				psfCSType->cCPacketClassificationRule.
-						u8EthernetDestMacAddress);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetDestMacAddress[6]: 0x %02X %02X %02X %02X %02X %02X",
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[0],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[1],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[2],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[3],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[4],
+				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddress[5]);
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetSourceMACAddressLength: 0x%02X ",
 				psfCSType->cCPacketClassificationRule.u8EthernetDestMacAddressLength);
 
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8EthernetSourceMACAddress[6]: "
-				"%pM", psfCSType->cCPacketClassificationRule.
-						u8EthernetSourceMACAddress);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthernetSourceMACAddress[6]: 0x %02X %02X %02X %02X %02X %02X",
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[0],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[1],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[2],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[3],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[4],
+				psfCSType->cCPacketClassificationRule.u8EthernetSourceMACAddress[5]);
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8EthertypeLength: 0x%02X ", psfCSType->cCPacketClassificationRule.u8EthertypeLength);
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8Ethertype[3]: 0x%*ph",
-				3, psfCSType->cCPacketClassificationRule.
-					      u8Ethertype);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8Ethertype[3]: 0x%02X %02X %02X",
+				psfCSType->cCPacketClassificationRule.u8Ethertype[0],
+				psfCSType->cCPacketClassificationRule.u8Ethertype[1],
+				psfCSType->cCPacketClassificationRule.u8Ethertype[2]);
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u16UserPriority: 0x%X ", psfCSType->cCPacketClassificationRule.u16UserPriority);
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u16VLANID: 0x%X ", psfCSType->cCPacketClassificationRule.u16VLANID);
@@ -1140,10 +1160,13 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 #ifdef VERSION_D5
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8IPv6FlowLableLength: 0x%X ",
 				psfCSType->cCPacketClassificationRule.u8IPv6FlowLableLength);
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL,
-				DBG_LVL_ALL, "u8IPv6FlowLable[6]: 0x%*ph ",
-				6, psfCSType->cCPacketClassificationRule.
-					      u8IPv6FlowLable);
+		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8IPv6FlowLable[6]: 0x %02X %02X %02X %02X %02X %02X ",
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[0],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[1],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[2],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[3],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[4],
+				psfCSType->cCPacketClassificationRule.u8IPv6FlowLable[5]);
 #endif
 	}
 
@@ -1152,9 +1175,13 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u32SFID: 0x%X", pstAddIndication->sfActiveSet.u32SFID);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u16CID: 0x%X", pstAddIndication->sfActiveSet.u16CID);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ServiceClassNameLength: 0x%X", pstAddIndication->sfActiveSet.u8ServiceClassNameLength);
-	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL,
-			"u8ServiceClassName: 0x%*ph",
-			6, pstAddIndication->sfActiveSet.u8ServiceClassName);
+	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8ServiceClassName: 0x %02X %02X %02X %02X %02X %02X",
+			pstAddIndication->sfActiveSet.u8ServiceClassName[0],
+			pstAddIndication->sfActiveSet.u8ServiceClassName[1],
+			pstAddIndication->sfActiveSet.u8ServiceClassName[2],
+			pstAddIndication->sfActiveSet.u8ServiceClassName[3],
+			pstAddIndication->sfActiveSet.u8ServiceClassName[4],
+			pstAddIndication->sfActiveSet.u8ServiceClassName[5]);
 
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8MBSService: 0x%02X", pstAddIndication->sfActiveSet.u8MBSService);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, "u8QosParamSet: 0x%02X", pstAddIndication->sfActiveSet.u8QosParamSet);
@@ -1198,7 +1225,7 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 		nCurClassifierCnt = MAX_CLASSIFIERS_IN_SF;
 
 	for (nIndex = 0; nIndex < nCurClassifierCnt; nIndex++)	{
-		struct bcm_convergence_types *psfCSType = NULL;
+		stConvergenceSLTypes *psfCSType = NULL;
 
 		psfCSType =  &pstAddIndication->sfActiveSet.cConvergenceSLTypes[nIndex];
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, " CCPacketClassificationRuleSI====>");
@@ -1298,9 +1325,9 @@ static VOID DumpCmControlPacket(PVOID pvBuffer)
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, DUMP_CONTROL, DBG_LVL_ALL, " bValid: 0x%X", pstAddIndication->sfActiveSet.bValid);
 }
 
-static inline ULONG RestoreSFParam(struct bcm_mini_adapter *Adapter, ULONG ulAddrSFParamSet, PUCHAR pucDestBuffer)
+static inline ULONG RestoreSFParam(PMINI_ADAPTER Adapter, ULONG ulAddrSFParamSet, PUCHAR pucDestBuffer)
 {
-	UINT  nBytesToRead = sizeof(struct bcm_connect_mgr_params);
+	UINT  nBytesToRead = sizeof(stServiceFlowParamSI);
 
 	if (ulAddrSFParamSet == 0 || NULL == pucDestBuffer) {
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Got Param address as 0!!");
@@ -1315,9 +1342,9 @@ static inline ULONG RestoreSFParam(struct bcm_mini_adapter *Adapter, ULONG ulAdd
 	return 1;
 }
 
-static ULONG StoreSFParam(struct bcm_mini_adapter *Adapter, PUCHAR pucSrcBuffer, ULONG ulAddrSFParamSet)
+static ULONG StoreSFParam(PMINI_ADAPTER Adapter, PUCHAR pucSrcBuffer, ULONG ulAddrSFParamSet)
 {
-	UINT nBytesToWrite = sizeof(struct bcm_connect_mgr_params);
+	UINT nBytesToWrite = sizeof(stServiceFlowParamSI);
 	int ret = 0;
 
 	if (ulAddrSFParamSet == 0 || NULL == pucSrcBuffer)
@@ -1331,22 +1358,22 @@ static ULONG StoreSFParam(struct bcm_mini_adapter *Adapter, PUCHAR pucSrcBuffer,
 	return 1;
 }
 
-ULONG StoreCmControlResponseMessage(struct bcm_mini_adapter *Adapter, PVOID pvBuffer, UINT *puBufferLength)
+ULONG StoreCmControlResponseMessage(PMINI_ADAPTER Adapter, PVOID pvBuffer, UINT *puBufferLength)
 {
-	struct bcm_add_indication_alt *pstAddIndicationAlt = NULL;
-	struct bcm_add_indication *pstAddIndication = NULL;
-	struct bcm_del_request *pstDeletionRequest;
+	stLocalSFAddIndicationAlt *pstAddIndicationAlt = NULL;
+	stLocalSFAddIndication *pstAddIndication = NULL;
+	stLocalSFDeleteRequest *pstDeletionRequest;
 	UINT uiSearchRuleIndex;
 	ULONG ulSFID;
 
-	pstAddIndicationAlt = (struct bcm_add_indication_alt *)(pvBuffer);
+	pstAddIndicationAlt = (stLocalSFAddIndicationAlt *)(pvBuffer);
 
 	/*
 	 * In case of DSD Req By MS, we should immediately delete this SF so that
 	 * we can stop the further classifying the pkt for this SF.
 	 */
 	if (pstAddIndicationAlt->u8Type == DSD_REQ) {
-		pstDeletionRequest = (struct bcm_del_request *)pvBuffer;
+		pstDeletionRequest = (stLocalSFDeleteRequest *)pvBuffer;
 
 		ulSFID = ntohl(pstDeletionRequest->u32SFID);
 		uiSearchRuleIndex = SearchSfid(Adapter, ulSFID);
@@ -1365,12 +1392,12 @@ ULONG StoreCmControlResponseMessage(struct bcm_mini_adapter *Adapter, PVOID pvBu
 	}
 	/* For DSA_REQ, only up to "psfAuthorizedSet" parameter should be accessed by driver! */
 
-	pstAddIndication = kmalloc(sizeof(struct bcm_add_indication), GFP_KERNEL);
+	pstAddIndication = kmalloc(sizeof(*pstAddIndication), GFP_KERNEL);
 	if (pstAddIndication == NULL)
 		return 0;
 
 	/* AUTHORIZED SET */
-	pstAddIndication->psfAuthorizedSet = (struct bcm_connect_mgr_params *)
+	pstAddIndication->psfAuthorizedSet = (stServiceFlowParamSI *)
 			GetNextTargetBufferLocation(Adapter, pstAddIndicationAlt->u16TID);
 	if (!pstAddIndication->psfAuthorizedSet) {
 		kfree(pstAddIndication);
@@ -1384,10 +1411,10 @@ ULONG StoreCmControlResponseMessage(struct bcm_mini_adapter *Adapter, PVOID pvBu
 	}
 
 	/* this can't possibly be right */
-	pstAddIndication->psfAuthorizedSet = (struct bcm_connect_mgr_params *)ntohl((ULONG)pstAddIndication->psfAuthorizedSet);
+	pstAddIndication->psfAuthorizedSet = (stServiceFlowParamSI *)ntohl((ULONG)pstAddIndication->psfAuthorizedSet);
 
 	if (pstAddIndicationAlt->u8Type == DSA_REQ) {
-		struct bcm_add_request AddRequest;
+		stLocalSFAddRequest AddRequest;
 
 		AddRequest.u8Type = pstAddIndicationAlt->u8Type;
 		AddRequest.eConnectionDir = pstAddIndicationAlt->u8Direction;
@@ -1395,8 +1422,8 @@ ULONG StoreCmControlResponseMessage(struct bcm_mini_adapter *Adapter, PVOID pvBu
 		AddRequest.u16CID = pstAddIndicationAlt->u16CID;
 		AddRequest.u16VCID = pstAddIndicationAlt->u16VCID;
 		AddRequest.psfParameterSet = pstAddIndication->psfAuthorizedSet;
-		(*puBufferLength) = sizeof(struct bcm_add_request);
-		memcpy(pvBuffer, &AddRequest, sizeof(struct bcm_add_request));
+		(*puBufferLength) = sizeof(stLocalSFAddRequest);
+		memcpy(pvBuffer, &AddRequest, sizeof(stLocalSFAddRequest));
 		kfree(pstAddIndication);
 		return 1;
 	}
@@ -1412,7 +1439,7 @@ ULONG StoreCmControlResponseMessage(struct bcm_mini_adapter *Adapter, PVOID pvBu
 	pstAddIndication->u8CC = pstAddIndicationAlt->u8CC;
 
 	/* ADMITTED SET */
-	pstAddIndication->psfAdmittedSet = (struct bcm_connect_mgr_params *)
+	pstAddIndication->psfAdmittedSet = (stServiceFlowParamSI *)
 		GetNextTargetBufferLocation(Adapter, pstAddIndicationAlt->u16TID);
 	if (!pstAddIndication->psfAdmittedSet) {
 		kfree(pstAddIndication);
@@ -1423,10 +1450,10 @@ ULONG StoreCmControlResponseMessage(struct bcm_mini_adapter *Adapter, PVOID pvBu
 		return 0;
 	}
 
-	pstAddIndication->psfAdmittedSet = (struct bcm_connect_mgr_params *)ntohl((ULONG)pstAddIndication->psfAdmittedSet);
+	pstAddIndication->psfAdmittedSet = (stServiceFlowParamSI *)ntohl((ULONG)pstAddIndication->psfAdmittedSet);
 
 	/* ACTIVE SET */
-	pstAddIndication->psfActiveSet = (struct bcm_connect_mgr_params *)
+	pstAddIndication->psfActiveSet = (stServiceFlowParamSI *)
 		GetNextTargetBufferLocation(Adapter, pstAddIndicationAlt->u16TID);
 	if (!pstAddIndication->psfActiveSet) {
 		kfree(pstAddIndication);
@@ -1437,37 +1464,37 @@ ULONG StoreCmControlResponseMessage(struct bcm_mini_adapter *Adapter, PVOID pvBu
 		return 0;
 	}
 
-	pstAddIndication->psfActiveSet = (struct bcm_connect_mgr_params *)ntohl((ULONG)pstAddIndication->psfActiveSet);
+	pstAddIndication->psfActiveSet = (stServiceFlowParamSI *)ntohl((ULONG)pstAddIndication->psfActiveSet);
 
-	(*puBufferLength) = sizeof(struct bcm_add_indication);
-	*(struct bcm_add_indication *)pvBuffer = *pstAddIndication;
+	(*puBufferLength) = sizeof(stLocalSFAddIndication);
+	*(stLocalSFAddIndication *)pvBuffer = *pstAddIndication;
 	kfree(pstAddIndication);
 	return 1;
 }
 
-static inline struct bcm_add_indication_alt
-*RestoreCmControlResponseMessage(register struct bcm_mini_adapter *Adapter, register PVOID pvBuffer)
+static inline stLocalSFAddIndicationAlt
+*RestoreCmControlResponseMessage(register PMINI_ADAPTER Adapter, register PVOID pvBuffer)
 {
 	ULONG ulStatus = 0;
-	struct bcm_add_indication *pstAddIndication = NULL;
-	struct bcm_add_indication_alt *pstAddIndicationDest = NULL;
+	stLocalSFAddIndication *pstAddIndication = NULL;
+	stLocalSFAddIndicationAlt *pstAddIndicationDest = NULL;
 
-	pstAddIndication = (struct bcm_add_indication *)(pvBuffer);
+	pstAddIndication = (stLocalSFAddIndication *)(pvBuffer);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "=====>");
 	if ((pstAddIndication->u8Type == DSD_REQ) ||
 		(pstAddIndication->u8Type == DSD_RSP) ||
 		(pstAddIndication->u8Type == DSD_ACK))
-		return (struct bcm_add_indication_alt *)pvBuffer;
+		return (stLocalSFAddIndicationAlt *)pvBuffer;
 
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Inside RestoreCmControlResponseMessage ");
 	/*
 	 * Need to Allocate memory to contain the SUPER Large structures
 	 * Our driver can't create these structures on Stack :(
 	 */
-	pstAddIndicationDest = kmalloc(sizeof(struct bcm_add_indication_alt), GFP_KERNEL);
+	pstAddIndicationDest = kmalloc(sizeof(stLocalSFAddIndicationAlt), GFP_KERNEL);
 
 	if (pstAddIndicationDest) {
-		memset(pstAddIndicationDest, 0, sizeof(struct bcm_add_indication_alt));
+		memset(pstAddIndicationDest, 0, sizeof(stLocalSFAddIndicationAlt));
 	} else {
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Failed to allocate memory for SF Add Indication Structure ");
 		return NULL;
@@ -1524,7 +1551,7 @@ failed_restore_sf_param:
 	return NULL;
 }
 
-ULONG SetUpTargetDsxBuffers(struct bcm_mini_adapter *Adapter)
+ULONG SetUpTargetDsxBuffers(PMINI_ADAPTER Adapter)
 {
 	ULONG ulTargetDsxBuffersBase = 0;
 	ULONG ulCntTargetBuffers;
@@ -1539,7 +1566,7 @@ ULONG SetUpTargetDsxBuffers(struct bcm_mini_adapter *Adapter)
 	if (Adapter->astTargetDsxBuffer[0].ulTargetDsxBuffer)
 		return 1;
 
-	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Size of Each DSX Buffer(Also size of connection manager parameters): %zx ", sizeof(struct bcm_connect_mgr_params));
+	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Size of Each DSX Buffer(Also size of ServiceFlowParamSI): %zx ", sizeof(stServiceFlowParamSI));
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Reading DSX buffer From Target location %x ", DSX_MESSAGE_EXCHANGE_BUFFER);
 
 	Status = rdmalt(Adapter, DSX_MESSAGE_EXCHANGE_BUFFER, (PUINT)&ulTargetDsxBuffersBase, sizeof(UINT));
@@ -1550,7 +1577,7 @@ ULONG SetUpTargetDsxBuffers(struct bcm_mini_adapter *Adapter)
 
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Base Address Of DSX  Target Buffer : 0x%lx", ulTargetDsxBuffersBase);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL,  "Tgt Buffer is Now %lx :", ulTargetDsxBuffersBase);
-	ulCntTargetBuffers = DSX_MESSAGE_EXCHANGE_BUFFER_SIZE / sizeof(struct bcm_connect_mgr_params);
+	ulCntTargetBuffers = DSX_MESSAGE_EXCHANGE_BUFFER_SIZE / sizeof(stServiceFlowParamSI);
 
 	Adapter->ulTotalTargetBuffersAvailable =
 		ulCntTargetBuffers > MAX_TARGET_DSX_BUFFERS ?
@@ -1562,7 +1589,7 @@ ULONG SetUpTargetDsxBuffers(struct bcm_mini_adapter *Adapter)
 		Adapter->astTargetDsxBuffer[i].ulTargetDsxBuffer = ulTargetDsxBuffersBase;
 		Adapter->astTargetDsxBuffer[i].valid = 1;
 		Adapter->astTargetDsxBuffer[i].tid = 0;
-		ulTargetDsxBuffersBase += sizeof(struct bcm_connect_mgr_params);
+		ulTargetDsxBuffersBase += sizeof(stServiceFlowParamSI);
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "  Target DSX Buffer %lx setup at 0x%lx",
 				i, Adapter->astTargetDsxBuffer[i].ulTargetDsxBuffer);
 	}
@@ -1571,54 +1598,54 @@ ULONG SetUpTargetDsxBuffers(struct bcm_mini_adapter *Adapter)
 	return 1;
 }
 
-static ULONG GetNextTargetBufferLocation(struct bcm_mini_adapter *Adapter, B_UINT16 tid)
+static ULONG GetNextTargetBufferLocation(PMINI_ADAPTER Adapter, B_UINT16 tid)
 {
-	ULONG dsx_buf;
-	ULONG idx, max_try;
+	ULONG ulTargetDSXBufferAddress;
+	ULONG ulTargetDsxBufferIndexToUse, ulMaxTry;
 
 	if ((Adapter->ulTotalTargetBuffersAvailable == 0) || (Adapter->ulFreeTargetBufferCnt == 0)) {
 		ClearTargetDSXBuffer(Adapter, tid, FALSE);
 		return 0;
 	}
 
-	idx = Adapter->ulCurrentTargetBuffer;
-	max_try = Adapter->ulTotalTargetBuffersAvailable;
-	while ((max_try) && (Adapter->astTargetDsxBuffer[idx].valid != 1)) {
-		idx = (idx+1) % Adapter->ulTotalTargetBuffersAvailable;
-		max_try--;
+	ulTargetDsxBufferIndexToUse = Adapter->ulCurrentTargetBuffer;
+	ulMaxTry = Adapter->ulTotalTargetBuffersAvailable;
+	while ((ulMaxTry) && (Adapter->astTargetDsxBuffer[ulTargetDsxBufferIndexToUse].valid != 1)) {
+		ulTargetDsxBufferIndexToUse = (ulTargetDsxBufferIndexToUse+1) % Adapter->ulTotalTargetBuffersAvailable;
+		ulMaxTry--;
 	}
 
-	if (max_try == 0) {
+	if (ulMaxTry == 0) {
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_PRINTK, 0, 0, "\n GetNextTargetBufferLocation : Error No Free Target DSX Buffers FreeCnt : %lx ", Adapter->ulFreeTargetBufferCnt);
 		ClearTargetDSXBuffer(Adapter, tid, FALSE);
 		return 0;
 	}
 
-	dsx_buf = Adapter->astTargetDsxBuffer[idx].ulTargetDsxBuffer;
-	Adapter->astTargetDsxBuffer[idx].valid = 0;
-	Adapter->astTargetDsxBuffer[idx].tid = tid;
+	ulTargetDSXBufferAddress = Adapter->astTargetDsxBuffer[ulTargetDsxBufferIndexToUse].ulTargetDsxBuffer;
+	Adapter->astTargetDsxBuffer[ulTargetDsxBufferIndexToUse].valid = 0;
+	Adapter->astTargetDsxBuffer[ulTargetDsxBufferIndexToUse].tid = tid;
 	Adapter->ulFreeTargetBufferCnt--;
-	idx = (idx+1)%Adapter->ulTotalTargetBuffersAvailable;
-	Adapter->ulCurrentTargetBuffer = idx;
-	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_PRINTK, 0, 0, "GetNextTargetBufferLocation :Returning address %lx tid %d\n", dsx_buf, tid);
+	ulTargetDsxBufferIndexToUse = (ulTargetDsxBufferIndexToUse+1)%Adapter->ulTotalTargetBuffersAvailable;
+	Adapter->ulCurrentTargetBuffer = ulTargetDsxBufferIndexToUse;
+	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_PRINTK, 0, 0, "GetNextTargetBufferLocation :Returning address %lx tid %d\n", ulTargetDSXBufferAddress, tid);
 
-	return dsx_buf;
+	return ulTargetDSXBufferAddress;
 }
 
-int AllocAdapterDsxBuffer(struct bcm_mini_adapter *Adapter)
+int AllocAdapterDsxBuffer(PMINI_ADAPTER Adapter)
 {
 	/*
 	 * Need to Allocate memory to contain the SUPER Large structures
 	 * Our driver can't create these structures on Stack
 	 */
-	Adapter->caDsxReqResp = kmalloc(sizeof(struct bcm_add_indication_alt)+LEADER_SIZE, GFP_KERNEL);
+	Adapter->caDsxReqResp = kmalloc(sizeof(stLocalSFAddIndicationAlt)+LEADER_SIZE, GFP_KERNEL);
 	if (!Adapter->caDsxReqResp)
 		return -ENOMEM;
 
 	return 0;
 }
 
-int FreeAdapterDsxBuffer(struct bcm_mini_adapter *Adapter)
+int FreeAdapterDsxBuffer(PMINI_ADAPTER Adapter)
 {
 	kfree(Adapter->caDsxReqResp);
 	return 0;
@@ -1630,13 +1657,13 @@ int FreeAdapterDsxBuffer(struct bcm_mini_adapter *Adapter)
  * for the Connection Management.
  * @return - Queue index for the free SFID else returns Invalid Index.
  */
-BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer to the Adapter structure */
+BOOLEAN CmControlResponseMessage(PMINI_ADAPTER Adapter,  /* <Pointer to the Adapter structure */
 				PVOID pvBuffer /* Starting Address of the Buffer, that contains the AddIndication Data */)
 {
-	struct bcm_connect_mgr_params *psfLocalSet = NULL;
-	struct bcm_add_indication_alt *pstAddIndication = NULL;
-	struct bcm_change_indication *pstChangeIndication = NULL;
-	struct bcm_leader *pLeader = NULL;
+	stServiceFlowParamSI *psfLocalSet = NULL;
+	stLocalSFAddIndicationAlt *pstAddIndication = NULL;
+	stLocalSFChangeIndicationAlt *pstChangeIndication = NULL;
+	PLEADER pLeader = NULL;
 
 	/*
 	 * Otherwise the message contains a target address from where we need to
@@ -1644,14 +1671,14 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 	 */
 	pstAddIndication = RestoreCmControlResponseMessage(Adapter, pvBuffer);
 	if (pstAddIndication == NULL) {
-		ClearTargetDSXBuffer(Adapter, ((struct bcm_add_indication *)pvBuffer)->u16TID, FALSE);
+		ClearTargetDSXBuffer(Adapter, ((stLocalSFAddIndication *)pvBuffer)->u16TID, FALSE);
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_PRINTK, 0, 0, "Error in restoring Service Flow param structure from DSx message");
 		return FALSE;
 	}
 
 	DumpCmControlPacket(pstAddIndication);
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "====>");
-	pLeader = (struct bcm_leader *)Adapter->caDsxReqResp;
+	pLeader = (PLEADER)Adapter->caDsxReqResp;
 
 	pLeader->Status = CM_CONTROL_NEWDSX_MULTICLASSIFIER_REQ;
 	pLeader->Vcid = 0;
@@ -1661,12 +1688,12 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 	switch (pstAddIndication->u8Type) {
 	case DSA_REQ:
 	{
-		pLeader->PLength = sizeof(struct bcm_add_indication_alt);
+		pLeader->PLength = sizeof(stLocalSFAddIndicationAlt);
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "Sending DSA Response....\n");
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "SENDING DSA RESPONSE TO MAC %d", pLeader->PLength);
-		*((struct bcm_add_indication_alt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))
+		*((stLocalSFAddIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))
 			= *pstAddIndication;
-		((struct bcm_add_indication_alt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSA_RSP;
+		((stLocalSFAddIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSA_RSP;
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, " VCID = %x", ntohs(pstAddIndication->u16VCID));
 		CopyBufferToControlPacket(Adapter, (PVOID)Adapter->caDsxReqResp);
@@ -1675,12 +1702,12 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 	break;
 	case DSA_RSP:
 	{
-		pLeader->PLength = sizeof(struct bcm_add_indication_alt);
+		pLeader->PLength = sizeof(stLocalSFAddIndicationAlt);
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "SENDING DSA ACK TO MAC %d",
 				pLeader->PLength);
-		*((struct bcm_add_indication_alt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))
+		*((stLocalSFAddIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))
 			= *pstAddIndication;
-		((struct bcm_add_indication_alt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSA_ACK;
+		((stLocalSFAddIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSA_ACK;
 
 	} /* no break here..we should go down. */
 	case DSA_ACK:
@@ -1773,12 +1800,12 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 	break;
 	case DSC_REQ:
 	{
-		pLeader->PLength = sizeof(struct bcm_change_indication);
-		pstChangeIndication = (struct bcm_change_indication *)pstAddIndication;
+		pLeader->PLength = sizeof(stLocalSFChangeIndicationAlt);
+		pstChangeIndication = (stLocalSFChangeIndicationAlt *)pstAddIndication;
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "SENDING DSC RESPONSE TO MAC %d", pLeader->PLength);
 
-		*((struct bcm_change_indication *)&(Adapter->caDsxReqResp[LEADER_SIZE])) = *pstChangeIndication;
-		((struct bcm_change_indication *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSC_RSP;
+		*((stLocalSFChangeIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE])) = *pstChangeIndication;
+		((stLocalSFChangeIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSC_RSP;
 
 		CopyBufferToControlPacket(Adapter, (PVOID)Adapter->caDsxReqResp);
 		kfree(pstAddIndication);
@@ -1786,17 +1813,17 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 	break;
 	case DSC_RSP:
 	{
-		pLeader->PLength = sizeof(struct bcm_change_indication);
-		pstChangeIndication = (struct bcm_change_indication *)pstAddIndication;
+		pLeader->PLength = sizeof(stLocalSFChangeIndicationAlt);
+		pstChangeIndication = (stLocalSFChangeIndicationAlt *)pstAddIndication;
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "SENDING DSC ACK TO MAC %d", pLeader->PLength);
-		*((struct bcm_change_indication *)&(Adapter->caDsxReqResp[LEADER_SIZE])) = *pstChangeIndication;
-		((struct bcm_change_indication *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSC_ACK;
+		*((stLocalSFChangeIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE])) = *pstChangeIndication;
+		((stLocalSFChangeIndicationAlt *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSC_ACK;
 	}
 	case DSC_ACK:
 	{
 		UINT uiSearchRuleIndex = 0;
 
-		pstChangeIndication = (struct bcm_change_indication *)pstAddIndication;
+		pstChangeIndication = (stLocalSFChangeIndicationAlt *)pstAddIndication;
 		uiSearchRuleIndex = SearchSfid(Adapter, ntohl(pstChangeIndication->sfActiveSet.u32SFID));
 		if (uiSearchRuleIndex > NO_OF_QUEUES-1)
 			BCM_DEBUG_PRINT(Adapter, DBG_TYPE_PRINTK, 0, 0, "SF doesn't exist for which DSC_ACK is received");
@@ -1856,10 +1883,10 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 		UINT uiSearchRuleIndex;
 		ULONG ulSFID;
 
-		pLeader->PLength = sizeof(struct bcm_del_indication);
-		*((struct bcm_del_indication *)&(Adapter->caDsxReqResp[LEADER_SIZE])) = *((struct bcm_del_indication *)pstAddIndication);
+		pLeader->PLength = sizeof(stLocalSFDeleteIndication);
+		*((stLocalSFDeleteIndication *)&(Adapter->caDsxReqResp[LEADER_SIZE])) = *((stLocalSFDeleteIndication *)pstAddIndication);
 
-		ulSFID = ntohl(((struct bcm_del_indication *)pstAddIndication)->u32SFID);
+		ulSFID = ntohl(((stLocalSFDeleteIndication *)pstAddIndication)->u32SFID);
 		uiSearchRuleIndex = SearchSfid(Adapter, ulSFID);
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "DSD - Removing connection %x", uiSearchRuleIndex);
 
@@ -1870,7 +1897,7 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 		}
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "SENDING DSD RESPONSE TO MAC");
-		((struct bcm_del_indication *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSD_RSP;
+		((stLocalSFDeleteIndication *)&(Adapter->caDsxReqResp[LEADER_SIZE]))->u8Type = DSD_RSP;
 		CopyBufferToControlPacket(Adapter, (PVOID)Adapter->caDsxReqResp);
 	}
 	case DSD_RSP:
@@ -1888,10 +1915,10 @@ BOOLEAN CmControlResponseMessage(struct bcm_mini_adapter *Adapter,  /* <Pointer 
 	return TRUE;
 }
 
-int get_dsx_sf_data_to_application(struct bcm_mini_adapter *Adapter, UINT uiSFId, void __user *user_buffer)
+int get_dsx_sf_data_to_application(PMINI_ADAPTER Adapter, UINT uiSFId, void __user *user_buffer)
 {
 	int status = 0;
-	struct bcm_packet_info *psSfInfo = NULL;
+	struct _packet_info *psSfInfo = NULL;
 
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "status =%d", status);
 	status = SearchSfid(Adapter, uiSFId);
@@ -1902,7 +1929,7 @@ int get_dsx_sf_data_to_application(struct bcm_mini_adapter *Adapter, UINT uiSFId
 	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, CONN_MSG, DBG_LVL_ALL, "status =%d", status);
 	psSfInfo = &Adapter->PackInfo[status];
 	if (psSfInfo->pstSFIndication && copy_to_user(user_buffer,
-							psSfInfo->pstSFIndication, sizeof(struct bcm_add_indication_alt))) {
+							psSfInfo->pstSFIndication, sizeof(stLocalSFAddIndicationAlt))) {
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_PRINTK, 0, 0, "copy to user failed SFID %d, present in queue !!!", uiSFId);
 		status = -EFAULT;
 		return status;
@@ -1910,10 +1937,10 @@ int get_dsx_sf_data_to_application(struct bcm_mini_adapter *Adapter, UINT uiSFId
 	return STATUS_SUCCESS;
 }
 
-VOID OverrideServiceFlowParams(struct bcm_mini_adapter *Adapter, PUINT puiBuffer)
+VOID OverrideServiceFlowParams(PMINI_ADAPTER Adapter, PUINT puiBuffer)
 {
 	B_UINT32 u32NumofSFsinMsg = ntohl(*(puiBuffer + 1));
-	struct bcm_stim_sfhostnotify *pHostInfo = NULL;
+	stIM_SFHostNotify *pHostInfo = NULL;
 	UINT uiSearchRuleIndex = 0;
 	ULONG ulSFID = 0;
 
@@ -1922,7 +1949,7 @@ VOID OverrideServiceFlowParams(struct bcm_mini_adapter *Adapter, PUINT puiBuffer
 
 	while (u32NumofSFsinMsg != 0 && u32NumofSFsinMsg < NO_OF_QUEUES) {
 		u32NumofSFsinMsg--;
-		pHostInfo = (struct bcm_stim_sfhostnotify *)puiBuffer;
+		pHostInfo = (stIM_SFHostNotify *)puiBuffer;
 		puiBuffer = (PUINT)(pHostInfo + 1);
 
 		ulSFID = ntohl(pHostInfo->SFID);

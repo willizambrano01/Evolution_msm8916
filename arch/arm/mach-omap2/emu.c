@@ -21,7 +21,8 @@
 #include <linux/clk.h>
 #include <linux/err.h>
 
-#include "soc.h"
+#include <mach/hardware.h>
+
 #include "iomap.h"
 
 MODULE_LICENSE("GPL");
@@ -47,4 +48,4 @@ static int __init emu_init(void)
 	return 0;
 }
 
-omap_subsys_initcall(emu_init);
+subsys_initcall(emu_init);

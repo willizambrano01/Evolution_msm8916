@@ -4,6 +4,7 @@
  * Copyright (C) 2008 Lai Jiangshan <laijs@cn.fujitsu.com>
  *
  */
+#define REALLY_WANT_DEBUGFS
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>
@@ -50,10 +51,6 @@ void hold_module_trace_bprintk_format(const char **start, const char **end)
 {
 	const char **iter;
 	char *fmt;
-
-	/* allocate the trace_printk per cpu buffers */
-	if (start != end)
-		trace_printk_init_buffers();
 
 	mutex_lock(&btrace_mutex);
 	for (iter = start; iter < end; iter++) {

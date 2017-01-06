@@ -55,6 +55,7 @@
 #include <asm/pgalloc.h>
 #include <asm/pgtable.h>
 #include <asm/tlb.h>
+#include <asm/e820.h>
 
 #include <asm/xen/hypervisor.h>
 #include <asm/xen/hypercall.h>
@@ -87,7 +88,15 @@ struct balloon_stats balloon_stats;
 EXPORT_SYMBOL_GPL(balloon_stats);
 
 /* We increase/decrease in batches which fit in a page */
-static xen_pfn_t frame_list[PAGE_SIZE / sizeof(unsigned long)];
+static unsigned long frame_list[PAGE_SIZE / sizeof(unsigned long)];
+
+#ifdef CONFIG_HIGHMEM
+#define inc_totalhigh_pages() (totalhigh_pages++)
+#define dec_totalhigh_pages() (totalhigh_pages--)
+#else
+#define inc_totalhigh_pages() do {} while (0)
+#define dec_totalhigh_pages() do {} while (0)
+#endif
 
 /* List of ballooned pages, threaded through the mem_map array. */
 static LIST_HEAD(ballooned_pages);
@@ -124,7 +133,9 @@ static void __balloon_append(struct page *page)
 static void balloon_append(struct page *page)
 {
 	__balloon_append(page);
-	adjust_managed_page_count(page, -1);
+	if (PageHighMem(page))
+		dec_totalhigh_pages();
+	totalram_pages--;
 }
 
 /* balloon_retrieve: rescue a page from the balloon, if it is not empty. */
@@ -141,12 +152,13 @@ static struct page *balloon_retrieve(bool prefer_highmem)
 		page = list_entry(ballooned_pages.next, struct page, lru);
 	list_del(&page->lru);
 
-	if (PageHighMem(page))
+	if (PageHighMem(page)) {
 		balloon_stats.balloon_high--;
-	else
+		inc_totalhigh_pages();
+	} else
 		balloon_stats.balloon_low--;
 
-	adjust_managed_page_count(page, 1);
+	totalram_pages++;
 
 	return page;
 }
@@ -348,7 +360,6 @@ static enum bp_state increase_reservation(unsigned long nr_pages)
 
 		set_phys_to_machine(pfn, frame_list[i]);
 
-#ifdef CONFIG_XEN_HAVE_PVMMU
 		/* Link back into the page tables if not highmem. */
 		if (xen_pv_domain() && !PageHighMem(page)) {
 			int ret;
@@ -358,10 +369,11 @@ static enum bp_state increase_reservation(unsigned long nr_pages)
 				0);
 			BUG_ON(ret);
 		}
-#endif
 
 		/* Relinquish the page back to the allocator. */
-		__free_reserved_page(page);
+		ClearPageReserved(page);
+		init_page_count(page);
+		__free_page(page);
 	}
 
 	balloon_stats.current_pages += rc;
@@ -394,8 +406,7 @@ static enum bp_state decrease_reservation(unsigned long nr_pages, gfp_t gfp)
 		nr_pages = ARRAY_SIZE(frame_list);
 
 	for (i = 0; i < nr_pages; i++) {
-		page = alloc_page(gfp);
-		if (page == NULL) {
+		if ((page = alloc_page(gfp)) == NULL) {
 			nr_pages = i;
 			state = BP_EAGAIN;
 			break;
@@ -406,14 +417,13 @@ static enum bp_state decrease_reservation(unsigned long nr_pages, gfp_t gfp)
 
 		scrub_page(page);
 
-#ifdef CONFIG_XEN_HAVE_PVMMU
 		if (xen_pv_domain() && !PageHighMem(page)) {
 			ret = HYPERVISOR_update_va_mapping(
 				(unsigned long)__va(pfn << PAGE_SHIFT),
 				__pte_ma(0), 0);
 			BUG_ON(ret);
 		}
-#endif
+
 	}
 
 	/* Ensure that ballooned highmem pages don't have kmaps. */

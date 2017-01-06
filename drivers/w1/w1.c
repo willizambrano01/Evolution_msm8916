@@ -40,10 +40,6 @@
 #include "w1_int.h"
 #include "w1_family.h"
 #include "w1_netlink.h"
-#ifdef CONFIG_W1_MASTER_GPIO
-#include <linux/regulator/consumer.h>
-#include <linux/w1-gpio.h>
-#endif
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Evgeniy Polyakov <zbr@ioremap.net>");
@@ -555,12 +551,13 @@ void w1_destroy_master_attributes(struct w1_master *master)
 	sysfs_remove_group(&master->dev.kobj, &w1_master_defattr_group);
 }
 
+#ifdef CONFIG_HOTPLUG
 static int w1_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct w1_master *md = NULL;
 	struct w1_slave *sl = NULL;
 	char *event_owner, *name;
-	int err = 0;
+	int err;
 
 	if (dev->driver == &w1_master_driver) {
 		md = container_of(dev, struct w1_master, dev);
@@ -579,17 +576,25 @@ static int w1_uevent(struct device *dev, struct kobj_uevent_env *env)
 			event_owner, name, dev_name(dev));
 
 	if (dev->driver != &w1_slave_driver || !sl)
-		goto end;
+		return 0;
 
 	err = add_uevent_var(env, "W1_FID=%02X", sl->reg_num.family);
 	if (err)
-		goto end;
+		return err;
 
 	err = add_uevent_var(env, "W1_SLAVE_ID=%024LX",
 			     (unsigned long long)sl->reg_num.id);
-end:
-	return err;
+	if (err)
+		return err;
+
+	return 0;
+};
+#else
+static int w1_uevent(struct device *dev, struct kobj_uevent_env *env)
+{
+	return 0;
 }
+#endif
 
 static int __w1_attach_slave_device(struct w1_slave *sl)
 {
@@ -882,21 +887,16 @@ void w1_search(struct w1_master *dev, u8 search_type, w1_slave_found_callback cb
 		 *
 		 * Return 0 - device(s) present, 1 - no devices present.
 		 */
-		mutex_lock(&dev->bus_mutex);
 		if (w1_reset_bus(dev)) {
-			mutex_unlock(&dev->bus_mutex);
 			dev_dbg(&dev->dev, "No devices present on the wire.\n");
 			break;
 		}
 
 		/* Do fast search on single slave bus */
 		if (dev->max_slave_count == 1) {
-			int rv;
 			w1_write_8(dev, W1_READ_ROM);
-			rv = w1_read_block(dev, (u8 *)&rn, 8);
-			mutex_unlock(&dev->bus_mutex);
 
-			if (rv == 8 && rn)
+			if (w1_read_block(dev, (u8 *)&rn, 8) == 8 && rn)
 				cb(dev, rn);
 
 			break;
@@ -930,12 +930,10 @@ void w1_search(struct w1_master *dev, u8 search_type, w1_slave_found_callback cb
 
 			/* ensure we're called from kthread and not by netlink callback */
 			if (!dev->priv && kthread_should_stop()) {
-				mutex_unlock(&dev->bus_mutex);
 				dev_dbg(&dev->dev, "Abort w1_search\n");
 				return;
 			}
 		}
-		mutex_unlock(&dev->bus_mutex);
 
 		if ( (triplet_ret & 0x03) != 0x03 ) {
 			if ( (desc_bit == last_zero) || (last_zero < 0))
@@ -950,31 +948,11 @@ void w1_search_process_cb(struct w1_master *dev, u8 search_type,
 	w1_slave_found_callback cb)
 {
 	struct w1_slave *sl, *sln;
-#ifdef CONFIG_W1_MASTER_GPIO
-	struct w1_gpio_platform_data *w1_gpio_pdata = dev->bus_master->data;
-	int error;
-#endif
 
 	list_for_each_entry(sl, &dev->slist, w1_slave_entry)
 		clear_bit(W1_SLAVE_ACTIVE, (long *)&sl->flags);
 
 	w1_search_devices(dev, search_type, cb);
-
-#ifdef CONFIG_W1_MASTER_GPIO
-	/* turn off regulator, if turned by w1_gpio_probe function */
-	if (w1_gpio_pdata->regulator_en) {
-		error = regulator_disable(w1_gpio_pdata->w1_gpio_vdd);
-		if (error) {
-			pr_err("%s: Error %d disabling w1-vdd regulator\n",
-				__func__, error);
-		} else {
-			w1_gpio_pdata->regulator_en = 0;
-			pr_err("%s: dis: w1-vdd regulator is %s\n", __func__,
-				regulator_is_enabled(w1_gpio_pdata->w1_gpio_vdd) ?
-				"on" : "off");
-		}
-	}
-#endif
 
 	list_for_each_entry_safe(sl, sln, &dev->slist, w1_slave_entry) {
 		if (!test_bit(W1_SLAVE_ACTIVE, (unsigned long *)&sl->flags) && !--sl->ttl)
@@ -1050,7 +1028,7 @@ static int __init w1_init(void)
 	retval = driver_register(&w1_slave_driver);
 	if (retval) {
 		printk(KERN_ERR
-			"Failed to register slave driver. err=%d.\n",
+			"Failed to register master driver. err=%d.\n",
 			retval);
 		goto err_out_master_unregister;
 	}

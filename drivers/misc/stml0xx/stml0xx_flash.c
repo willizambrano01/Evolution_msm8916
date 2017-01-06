@@ -394,7 +394,7 @@ ssize_t stml0xx_misc_write(struct file *file, const char __user *buff,
 
 	if (count > STML0XX_MAXDATA_LENGTH || count == 0) {
 		dev_err(&stml0xx_misc_data->spi->dev,
-			"Invalid packet size %zu", count);
+			"Invalid packet size %d", count);
 		return -EINVAL;
 	}
 
@@ -410,7 +410,7 @@ ssize_t stml0xx_misc_write(struct file *file, const char __user *buff,
 	if (stml0xx_misc_data->mode == BOOTMODE) {
 		/* For boot mode */
 		dev_dbg(&stml0xx_misc_data->spi->dev,
-			"Starting flash write, %zu bytes to address 0x%08x",
+			"Starting flash write, %d bytes to address 0x%08x",
 			count, stml0xx_misc_data->current_addr);
 
 BEGIN_WRITE:
@@ -551,7 +551,7 @@ RETRY_WRITE:
 					"Data compare successful");
 			else
 				dev_err(&stml0xx_misc_data->spi->dev,
-					"Write error detected, %d/%zu bytes",
+					"Write error detected, %d/%d bytes",
 					bad_byte_cnt, count);
 			break;
 RETRY_READ:
@@ -598,8 +598,5 @@ const struct file_operations stml0xx_misc_fops = {
 	.owner = THIS_MODULE,
 	.open = stml0xx_misc_open,
 	.unlocked_ioctl = stml0xx_misc_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = stml0xx_misc_ioctl,
-#endif
 	.write = stml0xx_misc_write,
 };

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,9 +23,6 @@
 
 #define PC_TEMP_ROWS		31
 #define PC_TEMP_COLS		8
-
-#define ACC_IBAT_ROWS		4
-#define ACC_TEMP_COLS		3
 
 #define MAX_SINGLE_LUT_COLS	20
 
@@ -75,14 +72,6 @@ struct pc_temp_ocv_lut {
 	int ocv[PC_TEMP_ROWS][PC_TEMP_COLS];
 };
 
-struct ibat_temp_acc_lut {
-	int rows;
-	int cols;
-	int temp[ACC_TEMP_COLS];
-	int ibat[ACC_IBAT_ROWS];
-	int acc[ACC_IBAT_ROWS][ACC_TEMP_COLS];
-};
-
 struct batt_ids {
 	int kohm[MAX_BATT_ID_NUM];
 	int num;
@@ -119,6 +108,7 @@ enum battery_type {
  * @iterm_ua:		termination current of the battery when charging
  *			to 100%
  * @batt_id_kohm:	the best matched battery id resistor value
+ * @max_current_ma:	max current of the battery
  */
 
 struct bms_battery_data {
@@ -126,7 +116,6 @@ struct bms_battery_data {
 	struct single_row_lut	*fcc_temp_lut;
 	struct single_row_lut	*fcc_sf_lut;
 	struct pc_temp_ocv_lut	*pc_temp_ocv_lut;
-	struct ibat_temp_acc_lut *ibat_acc_lut;
 	struct sf_lut		*pc_sf_lut;
 	struct sf_lut		*rbatt_sf_lut;
 	int			default_rbatt_mohm;
@@ -137,13 +126,14 @@ struct bms_battery_data {
 	int			cutoff_uv;
 	int			iterm_ua;
 	int			batt_id_kohm;
-	const char		*battery_type;
+	int			max_current_ma;
+	char			name[255];
 };
 
 #if defined(CONFIG_PM8921_BMS) || \
 	defined(CONFIG_PM8921_BMS_MODULE) || \
 	defined(CONFIG_QPNP_BMS) || \
-	defined(CONFIG_QPNP_VM_BMS)
+	defined(CONFIG_MMI_QPNP_BMS)
 extern struct bms_battery_data  palladium_1500_data;
 extern struct bms_battery_data  desay_5200_data;
 extern struct bms_battery_data  oem_batt_data;
@@ -158,10 +148,6 @@ int interpolate_pc(struct pc_temp_ocv_lut *pc_temp_ocv,
 				int batt_temp_degc, int ocv);
 int interpolate_ocv(struct pc_temp_ocv_lut *pc_temp_ocv,
 				int batt_temp_degc, int pc);
-int interpolate_slope(struct pc_temp_ocv_lut *pc_temp_ocv,
-					int batt_temp, int pc);
-int interpolate_acc(struct ibat_temp_acc_lut *ibat_acc_lut,
-					int batt_temp, int ibat);
 int linear_interpolate(int y0, int x0, int y1, int x1, int x);
 int is_between(int left, int right, int value);
 #else
@@ -190,21 +176,11 @@ static inline int interpolate_ocv(struct pc_temp_ocv_lut *pc_temp_ocv,
 {
 	return -EINVAL;
 }
-static inline int interpolate_slope(struct pc_temp_ocv_lut *pc_temp_ocv,
-					int batt_temp, int pc)
-{
-	return -EINVAL;
-}
 static inline int linear_interpolate(int y0, int x0, int y1, int x1, int x)
 {
 	return -EINVAL;
 }
 static inline int is_between(int left, int right, int value)
-{
-	return -EINVAL;
-}
-static inline int interpolate_acc(struct ibat_temp_acc_lut *ibat_acc_lut,
-						int batt_temp, int ibat)
 {
 	return -EINVAL;
 }

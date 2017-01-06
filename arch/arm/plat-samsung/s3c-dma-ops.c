@@ -36,27 +36,30 @@ static void s3c_dma_cb(struct s3c2410_dma_chan *channel, void *param,
 }
 
 static unsigned s3c_dma_request(enum dma_ch dma_ch,
-				struct samsung_dma_req *param,
-				struct device *dev, char *ch_name)
+				 struct samsung_dma_info *info)
 {
 	struct cb_data *data;
 
-	if (s3c2410_dma_request(dma_ch, param->client, NULL) < 0) {
-		s3c2410_dma_free(dma_ch, param->client);
+	if (s3c2410_dma_request(dma_ch, info->client, NULL) < 0) {
+		s3c2410_dma_free(dma_ch, info->client);
 		return 0;
 	}
-
-	if (param->cap == DMA_CYCLIC)
-		s3c2410_dma_setflags(dma_ch, S3C2410_DMAF_CIRCULAR);
 
 	data = kzalloc(sizeof(struct cb_data), GFP_KERNEL);
 	data->ch = dma_ch;
 	list_add_tail(&data->node, &dma_list);
 
+	s3c2410_dma_devconfig(dma_ch, info->direction, info->fifo);
+
+	if (info->cap == DMA_CYCLIC)
+		s3c2410_dma_setflags(dma_ch, S3C2410_DMAF_CIRCULAR);
+
+	s3c2410_dma_config(dma_ch, info->width);
+
 	return (unsigned)dma_ch;
 }
 
-static int s3c_dma_release(unsigned ch, void *param)
+static int s3c_dma_release(unsigned ch, struct s3c2410_dma_client *client)
 {
 	struct cb_data *data;
 
@@ -65,24 +68,16 @@ static int s3c_dma_release(unsigned ch, void *param)
 			break;
 	list_del(&data->node);
 
-	s3c2410_dma_free(ch, param);
+	s3c2410_dma_free(ch, client);
 	kfree(data);
 
 	return 0;
 }
 
-static int s3c_dma_config(unsigned ch, struct samsung_dma_config *param)
-{
-	s3c2410_dma_devconfig(ch, param->direction, param->fifo);
-	s3c2410_dma_config(ch, param->width);
-
-	return 0;
-}
-
-static int s3c_dma_prepare(unsigned ch, struct samsung_dma_prep *param)
+static int s3c_dma_prepare(unsigned ch, struct samsung_dma_prep_info *info)
 {
 	struct cb_data *data;
-	int len = (param->cap == DMA_CYCLIC) ? param->period : param->len;
+	int len = (info->cap == DMA_CYCLIC) ? info->period : info->len;
 
 	list_for_each_entry(data, &dma_list, node)
 		if (data->ch == ch)
@@ -90,11 +85,11 @@ static int s3c_dma_prepare(unsigned ch, struct samsung_dma_prep *param)
 
 	if (!data->fp) {
 		s3c2410_dma_set_buffdone_fn(ch, s3c_dma_cb);
-		data->fp = param->fp;
-		data->fp_param = param->fp_param;
+		data->fp = info->fp;
+		data->fp_param = info->fp_param;
 	}
 
-	s3c2410_dma_enqueue(ch, (void *)data, param->buf, len);
+	s3c2410_dma_enqueue(ch, (void *)data, info->buf, len);
 
 	return 0;
 }
@@ -122,7 +117,6 @@ static inline int s3c_dma_stop(unsigned ch)
 static struct samsung_dma_ops s3c_dma_ops = {
 	.request	= s3c_dma_request,
 	.release	= s3c_dma_release,
-	.config		= s3c_dma_config,
 	.prepare	= s3c_dma_prepare,
 	.trigger	= s3c_dma_trigger,
 	.started	= s3c_dma_started,

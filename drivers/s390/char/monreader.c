@@ -174,7 +174,8 @@ static void mon_free_mem(struct mon_private *monpriv)
 	int i;
 
 	for (i = 0; i < MON_MSGLIM; i++)
-		kfree(monpriv->msg_array[i]);
+		if (monpriv->msg_array[i])
+			kfree(monpriv->msg_array[i]);
 	kfree(monpriv);
 }
 
@@ -570,11 +571,8 @@ static int __init mon_init(void)
 	if (rc)
 		goto out_iucv;
 	monreader_device = kzalloc(sizeof(struct device), GFP_KERNEL);
-	if (!monreader_device) {
-		rc = -ENOMEM;
+	if (!monreader_device)
 		goto out_driver;
-	}
-
 	dev_set_name(monreader_device, "monreader-dev");
 	monreader_device->bus = &iucv_bus;
 	monreader_device->parent = iucv_root;

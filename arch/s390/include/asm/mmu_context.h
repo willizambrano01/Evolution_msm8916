@@ -1,4 +1,6 @@
 /*
+ *  include/asm-s390/mmu_context.h
+ *
  *  S390 version
  *
  *  Derived from "include/asm-i386/mmu_context.h"
@@ -46,7 +48,7 @@ static inline int init_new_context(struct task_struct *tsk,
 
 #define destroy_context(mm)             do { } while (0)
 
-#ifndef CONFIG_64BIT
+#ifndef __s390x__
 #define LCTL_OPCODE "lctl"
 #else
 #define LCTL_OPCODE "lctlg"
@@ -57,7 +59,7 @@ static inline void update_mm(struct mm_struct *mm, struct task_struct *tsk)
 	pgd_t *pgd = mm->pgd;
 
 	S390_lowcore.user_asce = mm->context.asce_bits | __pa(pgd);
-	if (s390_user_mode != HOME_SPACE_MODE) {
+	if (user_mode != HOME_SPACE_MODE) {
 		/* Load primary space page table origin. */
 		asm volatile(LCTL_OPCODE" 1,1,%0\n"
 			     : : "m" (S390_lowcore.user_asce) );

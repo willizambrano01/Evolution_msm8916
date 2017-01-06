@@ -47,8 +47,6 @@
 #include <linux/of_gpio.h>
 #include <mach/gpiomux.h>
 
-#define	MPU3050_DEV_NAME_GYRO	"gyroscope"
-
 #define MPU3050_AUTO_DELAY	1000
 
 #define MPU3050_MIN_VALUE	-32768
@@ -555,9 +553,9 @@ static void mpu3050_input_work_fn(struct work_struct *work)
 
 	mpu3050_read_xyz(sensor->client, &axis);
 
-	input_report_abs(sensor->idev, ABS_RX, axis.x);
-	input_report_abs(sensor->idev, ABS_RY, axis.y);
-	input_report_abs(sensor->idev, ABS_RZ, axis.z);
+	input_report_abs(sensor->idev, ABS_X, axis.x);
+	input_report_abs(sensor->idev, ABS_Y, axis.y);
+	input_report_abs(sensor->idev, ABS_Z, axis.z);
 	input_sync(sensor->idev);
 
 	if (sensor->use_poll)
@@ -655,7 +653,7 @@ static int mpu3050_parse_dt(struct device *dev,
  *
  *	If present install the relevant sysfs interfaces and input device.
  */
-static int mpu3050_probe(struct i2c_client *client,
+static int __devinit mpu3050_probe(struct i2c_client *client,
 				   const struct i2c_device_id *id)
 {
 	struct mpu3050_sensor *sensor;
@@ -747,15 +745,15 @@ static int mpu3050_probe(struct i2c_client *client,
 		goto err_class_sysfs;
 	}
 
-	idev->name = MPU3050_DEV_NAME_GYRO;
+	idev->name = "MPU3050";
 	idev->id.bustype = BUS_I2C;
 
 	input_set_capability(idev, EV_ABS, ABS_MISC);
-	input_set_abs_params(idev, ABS_RX,
+	input_set_abs_params(idev, ABS_X,
 			     MPU3050_MIN_VALUE, MPU3050_MAX_VALUE, 0, 0);
-	input_set_abs_params(idev, ABS_RY,
+	input_set_abs_params(idev, ABS_Y,
 			     MPU3050_MIN_VALUE, MPU3050_MAX_VALUE, 0, 0);
-	input_set_abs_params(idev, ABS_RZ,
+	input_set_abs_params(idev, ABS_Z,
 			     MPU3050_MIN_VALUE, MPU3050_MAX_VALUE, 0, 0);
 
 	input_set_drvdata(idev, sensor);
@@ -799,7 +797,7 @@ static int mpu3050_probe(struct i2c_client *client,
 
 		error = request_threaded_irq(client->irq,
 				     NULL, mpu3050_interrupt_thread,
-				     IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+				     IRQF_TRIGGER_FALLING,
 				     "mpu3050", sensor);
 		if (error) {
 			dev_err(&client->dev,
@@ -855,7 +853,7 @@ err_free_mem:
  *
  *	Our sensor is going away, clean up the resources.
  */
-static int mpu3050_remove(struct i2c_client *client)
+static int __devexit mpu3050_remove(struct i2c_client *client)
 {
 	struct mpu3050_sensor *sensor = i2c_get_clientdata(client);
 
@@ -986,7 +984,7 @@ static struct i2c_driver mpu3050_i2c_driver = {
 		.of_match_table = mpu3050_of_match,
 	},
 	.probe		= mpu3050_probe,
-	.remove		= mpu3050_remove,
+	.remove		= __devexit_p(mpu3050_remove),
 	.id_table	= mpu3050_ids,
 };
 

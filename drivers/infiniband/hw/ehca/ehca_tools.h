@@ -59,6 +59,7 @@
 #include <linux/device.h>
 
 #include <linux/atomic.h>
+#include <asm/abs_addr.h>
 #include <asm/ibmebus.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>

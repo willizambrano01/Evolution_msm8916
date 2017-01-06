@@ -28,10 +28,35 @@ Configuration options:
 #define PCM3730_DIB 2
 #define PCM3730_DIC 3
 
+static int pcm3730_attach(struct comedi_device *dev,
+			  struct comedi_devconfig *it);
+static int pcm3730_detach(struct comedi_device *dev);
+static struct comedi_driver driver_pcm3730 = {
+	.driver_name = "pcm3730",
+	.module = THIS_MODULE,
+	.attach = pcm3730_attach,
+	.detach = pcm3730_detach,
+};
+
+static int __init driver_pcm3730_init_module(void)
+{
+	return comedi_driver_register(&driver_pcm3730);
+}
+
+static void __exit driver_pcm3730_cleanup_module(void)
+{
+	comedi_driver_unregister(&driver_pcm3730);
+}
+
+module_init(driver_pcm3730_init_module);
+module_exit(driver_pcm3730_cleanup_module);
+
 static int pcm3730_do_insn_bits(struct comedi_device *dev,
 				struct comedi_subdevice *s,
 				struct comedi_insn *insn, unsigned int *data)
 {
+	if (insn->n != 2)
+		return -EINVAL;
 	if (data[0]) {
 		s->state &= ~data[0];
 		s->state |= (data[0] & data[1]);
@@ -39,32 +64,40 @@ static int pcm3730_do_insn_bits(struct comedi_device *dev,
 	}
 	data[1] = s->state;
 
-	return insn->n;
+	return 2;
 }
 
 static int pcm3730_di_insn_bits(struct comedi_device *dev,
 				struct comedi_subdevice *s,
 				struct comedi_insn *insn, unsigned int *data)
 {
+	if (insn->n != 2)
+		return -EINVAL;
 	data[1] = inb(dev->iobase + (unsigned long)(s->private));
-	return insn->n;
+	return 2;
 }
 
 static int pcm3730_attach(struct comedi_device *dev,
 			  struct comedi_devconfig *it)
 {
 	struct comedi_subdevice *s;
-	int ret;
+	unsigned long iobase;
 
-	ret = comedi_request_region(dev, it->options[0], PCM3730_SIZE);
-	if (ret)
-		return ret;
+	iobase = it->options[0];
+	printk(KERN_INFO "comedi%d: pcm3730: 0x%04lx ", dev->minor, iobase);
+	if (!request_region(iobase, PCM3730_SIZE, "pcm3730")) {
+		printk("I/O port conflict\n");
+		return -EIO;
+	}
+	dev->iobase = iobase;
+	dev->board_name = "pcm3730";
+	dev->iobase = dev->iobase;
+	dev->irq = 0;
 
-	ret = comedi_alloc_subdevices(dev, 6);
-	if (ret)
-		return ret;
+	if (alloc_subdevices(dev, 6) < 0)
+		return -ENOMEM;
 
-	s = &dev->subdevices[0];
+	s = dev->subdevices + 0;
 	s->type = COMEDI_SUBD_DO;
 	s->subdev_flags = SDF_WRITABLE;
 	s->maxdata = 1;
@@ -73,7 +106,7 @@ static int pcm3730_attach(struct comedi_device *dev,
 	s->range_table = &range_digital;
 	s->private = (void *)PCM3730_DOA;
 
-	s = &dev->subdevices[1];
+	s = dev->subdevices + 1;
 	s->type = COMEDI_SUBD_DO;
 	s->subdev_flags = SDF_WRITABLE;
 	s->maxdata = 1;
@@ -82,7 +115,7 @@ static int pcm3730_attach(struct comedi_device *dev,
 	s->range_table = &range_digital;
 	s->private = (void *)PCM3730_DOB;
 
-	s = &dev->subdevices[2];
+	s = dev->subdevices + 2;
 	s->type = COMEDI_SUBD_DO;
 	s->subdev_flags = SDF_WRITABLE;
 	s->maxdata = 1;
@@ -91,7 +124,7 @@ static int pcm3730_attach(struct comedi_device *dev,
 	s->range_table = &range_digital;
 	s->private = (void *)PCM3730_DOC;
 
-	s = &dev->subdevices[3];
+	s = dev->subdevices + 3;
 	s->type = COMEDI_SUBD_DI;
 	s->subdev_flags = SDF_READABLE;
 	s->maxdata = 1;
@@ -100,7 +133,7 @@ static int pcm3730_attach(struct comedi_device *dev,
 	s->range_table = &range_digital;
 	s->private = (void *)PCM3730_DIA;
 
-	s = &dev->subdevices[4];
+	s = dev->subdevices + 4;
 	s->type = COMEDI_SUBD_DI;
 	s->subdev_flags = SDF_READABLE;
 	s->maxdata = 1;
@@ -109,7 +142,7 @@ static int pcm3730_attach(struct comedi_device *dev,
 	s->range_table = &range_digital;
 	s->private = (void *)PCM3730_DIB;
 
-	s = &dev->subdevices[5];
+	s = dev->subdevices + 5;
 	s->type = COMEDI_SUBD_DI;
 	s->subdev_flags = SDF_READABLE;
 	s->maxdata = 1;
@@ -123,13 +156,15 @@ static int pcm3730_attach(struct comedi_device *dev,
 	return 0;
 }
 
-static struct comedi_driver pcm3730_driver = {
-	.driver_name	= "pcm3730",
-	.module		= THIS_MODULE,
-	.attach		= pcm3730_attach,
-	.detach		= comedi_legacy_detach,
-};
-module_comedi_driver(pcm3730_driver);
+static int pcm3730_detach(struct comedi_device *dev)
+{
+	printk(KERN_INFO "comedi%d: pcm3730: remove\n", dev->minor);
+
+	if (dev->iobase)
+		release_region(dev->iobase, PCM3730_SIZE);
+
+	return 0;
+}
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");

@@ -18,7 +18,7 @@
  *
  * File: tcrc.h
  *
- * Purpose: Implement functions to calculate CRC
+ * Purpose: Implement functions to caculate CRC
  *
  * Author: Tevin Chen
  *
@@ -29,10 +29,22 @@
 #ifndef __TCRC_H__
 #define __TCRC_H__
 
-#include <linux/types.h>
+#include "ttype.h"
 
-u32 CRCdwCrc32(u8 * pbyData, unsigned int cbByte, u32 dwCrcSeed);
-u32 CRCdwGetCrc32(u8 * pbyData, unsigned int cbByte);
-u32 CRCdwGetCrc32Ex(u8 * pbyData, unsigned int cbByte, u32 dwPreCRC);
+/*---------------------  Export Definitions -------------------------*/
+
+/*---------------------  Export Types  ------------------------------*/
+
+/*---------------------  Export Macros ------------------------------*/
+
+/*---------------------  Export Classes  ----------------------------*/
+
+/*---------------------  Export Variables  --------------------------*/
+
+/*---------------------  Export Functions  --------------------------*/
+
+DWORD CRCdwCrc32(PBYTE pbyData, unsigned int cbByte, DWORD dwCrcSeed);
+DWORD CRCdwGetCrc32(PBYTE pbyData, unsigned int cbByte);
+DWORD CRCdwGetCrc32Ex(PBYTE pbyData, unsigned int cbByte, DWORD dwPreCRC);
 
 #endif /* __TCRC_H__ */

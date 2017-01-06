@@ -6,7 +6,6 @@
  * Some ARP specific bits are:
  *
  * Copyright (C) 2002 David S. Miller (davem@redhat.com)
- * Copyright (C) 2006-2009 Patrick McHardy <kaber@trash.net>
  *
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -222,8 +221,9 @@ static inline int arp_checkentry(const struct arpt_arp *arp)
 static unsigned int
 arpt_error(struct sk_buff *skb, const struct xt_action_param *par)
 {
-	net_err_ratelimited("arp_tables: error: '%s'\n",
-			    (const char *)par->targinfo);
+	if (net_ratelimit())
+		pr_err("arp_tables: error: '%s'\n",
+		       (const char *)par->targinfo);
 
 	return NF_DROP;
 }
@@ -308,7 +308,7 @@ unsigned int arpt_do_table(struct sk_buff *skb,
 			if (v < 0) {
 				/* Pop from stack? */
 				if (v != XT_RETURN) {
-					verdict = (unsigned int)(-v) - 1;
+					verdict = (unsigned)(-v) - 1;
 					break;
 				}
 				e = back;
@@ -470,12 +470,14 @@ static int mark_source_chains(const struct xt_table_info *newinfo,
 	return 1;
 }
 
-static inline int check_entry(const struct arpt_entry *e)
+static inline int check_entry(const struct arpt_entry *e, const char *name)
 {
 	const struct xt_entry_target *t;
 
-	if (!arp_checkentry(&e->arp))
+	if (!arp_checkentry(&e->arp)) {
+		duprintf("arp_tables: arp check failed %p %s.\n", e, name);
 		return -EINVAL;
+	}
 
 	if (e->target_offset + sizeof(struct xt_entry_target) > e->next_offset)
 		return -EINVAL;
@@ -515,6 +517,10 @@ find_check_entry(struct arpt_entry *e, const char *name, unsigned int size)
 	struct xt_entry_target *t;
 	struct xt_target *target;
 	int ret;
+
+	ret = check_entry(e, name);
+	if (ret)
+		return ret;
 
 	t = arpt_get_target(e);
 	target = xt_request_find_target(NFPROTO_ARP, t->u.user.name,
@@ -560,7 +566,6 @@ static inline int check_entry_size_and_hooks(struct arpt_entry *e,
 					     unsigned int valid_hooks)
 {
 	unsigned int h;
-	int err;
 
 	if ((unsigned long)e % __alignof__(struct arpt_entry) != 0 ||
 	    (unsigned char *)e + sizeof(struct arpt_entry) >= limit ||
@@ -575,10 +580,6 @@ static inline int check_entry_size_and_hooks(struct arpt_entry *e,
 			 e, e->next_offset);
 		return -EINVAL;
 	}
-
-	err = check_entry(e);
-	if (err)
-		return err;
 
 	/* Check hooks & underflows */
 	for (h = 0; h < NF_ARP_NUMHOOKS; h++) {
@@ -907,7 +908,7 @@ static int get_info(struct net *net, void __user *user,
 #endif
 	t = try_then_request_module(xt_find_table_lock(net, NFPROTO_ARP, name),
 				    "arptable_%s", name);
-	if (!IS_ERR_OR_NULL(t)) {
+	if (t && !IS_ERR(t)) {
 		struct arpt_getinfo info;
 		const struct xt_table_info *private = t->private;
 #ifdef CONFIG_COMPAT
@@ -964,7 +965,7 @@ static int get_entries(struct net *net, struct arpt_get_entries __user *uptr,
 	}
 
 	t = xt_find_table_lock(net, NFPROTO_ARP, get.name);
-	if (!IS_ERR_OR_NULL(t)) {
+	if (t && !IS_ERR(t)) {
 		const struct xt_table_info *private = t->private;
 
 		duprintf("t->private->number = %u\n",
@@ -1007,7 +1008,7 @@ static int __do_replace(struct net *net, const char *name,
 
 	t = try_then_request_module(xt_find_table_lock(net, NFPROTO_ARP, name),
 				    "arptable_%s", name);
-	if (IS_ERR_OR_NULL(t)) {
+	if (!t || IS_ERR(t)) {
 		ret = t ? PTR_ERR(t) : -ENOENT;
 		goto free_newinfo_counters_untrans;
 	}
@@ -1044,10 +1045,8 @@ static int __do_replace(struct net *net, const char *name,
 
 	xt_free_table_info(oldinfo);
 	if (copy_to_user(counters_ptr, counters,
-			 sizeof(struct xt_counters) * num_counters) != 0) {
-		/* Silent error, can't fail, new table is already in place */
-		net_warn_ratelimited("arptables: counters copy to user failed while replacing table\n");
-	}
+			 sizeof(struct xt_counters) * num_counters) != 0)
+		ret = -EFAULT;
 	vfree(counters);
 	xt_table_unlock(t);
 	return ret;
@@ -1166,7 +1165,7 @@ static int do_add_counters(struct net *net, const void __user *user,
 	}
 
 	t = xt_find_table_lock(net, NFPROTO_ARP, name);
-	if (IS_ERR_OR_NULL(t)) {
+	if (!t || IS_ERR(t)) {
 		ret = t ? PTR_ERR(t) : -ENOENT;
 		goto free;
 	}
@@ -1238,7 +1237,7 @@ check_compat_entry_size_and_hooks(struct compat_arpt_entry *e,
 	}
 
 	/* For purposes of check_entry casting the compat entry is fine */
-	ret = check_entry((struct arpt_entry *)e);
+	ret = check_entry((struct arpt_entry *)e, name);
 	if (ret)
 		return ret;
 
@@ -1542,7 +1541,7 @@ static int compat_do_arpt_set_ctl(struct sock *sk, int cmd, void __user *user,
 {
 	int ret;
 
-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
 	switch (cmd) {
@@ -1655,7 +1654,7 @@ static int compat_get_entries(struct net *net,
 
 	xt_compat_lock(NFPROTO_ARP);
 	t = xt_find_table_lock(net, NFPROTO_ARP, get.name);
-	if (!IS_ERR_OR_NULL(t)) {
+	if (t && !IS_ERR(t)) {
 		const struct xt_table_info *private = t->private;
 		struct xt_table_info info;
 
@@ -1686,7 +1685,7 @@ static int compat_do_arpt_get_ctl(struct sock *sk, int cmd, void __user *user,
 {
 	int ret;
 
-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
 	switch (cmd) {
@@ -1707,7 +1706,7 @@ static int do_arpt_set_ctl(struct sock *sk, int cmd, void __user *user, unsigned
 {
 	int ret;
 
-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
 	switch (cmd) {
@@ -1731,7 +1730,7 @@ static int do_arpt_get_ctl(struct sock *sk, int cmd, void __user *user, int *len
 {
 	int ret;
 
-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
 	switch (cmd) {

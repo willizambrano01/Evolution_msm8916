@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,12 +17,12 @@
 #include <linux/string.h>
 #include <linux/iopoll.h>
 #include <linux/clk.h>
-#include <linux/clk/msm-clk-provider.h>
-#include <linux/clk/msm-clk.h>
-#include <linux/clk/msm-clock-generic.h>
 
 #include <asm/processor.h>
 #include <mach/msm_iomap.h>
+#include <mach/clk-provider.h>
+#include <mach/clk.h>
+#include <mach/clock-generic.h>
 
 #include "clock-mdss-8974.h"
 
@@ -162,9 +162,6 @@ static unsigned char *mdss_edp_base;
 static void __iomem *hdmi_phy_base;
 static void __iomem *hdmi_phy_pll_base;
 static unsigned hdmi_pll_on;
-
-static u32 hdmi_phy_addr = HDMI_PHY_PHYS;
-static u32 hdmi_phy_pll_addr = HDMI_PHY_PLL_PHYS;
 
 static int mdss_gdsc_enabled(void)
 {
@@ -1756,109 +1753,6 @@ struct div_clk byte_clk_src_8226 = {
 	},
 };
 
-struct dsi_pll_vco_clk dsi_vco_clk_8084 = {
-	.ref_clk_rate = 19200000,
-	.min_rate = 350000000,
-	.max_rate = 750000000,
-	.pll_en_seq_cnt = 3,
-	.pll_enable_seqs[0] = dsi_pll_enable_seq_8974,
-	.pll_enable_seqs[1] = dsi_pll_enable_seq_8974,
-	.pll_enable_seqs[2] = dsi_pll_enable_seq_8974,
-	.lpfr_lut_size = 10,
-	.lpfr_lut = (struct lpfr_cfg[]){
-		{479500000, 8},
-		{480000000, 11},
-		{575500000, 8},
-		{576000000, 12},
-		{610500000, 8},
-		{659500000, 9},
-		{671500000, 10},
-		{672000000, 14},
-		{708500000, 10},
-		{750000000, 11},
-	},
-	.c = {
-		.dbg_name = "dsi_vco_clk",
-		.ops = &clk_ops_dsi_vco,
-		CLK_INIT(dsi_vco_clk_8084.c),
-	},
-};
-
-struct div_clk analog_postdiv_clk_8084 = {
-	.data = {
-		.max_div = 255,
-		.min_div = 1,
-	},
-	.ops = &analog_postdiv_ops,
-	.c = {
-		.parent = &dsi_vco_clk_8084.c,
-		.dbg_name = "analog_postdiv_clk",
-		.ops = &analog_potsdiv_clk_ops,
-		.flags = CLKFLAG_NO_RATE_CACHE,
-		CLK_INIT(analog_postdiv_clk_8084.c),
-	},
-};
-
-struct div_clk indirect_path_div2_clk_8084 = {
-	.ops = &fixed_2div_ops,
-	.data = {
-		.div = 2,
-		.min_div = 2,
-		.max_div = 2,
-	},
-	.c = {
-		.parent = &analog_postdiv_clk_8084.c,
-		.dbg_name = "indirect_path_div2_clk",
-		.ops = &clk_ops_div,
-		.flags = CLKFLAG_NO_RATE_CACHE,
-		CLK_INIT(indirect_path_div2_clk_8084.c),
-	},
-};
-
-struct div_clk pixel_clk_src_8084 = {
-	.data = {
-		.max_div = 255,
-		.min_div = 1,
-	},
-	.ops = &digital_postdiv_ops,
-	.c = {
-		.parent = &dsi_vco_clk_8084.c,
-		.dbg_name = "pixel_clk_src",
-		.ops = &pixel_clk_src_ops,
-		.flags = CLKFLAG_NO_RATE_CACHE,
-		CLK_INIT(pixel_clk_src_8084.c),
-	},
-};
-
-struct mux_clk byte_mux_8084 = {
-	.num_parents = 2,
-	.parents = (struct clk_src[]){
-		{&dsi_vco_clk_8084.c, 0},
-		{&indirect_path_div2_clk_8084.c, 1},
-	},
-	.ops = &byte_mux_ops,
-	.c = {
-		.parent = &dsi_vco_clk_8084.c,
-		.dbg_name = "byte_mux",
-		.ops = &byte_mux_clk_ops,
-		CLK_INIT(byte_mux_8084.c),
-	},
-};
-
-struct div_clk byte_clk_src_8084 = {
-	.ops = &fixed_4div_ops,
-	.data = {
-		.min_div = 4,
-		.max_div = 4,
-	},
-	.c = {
-		.parent = &byte_mux_8084.c,
-		.dbg_name = "byte_clk_src",
-		.ops = &byte_clk_src_ops,
-		CLK_INIT(byte_clk_src_8084.c),
-	},
-};
-
 struct dsi_pll_vco_clk dsi_vco_clk_8974 = {
 	.ref_clk_rate = 19200000,
 	.min_rate = 350000000,
@@ -2342,8 +2236,6 @@ struct div_clk edp_mainlink_clk_src = {
 	.ops = &fixed_5div_ops,
 	.data = {
 		.div = 5,
-		.min_div = 5,
-		.max_div = 5,
 	},
 	.c = {
 		.parent = &edp_vco_clk.c,
@@ -2671,7 +2563,7 @@ static int hdmi_mux_prepare(struct clk *c)
 	return ret;
 }
 
-struct mux_clk hdmipll_mux_clk = {
+static struct mux_clk hdmipll_mux_clk = {
 	MUX_SRC_LIST(
 		{ &hdmipll_div1_clk.c, 0 },
 		{ &hdmipll_div2_clk.c, 1 },
@@ -2701,13 +2593,7 @@ struct div_clk hdmipll_clk_src = {
 	},
 };
 
-void mdss_clk_update_hdmi_addr(u32 phy_addr, u32 phy_pll_addr)
-{
-	hdmi_phy_addr = phy_addr;
-	hdmi_phy_pll_addr = phy_pll_addr;
-}
-
-void mdss_clk_ctrl_pre_init(struct clk *ahb_clk)
+void __init mdss_clk_ctrl_pre_init(struct clk *ahb_clk)
 {
 	BUG_ON(ahb_clk == NULL);
 
@@ -2721,11 +2607,11 @@ void mdss_clk_ctrl_pre_init(struct clk *ahb_clk)
 
 	mdss_ahb_clk = ahb_clk;
 
-	hdmi_phy_base = ioremap(hdmi_phy_addr, HDMI_PHY_SIZE);
+	hdmi_phy_base = ioremap(HDMI_PHY_PHYS, HDMI_PHY_SIZE);
 	if (!hdmi_phy_base)
 		pr_err("%s: unable to ioremap hdmi phy base", __func__);
 
-	hdmi_phy_pll_base = ioremap(hdmi_phy_pll_addr, HDMI_PHY_PLL_SIZE);
+	hdmi_phy_pll_base = ioremap(HDMI_PHY_PLL_PHYS, HDMI_PHY_PLL_SIZE);
 	if (!hdmi_phy_pll_base)
 		pr_err("%s: unable to ioremap hdmi phy pll base", __func__);
 

@@ -283,12 +283,12 @@ static struct inode *iget_xattr(struct ubifs_info *c, ino_t inum)
 	inode = ubifs_iget(c->vfs_sb, inum);
 	if (IS_ERR(inode)) {
 		ubifs_err("dead extended attribute entry, error %d",
-				c->vi.ubi_num, (int)PTR_ERR(inode));
+			  (int)PTR_ERR(inode));
 		return inode;
 	}
 	if (ubifs_inode(inode)->xattr)
 		return inode;
-	ubifs_err("corrupt extended attribute entry", c->vi.ubi_num);
+	ubifs_err("corrupt extended attribute entry");
 	iput(inode);
 	return ERR_PTR(-EINVAL);
 }
@@ -298,7 +298,7 @@ int ubifs_setxattr(struct dentry *dentry, const char *name,
 {
 	struct inode *inode, *host = dentry->d_inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct qstr nm = QSTR_INIT(name, strlen(name));
+	struct qstr nm = { .name = name, .len = strlen(name) };
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
 	int err, type;
@@ -361,7 +361,7 @@ ssize_t ubifs_getxattr(struct dentry *dentry, const char *name, void *buf,
 {
 	struct inode *inode, *host = dentry->d_inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct qstr nm = QSTR_INIT(name, strlen(name));
+	struct qstr nm = { .name = name, .len = strlen(name) };
 	struct ubifs_inode *ui;
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
@@ -399,8 +399,8 @@ ssize_t ubifs_getxattr(struct dentry *dentry, const char *name, void *buf,
 	if (buf) {
 		/* If @buf is %NULL we are supposed to return the length */
 		if (ui->data_len > size) {
-			ubifs_err("buffer size %zd, xattr len %d",
-					c->vi.ubi_num, size, ui->data_len);
+			dbg_err("buffer size %zd, xattr len %d",
+				size, ui->data_len);
 			err = -ERANGE;
 			goto out_iput;
 		}
@@ -472,8 +472,7 @@ ssize_t ubifs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 
 	kfree(pxent);
 	if (err != -ENOENT) {
-		ubifs_err("cannot find next direntry, error %d", c->vi.ubi_num,
-				err);
+		ubifs_err("cannot find next direntry, error %d", err);
 		return err;
 	}
 
@@ -525,7 +524,7 @@ int ubifs_removexattr(struct dentry *dentry, const char *name)
 {
 	struct inode *inode, *host = dentry->d_inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct qstr nm = QSTR_INIT(name, strlen(name));
+	struct qstr nm = { .name = name, .len = strlen(name) };
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
 	int err;

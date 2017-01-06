@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2009, 2012-2014 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2009, 2012-2013 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,7 +11,7 @@
  *
  */
 /*
- * SPI driver for Qualcomm Technologies, Inc. MSM platforms.
+ * SPI driver for Qualcomm MSM platforms.
  */
 
 /**
@@ -41,5 +41,4 @@ struct msm_spi_platform_data {
 	u32  bam_consumer_pipe_index;
 	u32  bam_producer_pipe_index;
 	bool rt_priority;
-	bool use_pinctrl;
 };

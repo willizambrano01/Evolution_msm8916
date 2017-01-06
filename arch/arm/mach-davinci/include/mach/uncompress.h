@@ -32,9 +32,6 @@ u32 *uart;
 /* PORT_16C550A, in polled non-fifo mode */
 static void putc(char c)
 {
-	if (!uart)
-		return;
-
 	while (!(uart[UART_LSR] & UART_LSR_THRE))
 		barrier();
 	uart[UART_TX] = c;
@@ -42,34 +39,41 @@ static void putc(char c)
 
 static inline void flush(void)
 {
-	if (!uart)
-		return;
-
 	while (!(uart[UART_LSR] & UART_LSR_THRE))
 		barrier();
 }
 
-static inline void set_uart_info(u32 phys)
+static inline void set_uart_info(u32 phys, void * __iomem virt)
 {
+	/*
+	 * Get address of some.bss variable and round it down
+	 * a la CONFIG_AUTO_ZRELADDR.
+	 */
+	u32 ram_start = (u32)&uart & 0xf8000000;
+	u32 *uart_info = (u32 *)(ram_start + DAVINCI_UART_INFO_OFS);
+
 	uart = (u32 *)phys;
+	uart_info[0] = phys;
+	uart_info[1] = (u32)virt;
 }
 
-#define _DEBUG_LL_ENTRY(machine, phys)				\
-	{							\
-		if (machine_is_##machine()) {			\
-			set_uart_info(phys);			\
-			break;					\
-		}						\
+#define _DEBUG_LL_ENTRY(machine, phys, virt)			\
+	if (machine_is_##machine()) {				\
+		set_uart_info(phys, virt);			\
+		break;						\
 	}
 
 #define DEBUG_LL_DAVINCI(machine, port)				\
-	_DEBUG_LL_ENTRY(machine, DAVINCI_UART##port##_BASE)
+	_DEBUG_LL_ENTRY(machine, DAVINCI_UART##port##_BASE,	\
+			IO_ADDRESS(DAVINCI_UART##port##_BASE))
 
 #define DEBUG_LL_DA8XX(machine, port)				\
-	_DEBUG_LL_ENTRY(machine, DA8XX_UART##port##_BASE)
+	_DEBUG_LL_ENTRY(machine, DA8XX_UART##port##_BASE,	\
+			IO_ADDRESS(DA8XX_UART##port##_BASE))
 
 #define DEBUG_LL_TNETV107X(machine, port)			\
-	_DEBUG_LL_ENTRY(machine, TNETV107X_UART##port##_BASE)
+	_DEBUG_LL_ENTRY(machine, TNETV107X_UART##port##_BASE,	\
+			TNETV107X_UART##port##_VIRT)
 
 static inline void __arch_decomp_setup(unsigned long arch_id)
 {
@@ -101,3 +105,4 @@ static inline void __arch_decomp_setup(unsigned long arch_id)
 }
 
 #define arch_decomp_setup()	__arch_decomp_setup(arch_id)
+#define arch_decomp_wdog()

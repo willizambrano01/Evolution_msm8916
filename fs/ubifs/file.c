@@ -37,11 +37,11 @@
  *
  * A thing to keep in mind: inode @i_mutex is locked in most VFS operations we
  * implement. However, this is not true for 'ubifs_writepage()', which may be
- * called with @i_mutex unlocked. For example, when flusher thread is doing
- * background write-back, it calls 'ubifs_writepage()' with unlocked @i_mutex.
- * At "normal" work-paths the @i_mutex is locked in 'ubifs_writepage()', e.g.
- * in the "sys_write -> alloc_pages -> direct reclaim path". So, in
- * 'ubifs_writepage()' we are only guaranteed that the page is locked.
+ * called with @i_mutex unlocked. For example, when pdflush is doing background
+ * write-back, it calls 'ubifs_writepage()' with unlocked @i_mutex. At "normal"
+ * work-paths the @i_mutex is locked in 'ubifs_writepage()', e.g. in the
+ * "sys_write -> alloc_pages -> direct reclaim path". So, in 'ubifs_writepage()'
+ * we are only guaranteed that the page is locked.
  *
  * Similarly, @i_mutex is not always locked in 'ubifs_readpage()', e.g., the
  * read-ahead path does not lock it ("sys_read -> generic_file_aio_read ->
@@ -50,7 +50,6 @@
  */
 
 #include "ubifs.h"
-#include <linux/aio.h>
 #include <linux/mount.h>
 #include <linux/namei.h>
 #include <linux/slab.h>
@@ -80,7 +79,7 @@ static int read_block(struct inode *inode, void *addr, unsigned int block,
 
 	dlen = le32_to_cpu(dn->ch.len) - UBIFS_DATA_NODE_SZ;
 	out_len = UBIFS_BLOCK_SIZE;
-	err = ubifs_decompress(c, &(dn->data), dlen, addr, &out_len,
+	err = ubifs_decompress(&dn->data, dlen, addr, &out_len,
 			       le16_to_cpu(dn->compr_type));
 	if (err || len != out_len)
 		goto dump;
@@ -96,9 +95,9 @@ static int read_block(struct inode *inode, void *addr, unsigned int block,
 	return 0;
 
 dump:
-	ubifs_err("bad data node (block %u, inode %lu)", c->vi.ubi_num,
+	ubifs_err("bad data node (block %u, inode %lu)",
 		  block, inode->i_ino);
-	ubifs_dump_node(c, dn);
+	dbg_dump_node(c, dn);
 	return -EINVAL;
 }
 
@@ -161,19 +160,14 @@ static int do_readpage(struct page *page)
 		addr += UBIFS_BLOCK_SIZE;
 	}
 	if (err) {
-		int ubi_num = UBIFS_UNKNOWN_DEV_NUM;
-
 		if (err == -ENOENT) {
 			/* Not found, so it must be a hole */
 			SetPageChecked(page);
 			dbg_gen("hole");
 			goto out_free;
 		}
-		if ((struct ubifs_info *)(inode->i_sb->s_fs_info))
-			ubi_num = ((struct ubifs_info *)
-					(inode->i_sb->s_fs_info))->vi.ubi_num;
 		ubifs_err("cannot read page %lu of inode %lu, error %d",
-			  ubi_num, page->index, inode->i_ino, err);
+			  page->index, inode->i_ino, err);
 		goto error;
 	}
 
@@ -654,8 +648,7 @@ static int populate_page(struct ubifs_info *c, struct page *page,
 
 			dlen = le32_to_cpu(dn->ch.len) - UBIFS_DATA_NODE_SZ;
 			out_len = UBIFS_BLOCK_SIZE;
-			err = ubifs_decompress(c, &dn->data, dlen, addr,
-					       &out_len,
+			err = ubifs_decompress(&dn->data, dlen, addr, &out_len,
 					       le16_to_cpu(dn->compr_type));
 			if (err || len != out_len)
 				goto out_err;
@@ -703,7 +696,7 @@ out_err:
 	SetPageError(page);
 	flush_dcache_page(page);
 	kunmap(page);
-	ubifs_err("bad data node (block %u, inode %lu)", c->vi.ubi_num,
+	ubifs_err("bad data node (block %u, inode %lu)",
 		  page_block, inode->i_ino);
 	return -EINVAL;
 }
@@ -807,8 +800,7 @@ out_free:
 	return ret;
 
 out_warn:
-	ubifs_warn("ignoring error %d and skipping bulk-read", c->vi.ubi_num,
-			err);
+	ubifs_warn("ignoring error %d and skipping bulk-read", err);
 	goto out_free;
 
 out_bu_off:
@@ -936,7 +928,7 @@ static int do_writepage(struct page *page, int len)
 	if (err) {
 		SetPageError(page);
 		ubifs_err("cannot write page %lu of inode %lu, error %d",
-			  c->vi.ubi_num, page->index, inode->i_ino, err);
+			  page->index, inode->i_ino, err);
 		ubifs_ro_mode(c, err);
 	}
 
@@ -1452,7 +1444,7 @@ static int ubifs_vm_page_mkwrite(struct vm_area_struct *vma,
 				 struct vm_fault *vmf)
 {
 	struct page *page = vmf->page;
-	struct inode *inode = file_inode(vma->vm_file);
+	struct inode *inode = vma->vm_file->f_path.dentry->d_inode;
 	struct ubifs_info *c = inode->i_sb->s_fs_info;
 	struct timespec now = ubifs_current_time(inode);
 	struct ubifs_budget_req req = { .new_page = 1 };
@@ -1494,8 +1486,8 @@ static int ubifs_vm_page_mkwrite(struct vm_area_struct *vma,
 	err = ubifs_budget_space(c, &req);
 	if (unlikely(err)) {
 		if (err == -ENOSPC)
-			ubifs_warn("out of space for mmapped file (inode number %lu)",
-					c->vi.ubi_num, inode->i_ino);
+			ubifs_warn("out of space for mmapped file "
+				   "(inode number %lu)", inode->i_ino);
 		return VM_FAULT_SIGBUS;
 	}
 
@@ -1530,8 +1522,8 @@ static int ubifs_vm_page_mkwrite(struct vm_area_struct *vma,
 			ubifs_release_dirty_inode_budget(c, ui);
 	}
 
-	wait_for_stable_page(page);
-	return VM_FAULT_LOCKED;
+	unlock_page(page);
+	return 0;
 
 out_unlock:
 	unlock_page(page);
@@ -1544,7 +1536,6 @@ out_unlock:
 static const struct vm_operations_struct ubifs_file_vm_ops = {
 	.fault        = filemap_fault,
 	.page_mkwrite = ubifs_vm_page_mkwrite,
-	.remap_pages = generic_file_remap_pages,
 };
 
 static int ubifs_file_mmap(struct file *file, struct vm_area_struct *vma)
@@ -1571,10 +1562,12 @@ const struct address_space_operations ubifs_file_address_operations = {
 const struct inode_operations ubifs_file_inode_operations = {
 	.setattr     = ubifs_setattr,
 	.getattr     = ubifs_getattr,
+#ifdef CONFIG_UBIFS_FS_XATTR
 	.setxattr    = ubifs_setxattr,
 	.getxattr    = ubifs_getxattr,
 	.listxattr   = ubifs_listxattr,
 	.removexattr = ubifs_removexattr,
+#endif
 };
 
 const struct inode_operations ubifs_symlink_inode_operations = {

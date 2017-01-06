@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -64,10 +64,10 @@ static int ipa_nat_mmap(struct file *filp, struct vm_area_struct *vma)
 			result = -EINVAL;
 			goto bail;
 		}
-		IPADBG("map sz=0x%zx\n", nat_ctx->size);
+		IPADBG("map sz=0x%x\n", nat_ctx->size);
 		result =
 			dma_mmap_coherent(
-				 ipa_ctx->pdev, vma,
+				 NULL, vma,
 				 nat_ctx->vaddr, nat_ctx->dma_handle,
 				 nat_ctx->size);
 
@@ -79,15 +79,8 @@ static int ipa_nat_mmap(struct file *filp, struct vm_area_struct *vma)
 	} else {
 		IPADBG("Mapping shared(local) memory\n");
 		IPADBG("map sz=0x%lx\n", vsize);
-
-		if ((IPA_NAT_PHYS_MEM_SIZE == 0) ||
-				(vsize > IPA_NAT_PHYS_MEM_SIZE)) {
-			result = -EINVAL;
-			goto bail;
-		}
-		phys_addr = ipa_ctx->ipa_wrapper_base +
-			ipa_ctx->ctrl->ipa_reg_base_ofst +
-			IPA_SRAM_DIRECT_ACCESS_N_OFST(IPA_NAT_PHYS_MEM_OFFSET);
+		phys_addr = ipa_ctx->ipa_wrapper_base + IPA_REG_BASE_OFST +
+			IPA_SRAM_DIRECT_ACCESS_n_OFST(IPA_NAT_PHYS_MEM_OFFSET);
 
 		if (remap_pfn_range(
 			 vma, vma->vm_start,
@@ -114,20 +107,48 @@ static const struct file_operations ipa_nat_fops = {
 };
 
 /**
- * create_nat_device() - Create the NAT device
+ * allocate_nat_device() - Allocates memory for the NAT device
+ * @mem:	[in/out] memory parameters
  *
- * Called during ipa init to create nat device
+ * Called by NAT client driver to allocate memory for the NAT entries. Based on
+ * the request size either shared or system memory will be used.
  *
  * Returns:	0 on success, negative on failure
  */
-int create_nat_device(void)
+int allocate_nat_device(struct ipa_ioc_nat_alloc_mem *mem)
 {
 	struct ipa_nat_mem *nat_ctx = &(ipa_ctx->nat_mem);
+	int gfp_flags = GFP_KERNEL | __GFP_ZERO;
 	int result;
-	IPADBG("\n");
+
+	IPADBG("passed memory size %d\n", mem->size);
 
 	mutex_lock(&nat_ctx->lock);
-	nat_ctx->class = class_create(THIS_MODULE, NAT_DEV_NAME);
+	if (mem->size <= 0 || !strlen(mem->dev_name)
+			|| nat_ctx->is_dev_init == true) {
+		IPADBG("Invalid Parameters or device is already init\n");
+		result = -EPERM;
+		goto bail;
+	}
+
+	if (mem->size > IPA_NAT_PHYS_MEM_SIZE) {
+		IPADBG("Allocating system memory\n");
+		nat_ctx->is_sys_mem = true;
+		nat_ctx->vaddr =
+		   dma_alloc_coherent(NULL, mem->size, &nat_ctx->dma_handle,
+				       gfp_flags);
+		if (nat_ctx->vaddr == NULL) {
+			IPAERR("memory alloc failed\n");
+			result = -ENOMEM;
+			goto bail;
+		}
+		nat_ctx->size = mem->size;
+	} else {
+		IPADBG("using shared(local) memory\n");
+		nat_ctx->is_sys_mem = false;
+	}
+
+	nat_ctx->class = class_create(THIS_MODULE, mem->dev_name);
 	if (IS_ERR(nat_ctx->class)) {
 		IPAERR("unable to create the class\n");
 		result = -ENODEV;
@@ -136,7 +157,7 @@ int create_nat_device(void)
 	result = alloc_chrdev_region(&nat_ctx->dev_num,
 					0,
 					1,
-					NAT_DEV_NAME);
+					mem->dev_name);
 	if (result) {
 		IPAERR("alloc_chrdev_region err.\n");
 		result = -ENODEV;
@@ -145,7 +166,7 @@ int create_nat_device(void)
 
 	nat_ctx->dev =
 	   device_create(nat_ctx->class, NULL, nat_ctx->dev_num, nat_ctx,
-			"%s", NAT_DEV_NAME);
+			"%s", mem->dev_name);
 
 	if (IS_ERR(nat_ctx->dev)) {
 		IPAERR("device_create err:%ld\n", PTR_ERR(nat_ctx->dev));
@@ -162,12 +183,8 @@ int create_nat_device(void)
 		IPAERR("cdev_add err=%d\n", -result);
 		goto cdev_add_fail;
 	}
-	IPADBG("ipa nat dev added successful. major:%d minor:%d\n",
-			MAJOR(nat_ctx->dev_num),
-			MINOR(nat_ctx->dev_num));
-
-	nat_ctx->is_dev = true;
-	IPADBG("IPA NAT device created successfully\n");
+	nat_ctx->is_dev_init = true;
+	IPADBG("IPA NAT driver init successfully\n");
 	result = 0;
 	goto bail;
 
@@ -181,78 +198,12 @@ vaddr_alloc_fail:
 	if (nat_ctx->vaddr) {
 		IPADBG("Releasing system memory\n");
 		dma_free_coherent(
-			 ipa_ctx->pdev, nat_ctx->size,
+			 NULL, nat_ctx->size,
 			 nat_ctx->vaddr, nat_ctx->dma_handle);
 		nat_ctx->vaddr = NULL;
 		nat_ctx->dma_handle = 0;
 		nat_ctx->size = 0;
 	}
-
-bail:
-	mutex_unlock(&nat_ctx->lock);
-
-	return result;
-}
-
-/**
- * allocate_nat_device() - Allocates memory for the NAT device
- * @mem:	[in/out] memory parameters
- *
- * Called by NAT client driver to allocate memory for the NAT entries. Based on
- * the request size either shared or system memory will be used.
- *
- * Returns:	0 on success, negative on failure
- */
-int allocate_nat_device(struct ipa_ioc_nat_alloc_mem *mem)
-{
-	struct ipa_nat_mem *nat_ctx = &(ipa_ctx->nat_mem);
-	int gfp_flags = GFP_KERNEL | __GFP_ZERO;
-	int result;
-
-	IPADBG("passed memory size %zu\n", mem->size);
-
-	mutex_lock(&nat_ctx->lock);
-	if (strcmp(mem->dev_name, NAT_DEV_NAME)) {
-		IPAERR("Nat device name mismatch\n");
-		IPAERR("Expect: %s Recv: %s\n", NAT_DEV_NAME, mem->dev_name);
-		result = -EPERM;
-		goto bail;
-	}
-
-	if (nat_ctx->is_dev != true) {
-		IPAERR("Nat device not created successfully during boot up\n");
-		result = -EPERM;
-		goto bail;
-	}
-
-	if (mem->size <= 0 ||
-			nat_ctx->is_dev_init == true) {
-		IPAERR("Invalid Parameters or device is already init\n");
-		result = -EPERM;
-		goto bail;
-	}
-
-	if (mem->size > IPA_NAT_PHYS_MEM_SIZE) {
-		IPADBG("Allocating system memory\n");
-		nat_ctx->is_sys_mem = true;
-		nat_ctx->vaddr =
-		   dma_alloc_coherent(ipa_ctx->pdev, mem->size,
-				   &nat_ctx->dma_handle, gfp_flags);
-		if (nat_ctx->vaddr == NULL) {
-			IPAERR("memory alloc failed\n");
-			result = -ENOMEM;
-			goto bail;
-		}
-		nat_ctx->size = mem->size;
-	} else {
-		IPADBG("using shared(local) memory\n");
-		nat_ctx->is_sys_mem = false;
-	}
-
-	nat_ctx->is_dev_init = true;
-	IPADBG("IPA NAT dev init successfully\n");
-	result = 0;
-
 bail:
 	mutex_unlock(&nat_ctx->lock);
 
@@ -274,24 +225,13 @@ int ipa_nat_init_cmd(struct ipa_ioc_v4_nat_init *init)
 	struct ipa_ip_v4_nat_init *cmd;
 	u16 size = sizeof(struct ipa_ip_v4_nat_init);
 	int result;
-	u32 offset = 0;
 
 	IPADBG("\n");
-	if (init->table_entries == 0) {
+	if (init->tbl_index < 0 || init->table_entries <= 0) {
 		IPADBG("Table index or entries is zero\n");
 		result = -EPERM;
 		goto bail;
 	}
-
-	if (init->ipv4_rules_offset >= ipa_ctx->nat_mem.size ||
-	    init->index_offset >= ipa_ctx->nat_mem.size ||
-	    init->expn_rules_offset >= ipa_ctx->nat_mem.size ||
-	    init->index_expn_offset >= ipa_ctx->nat_mem.size) {
-		IPAERR("Table rules offset are not valid\n");
-		result = -EPERM;
-		goto bail;
-	}
-
 	cmd = kmalloc(size, GFP_KERNEL);
 	if (!cmd) {
 		IPAERR("Failed to alloc immediate command object\n");
@@ -305,26 +245,6 @@ int ipa_nat_init_cmd(struct ipa_ioc_v4_nat_init *init)
 		cmd->index_table_addr_type = IPA_NAT_SYSTEM_MEMORY;
 		cmd->index_table_expansion_addr_type = IPA_NAT_SYSTEM_MEMORY;
 
-		offset = UINT_MAX - ipa_ctx->nat_mem.dma_handle;
-
-		if ((init->ipv4_rules_offset > offset) ||
-			(init->expn_rules_offset > offset) ||
-			(init->index_offset > offset) ||
-			(init->index_expn_offset > offset)) {
-			IPAERR("Failed due to integer overflow\n");
-			IPAERR("nat.mem.dma_handle: 0x%pa\n",
-				&ipa_ctx->nat_mem.dma_handle);
-			IPAERR("ipv4_rules_offset: 0x%x\n",
-				init->ipv4_rules_offset);
-			IPAERR("expn_rules_offset: 0x%x\n",
-				init->expn_rules_offset);
-			IPAERR("index_offset: 0x%x\n",
-				init->index_offset);
-			IPAERR("index_expn_offset: 0x%x\n",
-				init->index_expn_offset);
-			result = -EPERM;
-			goto free_cmd;
-		}
 		cmd->ipv4_rules_addr =
 			ipa_ctx->nat_mem.dma_handle + init->ipv4_rules_offset;
 		IPADBG("ipv4_rules_offset:0x%x\n", init->ipv4_rules_offset);
@@ -347,17 +267,16 @@ int ipa_nat_init_cmd(struct ipa_ioc_v4_nat_init *init)
 		cmd->index_table_addr_type = IPA_NAT_SHARED_MEMORY;
 		cmd->index_table_expansion_addr_type = IPA_NAT_SHARED_MEMORY;
 
-		cmd->ipv4_rules_addr = init->ipv4_rules_offset +
-				IPA_RAM_NAT_OFST;
+		cmd->ipv4_rules_addr =
+			init->ipv4_rules_offset + IPA_RAM_NAT_OFST;
 
-		cmd->ipv4_expansion_rules_addr = init->expn_rules_offset +
-				IPA_RAM_NAT_OFST;
+		cmd->ipv4_expansion_rules_addr =
+			init->expn_rules_offset + IPA_RAM_NAT_OFST;
 
-		cmd->index_table_addr = init->index_offset  +
-				IPA_RAM_NAT_OFST;
+		cmd->index_table_addr = init->index_offset + IPA_RAM_NAT_OFST;
 
-		cmd->index_table_expansion_addr = init->index_expn_offset +
-				IPA_RAM_NAT_OFST;
+		cmd->index_table_expansion_addr =
+			init->index_expn_offset + IPA_RAM_NAT_OFST;
 	}
 	cmd->table_index = init->tbl_index;
 	IPADBG("Table index:0x%x\n", cmd->table_index);
@@ -371,7 +290,7 @@ int ipa_nat_init_cmd(struct ipa_ioc_v4_nat_init *init)
 	desc.type = IPA_IMM_CMD_DESC;
 	desc.callback = NULL;
 	desc.user1 = NULL;
-	desc.user2 = 0;
+	desc.user2 = NULL;
 	desc.pyld = (void *)cmd;
 	desc.len = size;
 	IPADBG("posting v4 init command\n");
@@ -440,7 +359,7 @@ int ipa_nat_dma_cmd(struct ipa_ioc_nat_dma_cmd *dma)
 		goto bail;
 	}
 	size = sizeof(struct ipa_desc) * dma->entries;
-	desc = kzalloc(size, GFP_KERNEL);
+	desc = kmalloc(size, GFP_KERNEL);
 	if (desc == NULL) {
 		IPAERR("Failed to alloc memory\n");
 		ret = -ENOMEM;
@@ -463,7 +382,7 @@ int ipa_nat_dma_cmd(struct ipa_ioc_nat_dma_cmd *dma)
 		desc[cnt].callback = NULL;
 		desc[cnt].user1 = NULL;
 
-		desc[cnt].user2 = 0;
+		desc[cnt].user2 = NULL;
 
 		desc[cnt].len = sizeof(struct ipa_nat_dma);
 		desc[cnt].pyld = (void *)&cmd[cnt];
@@ -494,13 +413,17 @@ void ipa_nat_free_mem_and_device(struct ipa_nat_mem *nat_ctx)
 	if (nat_ctx->is_sys_mem) {
 		IPADBG("freeing the dma memory\n");
 		dma_free_coherent(
-			 ipa_ctx->pdev, nat_ctx->size,
+			 NULL, nat_ctx->size,
 			 nat_ctx->vaddr, nat_ctx->dma_handle);
 		nat_ctx->size = 0;
 		nat_ctx->vaddr = NULL;
 	}
 	nat_ctx->is_mapped = false;
 	nat_ctx->is_sys_mem = false;
+	cdev_del(&nat_ctx->cdev);
+	device_destroy(nat_ctx->class, nat_ctx->dev_num);
+	unregister_chrdev_region(nat_ctx->dev_num, 1);
+	class_destroy(nat_ctx->class);
 	nat_ctx->is_dev_init = false;
 
 	mutex_unlock(&nat_ctx->lock);
@@ -526,7 +449,7 @@ int ipa_nat_del_cmd(struct ipa_ioc_v4_nat_del *del)
 	int result;
 
 	IPADBG("\n");
-	if (del->public_ip_addr == 0) {
+	if (del->table_index < 0 || del->public_ip_addr == 0) {
 		IPADBG("Bad Parameter\n");
 		result = -EPERM;
 		goto bail;
@@ -554,7 +477,7 @@ int ipa_nat_del_cmd(struct ipa_ioc_v4_nat_del *del)
 	desc.type = IPA_IMM_CMD_DESC;
 	desc.callback = NULL;
 	desc.user1 = NULL;
-	desc.user2 = 0;
+	desc.user2 = NULL;
 	desc.pyld = (void *)cmd;
 	desc.len = size;
 	if (ipa_send_cmd(1, &desc)) {
@@ -562,14 +485,6 @@ int ipa_nat_del_cmd(struct ipa_ioc_v4_nat_del *del)
 		result = -EPERM;
 		goto free_mem;
 	}
-
-	ipa_ctx->nat_mem.size_base_tables = 0;
-	ipa_ctx->nat_mem.size_expansion_tables = 0;
-	ipa_ctx->nat_mem.public_ip_addr = 0;
-	ipa_ctx->nat_mem.ipv4_rules_addr = 0;
-	ipa_ctx->nat_mem.ipv4_expansion_rules_addr = 0;
-	ipa_ctx->nat_mem.index_table_addr = 0;
-	ipa_ctx->nat_mem.index_table_expansion_addr = 0;
 
 	ipa_nat_free_mem_and_device(&ipa_ctx->nat_mem);
 	IPADBG("return\n");

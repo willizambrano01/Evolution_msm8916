@@ -37,12 +37,6 @@
 	__HEAD
 	.code32
 ENTRY(startup_32)
-	/*
-	 * 32bit entry is 0 and it is ABI so immutable!
-	 * If we come here directly from a bootloader,
-	 * kernel(text+data+bss+brk) ramdisk, zero_page, command line
-	 * all need to be under the 4G limit.
-	 */
 	cld
 	/*
 	 * Test KEEP_SEGMENTS flag to see if the bootloader is asking
@@ -52,7 +46,7 @@ ENTRY(startup_32)
 	jnz 1f
 
 	cli
-	movl	$(__BOOT_DS), %eax
+	movl	$(__KERNEL_DS), %eax
 	movl	%eax, %ds
 	movl	%eax, %es
 	movl	%eax, %ss
@@ -160,12 +154,6 @@ ENTRY(startup_32)
 	btsl	$_EFER_LME, %eax
 	wrmsr
 
-	/* After gdt is loaded */
-	xorl	%eax, %eax
-	lldt	%ax
-	movl    $0x20, %eax
-	ltr	%ax
-
 	/*
 	 * Setup for the jump to 64bit mode
 	 *
@@ -188,41 +176,39 @@ ENTRY(startup_32)
 	lret
 ENDPROC(startup_32)
 
+no_longmode:
+	/* This isn't an x86-64 CPU so hang */
+1:
+	hlt
+	jmp     1b
+
+#include "../../kernel/verify_cpu.S"
+
+	/*
+	 * Be careful here startup_64 needs to be at a predictable
+	 * address so I can export it in an ELF header.  Bootloaders
+	 * should look at the ELF header to find this address, as
+	 * it may change in the future.
+	 */
 	.code64
 	.org 0x200
 ENTRY(startup_64)
 	/*
-	 * 64bit entry is 0x200 and it is ABI so immutable!
 	 * We come here either from startup_32 or directly from a
-	 * 64bit bootloader.
-	 * If we come here from a bootloader, kernel(text+data+bss+brk),
-	 * ramdisk, zero_page, command line could be above 4G.
-	 * We depend on an identity mapped page table being provided
-	 * that maps our entire kernel(text+data+bss+brk), zero page
-	 * and command line.
+	 * 64bit bootloader.  If we come here from a bootloader we depend on
+	 * an identity mapped page table being provied that maps our
+	 * entire text+data+bss and hopefully all of memory.
 	 */
 #ifdef CONFIG_EFI_STUB
 	/*
-	 * The entry point for the PE/COFF executable is efi_pe_entry, so
-	 * only legacy boot loaders will execute this jmp.
+	 * The entry point for the PE/COFF executable is 0x210, so only
+	 * legacy boot loaders will execute this jmp.
 	 */
 	jmp	preferred_addr
 
-ENTRY(efi_pe_entry)
+	.org 0x210
 	mov	%rcx, %rdi
 	mov	%rdx, %rsi
-	pushq	%rdi
-	pushq	%rsi
-	call	make_boot_params
-	cmpq	$0,%rax
-	je	1f
-	mov	%rax, %rdx
-	leaq	startup_32(%rip), %rax
-	movl	%eax, BP_code32_start(%rdx)
-	popq	%rsi
-	popq	%rdi
-
-ENTRY(efi_stub_entry)
 	call	efi_main
 	movq	%rax,%rsi
 	cmpq	$0,%rax
@@ -232,7 +218,12 @@ ENTRY(efi_stub_entry)
 	hlt
 	jmp	1b
 2:
-	movl	BP_code32_start(%esi), %eax
+	call	3f
+3:
+	popq	%rax
+	subq	$3b, %rax
+	subq	BP_pref_address(%rsi), %rax
+	add	BP_code32_start(%esi), %eax
 	leaq	preferred_addr(%rax), %rax
 	jmp	*%rax
 
@@ -246,6 +237,9 @@ preferred_addr:
 	movl	%eax, %ss
 	movl	%eax, %fs
 	movl	%eax, %gs
+	lldt	%ax
+	movl    $0x20, %eax
+	ltr	%ax
 
 	/*
 	 * Compute the decompressed kernel start address.  It is where
@@ -344,15 +338,6 @@ relocated:
  * Jump to the decompressed kernel.
  */
 	jmp	*%rbp
-
-	.code32
-no_longmode:
-	/* This isn't an x86-64 CPU so hang */
-1:
-	hlt
-	jmp     1b
-
-#include "../../kernel/verify_cpu.S"
 
 	.data
 gdt:

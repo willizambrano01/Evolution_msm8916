@@ -80,7 +80,17 @@ void read_persistent_clock(struct timespec *ts)
 	}
 }
 
-#ifdef CONFIG_ARCH_USES_GETTIMEOFFSET
+void __init time_init(void)
+{
+	mach_sched_init(timer_interrupt);
+}
+
+#ifdef CONFIG_M68KCLASSIC
+
+u32 arch_gettimeoffset(void)
+{
+	return mach_gettimeoffset() * 1000;
+}
 
 static int __init rtc_init(void)
 {
@@ -90,14 +100,12 @@ static int __init rtc_init(void)
 		return -ENODEV;
 
 	pdev = platform_device_register_simple("rtc-generic", -1, NULL, 0);
-	return PTR_RET(pdev);
+	if (IS_ERR(pdev))
+		return PTR_ERR(pdev);
+
+	return 0;
 }
 
 module_init(rtc_init);
 
-#endif /* CONFIG_ARCH_USES_GETTIMEOFFSET */
-
-void __init time_init(void)
-{
-	mach_sched_init(timer_interrupt);
-}
+#endif /* CONFIG_M68KCLASSIC */

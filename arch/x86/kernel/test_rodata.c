@@ -12,7 +12,6 @@
 #include <linux/module.h>
 #include <asm/cacheflush.h>
 #include <asm/sections.h>
-#include <asm/asm.h>
 
 int rodata_test(void)
 {
@@ -43,7 +42,14 @@ int rodata_test(void)
 		".section .fixup,\"ax\"\n"
 		"2:	jmp 1b\n"
 		".previous\n"
-		_ASM_EXTABLE(0b,2b)
+		".section __ex_table,\"a\"\n"
+		"       .align 16\n"
+#ifdef CONFIG_X86_32
+		"	.long 0b,2b\n"
+#else
+		"	.quad 0b,2b\n"
+#endif
+		".previous"
 		: [rslt] "=r" (result)
 		: [rodata_test] "r" (&rodata_test_data), [zero] "r" (0UL)
 	);

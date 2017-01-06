@@ -3,7 +3,7 @@
  * FocalTech ft5x06 TouchScreen driver.
  *
  * Copyright (c) 2010  Focal tech Ltd.
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -65,11 +65,11 @@
 #define FT_REG_ID		0xA3
 #define FT_REG_PMODE		0xA5
 #define FT_REG_FW_VER		0xA6
-#define FT_REG_FW_VENDOR_ID	0xA8
 #define FT_REG_POINT_RATE	0x88
 #define FT_REG_THGROUP		0x80
 #define FT_REG_ECC		0xCC
 #define FT_REG_RESET_FW		0x07
+#define FT_REG_FW_MAJ_VER	0xB1
 #define FT_REG_FW_MIN_VER	0xB2
 #define FT_REG_FW_SUB_MIN_VER	0xB3
 
@@ -104,7 +104,6 @@
 #define FT5316_ID		0x0A
 #define FT5306I_ID		0x55
 #define FT6X06_ID		0x06
-#define FT6X36_ID		0x36
 
 #define FT_UPGRADE_AA		0xAA
 #define FT_UPGRADE_55		0x55
@@ -116,24 +115,11 @@
 #define FT_FW_FILE_MAJ_VER(x)	((x)->data[(x)->size - 2])
 #define FT_FW_FILE_MIN_VER(x)	0
 #define FT_FW_FILE_SUB_MIN_VER(x) 0
-#define FT_FW_FILE_VENDOR_ID(x)	((x)->data[(x)->size - 1])
 
-#define FT_FW_FILE_MAJ_VER_FT6X36(x)	((x)->data[0x10a])
-#define FT_FW_FILE_VENDOR_ID_FT6X36(x)	((x)->data[0x108])
-
-/**
-* Application data verification will be run before upgrade flow.
-* Firmware image stores some flags with negative and positive value
-* in corresponding addresses, we need pick them out do some check to
-* make sure the application data is valid.
-*/
-#define FT_FW_CHECK(x, ts_data) \
-	(ts_data->family_id == FT6X36_ID ? \
-	(((x)->data[0x104] ^ (x)->data[0x105]) == 0xFF \
-	&& ((x)->data[0x106] ^ (x)->data[0x107]) == 0xFF) : \
+#define FT_FW_CHECK(x)		\
 	(((x)->data[(x)->size - 8] ^ (x)->data[(x)->size - 6]) == 0xFF \
-	&& ((x)->data[(x)->size - 7] ^ (x)->data[(x)->size - 5]) == 0xFF \
-	&& ((x)->data[(x)->size - 3] ^ (x)->data[(x)->size - 4]) == 0xFF))
+	&& (((x)->data[(x)->size - 7] ^ (x)->data[(x)->size - 5]) == 0xFF \
+	&& (((x)->data[(x)->size - 3] ^ (x)->data[(x)->size - 4]) == 0xFF)))
 
 #define FT_MAX_TRIES		5
 #define FT_RETRY_DLY		20
@@ -167,10 +153,6 @@
 #define FT_MAGIC_BLOADER_LZ4	0x6ffa
 #define FT_MAGIC_BLOADER_GZF_30	0x7ff4
 #define FT_MAGIC_BLOADER_GZF	0x7bf4
-
-#define PINCTRL_STATE_ACTIVE	"pmx_ts_active"
-#define PINCTRL_STATE_SUSPEND	"pmx_ts_suspend"
-#define PINCTRL_STATE_RELEASE	"pmx_ts_release"
 
 enum {
 	FT_BLOADER_VERSION_LZ4 = 0,
@@ -219,16 +201,11 @@ struct ft5x06_ts_data {
 	u8 *tch_data;
 	u32 tch_data_len;
 	u8 fw_ver[3];
-	u8 fw_vendor_id;
 #if defined(CONFIG_FB)
 	struct notifier_block fb_notif;
 #elif defined(CONFIG_HAS_EARLYSUSPEND)
 	struct early_suspend early_suspend;
 #endif
-	struct pinctrl *ts_pinctrl;
-	struct pinctrl_state *pinctrl_state_active;
-	struct pinctrl_state *pinctrl_state_suspend;
-	struct pinctrl_state *pinctrl_state_release;
 };
 
 static int ft5x06_i2c_read(struct i2c_client *client, char *writebuf,
@@ -306,25 +283,13 @@ static int ft5x0x_read_reg(struct i2c_client *client, u8 addr, u8 *val)
 	return ft5x06_i2c_read(client, &addr, 1, val, 1);
 }
 
-static void ft5x06_update_fw_vendor_id(struct ft5x06_ts_data *data)
-{
-	struct i2c_client *client = data->client;
-	u8 reg_addr;
-	int err;
-
-	reg_addr = FT_REG_FW_VENDOR_ID;
-	err = ft5x06_i2c_read(client, &reg_addr, 1, &data->fw_vendor_id, 1);
-	if (err < 0)
-		dev_err(&client->dev, "fw vendor id read failed");
-}
-
 static void ft5x06_update_fw_ver(struct ft5x06_ts_data *data)
 {
 	struct i2c_client *client = data->client;
 	u8 reg_addr;
 	int err;
 
-	reg_addr = FT_REG_FW_VER;
+	reg_addr = FT_REG_FW_MAJ_VER;
 	err = ft5x06_i2c_read(client, &reg_addr, 1, &data->fw_ver[0], 1);
 	if (err < 0)
 		dev_err(&client->dev, "fw major version read failed");
@@ -405,80 +370,6 @@ static irqreturn_t ft5x06_ts_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int ft5x06_gpio_configure(struct ft5x06_ts_data *data, bool on)
-{
-	int err = 0;
-
-	if (on) {
-		if (gpio_is_valid(data->pdata->irq_gpio)) {
-			err = gpio_request(data->pdata->irq_gpio,
-						"ft5x06_irq_gpio");
-			if (err) {
-				dev_err(&data->client->dev,
-					"irq gpio request failed");
-				goto err_irq_gpio_req;
-			}
-
-			err = gpio_direction_input(data->pdata->irq_gpio);
-			if (err) {
-				dev_err(&data->client->dev,
-					"set_direction for irq gpio failed\n");
-				goto err_irq_gpio_dir;
-			}
-		}
-
-		if (gpio_is_valid(data->pdata->reset_gpio)) {
-			err = gpio_request(data->pdata->reset_gpio,
-						"ft5x06_reset_gpio");
-			if (err) {
-				dev_err(&data->client->dev,
-					"reset gpio request failed");
-				goto err_irq_gpio_dir;
-			}
-
-			err = gpio_direction_output(data->pdata->reset_gpio, 0);
-			if (err) {
-				dev_err(&data->client->dev,
-				"set_direction for reset gpio failed\n");
-				goto err_reset_gpio_dir;
-			}
-			msleep(data->pdata->hard_rst_dly);
-			gpio_set_value_cansleep(data->pdata->reset_gpio, 1);
-		}
-
-		return 0;
-	} else {
-		if (gpio_is_valid(data->pdata->irq_gpio))
-			gpio_free(data->pdata->irq_gpio);
-		if (gpio_is_valid(data->pdata->reset_gpio)) {
-			/*
-			 * This is intended to save leakage current
-			 * only. Even if the call(gpio_direction_input)
-			 * fails, only leakage current will be more but
-			 * functionality will not be affected.
-			 */
-			err = gpio_direction_input(data->pdata->reset_gpio);
-			if (err) {
-				dev_err(&data->client->dev,
-					"unable to set direction for gpio "
-					"[%d]\n", data->pdata->irq_gpio);
-			}
-			gpio_free(data->pdata->reset_gpio);
-		}
-
-		return 0;
-	}
-
-err_reset_gpio_dir:
-	if (gpio_is_valid(data->pdata->reset_gpio))
-		gpio_free(data->pdata->reset_gpio);
-err_irq_gpio_dir:
-	if (gpio_is_valid(data->pdata->irq_gpio))
-		gpio_free(data->pdata->irq_gpio);
-err_irq_gpio_req:
-	return err;
-}
-
 static int ft5x06_power_on(struct ft5x06_ts_data *data, bool on)
 {
 	int rc;
@@ -514,11 +405,7 @@ power_off:
 	if (rc) {
 		dev_err(&data->client->dev,
 			"Regulator vcc_i2c disable failed rc=%d\n", rc);
-		rc = regulator_enable(data->vdd);
-		if (rc) {
-			dev_err(&data->client->dev,
-				"Regulator vdd enable failed rc=%d\n", rc);
-		}
+		regulator_enable(data->vdd);
 	}
 
 	return rc;
@@ -591,60 +478,6 @@ pwr_deinit:
 	return 0;
 }
 
-static int ft5x06_ts_pinctrl_init(struct ft5x06_ts_data *ft5x06_data)
-{
-	int retval;
-
-	/* Get pinctrl if target uses pinctrl */
-	ft5x06_data->ts_pinctrl = devm_pinctrl_get(&(ft5x06_data->client->dev));
-	if (IS_ERR_OR_NULL(ft5x06_data->ts_pinctrl)) {
-		retval = PTR_ERR(ft5x06_data->ts_pinctrl);
-		dev_dbg(&ft5x06_data->client->dev,
-			"Target does not use pinctrl %d\n", retval);
-		goto err_pinctrl_get;
-	}
-
-	ft5x06_data->pinctrl_state_active
-		= pinctrl_lookup_state(ft5x06_data->ts_pinctrl,
-				PINCTRL_STATE_ACTIVE);
-	if (IS_ERR_OR_NULL(ft5x06_data->pinctrl_state_active)) {
-		retval = PTR_ERR(ft5x06_data->pinctrl_state_active);
-		dev_err(&ft5x06_data->client->dev,
-			"Can not lookup %s pinstate %d\n",
-			PINCTRL_STATE_ACTIVE, retval);
-		goto err_pinctrl_lookup;
-	}
-
-	ft5x06_data->pinctrl_state_suspend
-		= pinctrl_lookup_state(ft5x06_data->ts_pinctrl,
-			PINCTRL_STATE_SUSPEND);
-	if (IS_ERR_OR_NULL(ft5x06_data->pinctrl_state_suspend)) {
-		retval = PTR_ERR(ft5x06_data->pinctrl_state_suspend);
-		dev_err(&ft5x06_data->client->dev,
-			"Can not lookup %s pinstate %d\n",
-			PINCTRL_STATE_SUSPEND, retval);
-		goto err_pinctrl_lookup;
-	}
-
-	ft5x06_data->pinctrl_state_release
-		= pinctrl_lookup_state(ft5x06_data->ts_pinctrl,
-			PINCTRL_STATE_RELEASE);
-	if (IS_ERR_OR_NULL(ft5x06_data->pinctrl_state_release)) {
-		retval = PTR_ERR(ft5x06_data->pinctrl_state_release);
-		dev_dbg(&ft5x06_data->client->dev,
-			"Can not lookup %s pinstate %d\n",
-			PINCTRL_STATE_RELEASE, retval);
-	}
-
-	return 0;
-
-err_pinctrl_lookup:
-	devm_pinctrl_put(ft5x06_data->ts_pinctrl);
-err_pinctrl_get:
-	ft5x06_data->ts_pinctrl = NULL;
-	return retval;
-}
-
 #ifdef CONFIG_PM
 static int ft5x06_ts_suspend(struct device *dev)
 {
@@ -692,40 +525,10 @@ static int ft5x06_ts_suspend(struct device *dev)
 		}
 	}
 
-	if (data->ts_pinctrl) {
-		err = pinctrl_select_state(data->ts_pinctrl,
-					data->pinctrl_state_suspend);
-		if (err < 0)
-			dev_err(dev, "Cannot get suspend pinctrl state\n");
-	}
-
-	err = ft5x06_gpio_configure(data, false);
-	if (err < 0) {
-		dev_err(&data->client->dev,
-			"failed to put gpios in suspend state\n");
-		goto gpio_configure_fail;
-	}
-
 	data->suspended = true;
 
 	return 0;
 
-gpio_configure_fail:
-	if (data->ts_pinctrl) {
-		err = pinctrl_select_state(data->ts_pinctrl,
-					data->pinctrl_state_active);
-		if (err < 0)
-			dev_err(dev, "Cannot get active pinctrl state\n");
-	}
-	if (data->pdata->power_on) {
-		err = data->pdata->power_on(true);
-		if (err)
-			dev_err(dev, "power on failed");
-	} else {
-		err = ft5x06_power_on(data, true);
-		if (err)
-			dev_err(dev, "power on failed");
-	}
 pwr_off_fail:
 	if (gpio_is_valid(data->pdata->reset_gpio)) {
 		gpio_set_value_cansleep(data->pdata->reset_gpio, 0);
@@ -760,20 +563,6 @@ static int ft5x06_ts_resume(struct device *dev)
 		}
 	}
 
-	if (data->ts_pinctrl) {
-		err = pinctrl_select_state(data->ts_pinctrl,
-				data->pinctrl_state_active);
-		if (err < 0)
-			dev_err(dev, "Cannot get active pinctrl state\n");
-	}
-
-	err = ft5x06_gpio_configure(data, true);
-	if (err < 0) {
-		dev_err(&data->client->dev,
-			"failed to put gpios in resue state\n");
-		goto err_gpio_configuration;
-	}
-
 	if (gpio_is_valid(data->pdata->reset_gpio)) {
 		gpio_set_value_cansleep(data->pdata->reset_gpio, 0);
 		msleep(data->pdata->hard_rst_dly);
@@ -787,45 +576,7 @@ static int ft5x06_ts_resume(struct device *dev)
 	data->suspended = false;
 
 	return 0;
-
-err_gpio_configuration:
-	if (data->ts_pinctrl) {
-		err = pinctrl_select_state(data->ts_pinctrl,
-					data->pinctrl_state_suspend);
-		if (err < 0)
-			dev_err(dev, "Cannot get suspend pinctrl state\n");
-	}
-	if (data->pdata->power_on) {
-		err = data->pdata->power_on(false);
-		if (err)
-			dev_err(dev, "power off failed");
-	} else {
-		err = ft5x06_power_on(data, false);
-		if (err)
-			dev_err(dev, "power off failed");
-	}
-	return err;
 }
-
-static const struct dev_pm_ops ft5x06_ts_pm_ops = {
-#if (!defined(CONFIG_FB) && !defined(CONFIG_HAS_EARLYSUSPEND))
-	.suspend = ft5x06_ts_suspend,
-	.resume = ft5x06_ts_resume,
-#endif
-};
-
-#else
-static int ft5x06_ts_suspend(struct device *dev)
-{
-	return 0;
-}
-
-static int ft5x06_ts_resume(struct device *dev)
-{
-	return 0;
-}
-
-#endif
 
 #if defined(CONFIG_FB)
 static int fb_notifier_callback(struct notifier_block *self,
@@ -865,6 +616,14 @@ static void ft5x06_ts_late_resume(struct early_suspend *handler)
 
 	ft5x06_ts_resume(&data->client->dev);
 }
+#endif
+
+static const struct dev_pm_ops ft5x06_ts_pm_ops = {
+#if (!defined(CONFIG_FB) && !defined(CONFIG_HAS_EARLYSUSPEND))
+	.suspend = ft5x06_ts_suspend,
+	.resume = ft5x06_ts_resume,
+#endif
+};
 #endif
 
 static int ft5x06_auto_cal(struct i2c_client *client)
@@ -926,8 +685,7 @@ static int ft5x06_fw_upgrade_start(struct i2c_client *client,
 	for (i = 0, j = 0; i < FT_UPGRADE_LOOP; i++) {
 		msleep(FT_EARSE_DLY_MS);
 		/* reset - write 0xaa and 0x55 to reset register */
-		if (ts_data->family_id == FT6X06_ID
-			|| ts_data->family_id == FT6X36_ID)
+		if (ts_data->family_id == FT6X06_ID)
 			reset_reg = FT_RST_CMD_REG2;
 		else
 			reset_reg = FT_RST_CMD_REG1;
@@ -1116,13 +874,8 @@ static int ft5x06_fw_upgrade(struct device *dev, bool force)
 	struct ft5x06_ts_data *data = dev_get_drvdata(dev);
 	const struct firmware *fw = NULL;
 	int rc;
-	u8 fw_file_maj, fw_file_min, fw_file_sub_min, fw_file_vendor_id;
+	u8 fw_file_maj, fw_file_min, fw_file_sub_min;
 	bool fw_upgrade = false;
-
-	if (data->suspended) {
-		dev_err(dev, "Device is in suspend state: Exit FW upgrade\n");
-		return -EBUSY;
-	}
 
 	rc = request_firmware(&fw, data->fw_name, dev);
 	if (rc < 0) {
@@ -1132,18 +885,12 @@ static int ft5x06_fw_upgrade(struct device *dev, bool force)
 	}
 
 	if (fw->size < FT_FW_MIN_SIZE || fw->size > FT_FW_MAX_SIZE) {
-		dev_err(dev, "Invalid firmware size (%zu)\n", fw->size);
+		dev_err(dev, "Invalid firmware size (%d)\n", fw->size);
 		rc = -EIO;
 		goto rel_fw;
 	}
 
-	if (data->family_id == FT6X36_ID) {
-		fw_file_maj = FT_FW_FILE_MAJ_VER_FT6X36(fw);
-		fw_file_vendor_id = FT_FW_FILE_VENDOR_ID_FT6X36(fw);
-	} else {
-		fw_file_maj = FT_FW_FILE_MAJ_VER(fw);
-		fw_file_vendor_id = FT_FW_FILE_VENDOR_ID(fw);
-	}
+	fw_file_maj = FT_FW_FILE_MAJ_VER(fw);
 	fw_file_min = FT_FW_FILE_MIN_VER(fw);
 	fw_file_sub_min = FT_FW_FILE_SUB_MIN_VER(fw);
 
@@ -1152,11 +899,17 @@ static int ft5x06_fw_upgrade(struct device *dev, bool force)
 	dev_info(dev, "New firmware: %d.%d.%d", fw_file_maj,
 				fw_file_min, fw_file_sub_min);
 
-	if (force)
+	if (force) {
 		fw_upgrade = true;
-	else if ((data->fw_ver[0] < fw_file_maj) &&
-		data->fw_vendor_id == fw_file_vendor_id)
-		fw_upgrade = true;
+	} else if (data->fw_ver[0] == fw_file_maj) {
+			if (data->fw_ver[1] < fw_file_min)
+				fw_upgrade = true;
+			else if (data->fw_ver[2] < fw_file_sub_min)
+				fw_upgrade = true;
+			else
+				dev_info(dev, "No need to upgrade\n");
+	} else
+		dev_info(dev, "Firmware versions do not match\n");
 
 	if (!fw_upgrade) {
 		dev_info(dev, "Exiting fw upgrade...\n");
@@ -1165,7 +918,7 @@ static int ft5x06_fw_upgrade(struct device *dev, bool force)
 	}
 
 	/* start firmware upgrade */
-	if (FT_FW_CHECK(fw, data)) {
+	if (FT_FW_CHECK(fw)) {
 		rc = ft5x06_fw_upgrade_start(data->client, fw->data, fw->size);
 		if (rc < 0)
 			dev_err(dev, "update failed (%d). try later...\n", rc);
@@ -1674,7 +1427,7 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 	data->tch_data_len = FT_TCH_LEN(pdata->num_max_touches);
 	data->tch_data = devm_kzalloc(&client->dev,
 				data->tch_data_len, GFP_KERNEL);
-	if (!data->tch_data) {
+	if (!data) {
 		dev_err(&client->dev, "Not enough memory\n");
 		return -ENOMEM;
 	}
@@ -1701,7 +1454,7 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 	__set_bit(BTN_TOUCH, input_dev->keybit);
 	__set_bit(INPUT_PROP_DIRECT, input_dev->propbit);
 
-	input_mt_init_slots(input_dev, pdata->num_max_touches, 0);
+	input_mt_init_slots(input_dev, pdata->num_max_touches);
 	input_set_abs_params(input_dev, ABS_MT_POSITION_X, pdata->x_min,
 			     pdata->x_max, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_POSITION_Y, pdata->y_min,
@@ -1741,26 +1494,35 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 		}
 	}
 
-	err = ft5x06_ts_pinctrl_init(data);
-	if (!err && data->ts_pinctrl) {
-		/*
-		 * Pinctrl handle is optional. If pinctrl handle is found
-		 * let pins to be configured in active state. If not
-		 * found continue further without error.
-		 */
-		err = pinctrl_select_state(data->ts_pinctrl,
-					data->pinctrl_state_active);
-		if (err < 0) {
+	if (gpio_is_valid(pdata->irq_gpio)) {
+		err = gpio_request(pdata->irq_gpio, "ft5x06_irq_gpio");
+		if (err) {
+			dev_err(&client->dev, "irq gpio request failed");
+			goto pwr_off;
+		}
+		err = gpio_direction_input(pdata->irq_gpio);
+		if (err) {
 			dev_err(&client->dev,
-				"failed to select pin to active state");
+				"set_direction for irq gpio failed\n");
+			goto free_irq_gpio;
 		}
 	}
 
-	err = ft5x06_gpio_configure(data, true);
-	if (err < 0) {
-		dev_err(&client->dev,
-			"Failed to configure the gpios\n");
-		goto err_gpio_req;
+	if (gpio_is_valid(pdata->reset_gpio)) {
+		err = gpio_request(pdata->reset_gpio, "ft5x06_reset_gpio");
+		if (err) {
+			dev_err(&client->dev, "reset gpio request failed");
+			goto free_irq_gpio;
+		}
+
+		err = gpio_direction_output(pdata->reset_gpio, 0);
+		if (err) {
+			dev_err(&client->dev,
+				"set_direction for reset gpio failed\n");
+			goto free_reset_gpio;
+		}
+		msleep(data->pdata->hard_rst_dly);
+		gpio_set_value_cansleep(data->pdata->reset_gpio, 1);
 	}
 
 	/* make sure CTP already finish startup process */
@@ -1771,14 +1533,14 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 	err = ft5x06_i2c_read(client, &reg_addr, 1, &reg_value, 1);
 	if (err < 0) {
 		dev_err(&client->dev, "version read failed");
-		goto free_gpio;
+		goto free_reset_gpio;
 	}
 
 	dev_info(&client->dev, "Device ID = 0x%x\n", reg_value);
 
 	if ((pdata->family_id != reg_value) && (!pdata->ignore_id_check)) {
 		dev_err(&client->dev, "%s:Unsupported controller\n", __func__);
-		goto free_gpio;
+		goto free_reset_gpio;
 	}
 
 	data->family_id = pdata->family_id;
@@ -1789,7 +1551,7 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 				client->dev.driver->name, data);
 	if (err) {
 		dev_err(&client->dev, "request irq failed\n");
-		goto free_gpio;
+		goto free_reset_gpio;
 	}
 
 	err = device_create_file(&client->dev, &dev_attr_fw_name);
@@ -1872,7 +1634,6 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 	dev_dbg(&client->dev, "touch threshold = %d\n", reg_value * 4);
 
 	ft5x06_update_fw_ver(data);
-	ft5x06_update_fw_vendor_id(data);
 
 	FT_STORE_TS_INFO(data->ts_info, data->family_id, data->pdata->name,
 			data->pdata->num_max_touches, data->pdata->group_id,
@@ -1908,23 +1669,13 @@ free_fw_name_sys:
 	device_remove_file(&client->dev, &dev_attr_fw_name);
 irq_free:
 	free_irq(client->irq, data);
-free_gpio:
+free_reset_gpio:
 	if (gpio_is_valid(pdata->reset_gpio))
 		gpio_free(pdata->reset_gpio);
+free_irq_gpio:
 	if (gpio_is_valid(pdata->irq_gpio))
 		gpio_free(pdata->irq_gpio);
-err_gpio_req:
-	if (data->ts_pinctrl) {
-		if (IS_ERR_OR_NULL(data->pinctrl_state_release)) {
-			devm_pinctrl_put(data->ts_pinctrl);
-			data->ts_pinctrl = NULL;
-		} else {
-			err = pinctrl_select_state(data->ts_pinctrl,
-					data->pinctrl_state_release);
-			if (err)
-				pr_err("failed to select relase pinctrl state\n");
-		}
-	}
+pwr_off:
 	if (pdata->power_on)
 		pdata->power_on(false);
 	else
@@ -1942,10 +1693,9 @@ free_inputdev:
 	return err;
 }
 
-static int ft5x06_ts_remove(struct i2c_client *client)
+static int __devexit ft5x06_ts_remove(struct i2c_client *client)
 {
 	struct ft5x06_ts_data *data = i2c_get_clientdata(client);
-	int retval;
 
 	debugfs_remove_recursive(data->dir);
 	device_remove_file(&client->dev, &dev_attr_force_update_fw);
@@ -1965,18 +1715,6 @@ static int ft5x06_ts_remove(struct i2c_client *client)
 
 	if (gpio_is_valid(data->pdata->irq_gpio))
 		gpio_free(data->pdata->irq_gpio);
-
-	if (data->ts_pinctrl) {
-		if (IS_ERR_OR_NULL(data->pinctrl_state_release)) {
-			devm_pinctrl_put(data->ts_pinctrl);
-			data->ts_pinctrl = NULL;
-		} else {
-			retval = pinctrl_select_state(data->ts_pinctrl,
-					data->pinctrl_state_release);
-			if (retval < 0)
-				pr_err("failed to select release pinctrl state\n");
-		}
-	}
 
 	if (data->pdata->power_on)
 		data->pdata->power_on(false);
@@ -2011,7 +1749,7 @@ static struct of_device_id ft5x06_match_table[] = {
 
 static struct i2c_driver ft5x06_ts_driver = {
 	.probe = ft5x06_ts_probe,
-	.remove = ft5x06_ts_remove,
+	.remove = __devexit_p(ft5x06_ts_remove),
 	.driver = {
 		   .name = "ft5x06_ts",
 		   .owner = THIS_MODULE,

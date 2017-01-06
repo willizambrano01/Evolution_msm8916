@@ -10,6 +10,13 @@ config SENSORS_LIS3LV02D
 	select INPUT_POLLDEV
 	default n
 
+config SENSORS_L3G4200D
+        tristate "L3G4200D Gyroscope"
+        default n
+        depends on I2C
+        help
+          Support for the L3G4200D driver
+
 config AD525X_DPOT
 	tristate "Analog Devices Digital Potentiometers"
 	depends on (I2C || SPI) && SYSFS
@@ -60,6 +67,15 @@ config ATMEL_PWM
 	  purposes including software controlled power-efficient backlights
 	  on LCD displays, motor control, and waveform generation.
 
+config AB8500_PWM
+	bool "AB8500 PWM support"
+	depends on AB8500_CORE && ARCH_U8500
+	select HAVE_PWM
+	help
+	  This driver exports functions to enable/disble/config/free Pulse
+	  Width Modulation in the Analog Baseband Chip AB8500.
+	  It is used by led and backlight driver to control the intensity.
+
 config ATMEL_TCLIB
 	bool "Atmel AT32/AT91 Timer/Counter Library"
 	depends on (AVR32 || ARCH_AT91)
@@ -93,17 +109,9 @@ config ATMEL_TCB_CLKSRC_BLOCK
 	  TC can be used for other purposes, such as PWM generation and
 	  interval timing.
 
-config DUMMY_IRQ
-	tristate "Dummy IRQ handler"
-	default n
-	---help---
-	  This module accepts a single 'irq' parameter, which it should register for.
-	  The sole purpose of this module is to help with debugging of systems on
-	  which spurious IRQs would happen on disabled IRQ vector.
-
 config IBM_ASM
 	tristate "Device driver for IBM RSA service processor"
-	depends on X86 && PCI && INPUT
+	depends on X86 && PCI && INPUT && EXPERIMENTAL
 	---help---
 	  This option enables device driver support for in-band access to the
 	  IBM RSA (Condor) service processor in eServer xSeries systems.
@@ -135,7 +143,7 @@ config PHANTOM
 
 config INTEL_MID_PTI
 	tristate "Parallel Trace Interface for MIPI P1149.7 cJTAG standard"
-	depends on PCI && TTY
+	depends on PCI
 	default n
 	help
 	  The PTI (Parallel Trace Interface) driver directs
@@ -160,8 +168,8 @@ config SGI_IOC4
 	  Otherwise say N.
 
 config TIFM_CORE
-	tristate "TI Flash Media interface support"
-	depends on PCI
+	tristate "TI Flash Media interface support (EXPERIMENTAL)"
+	depends on EXPERIMENTAL && PCI
 	help
 	  If you want support for Texas Instruments(R) Flash Media adapters
 	  you should select this option and then also choose an appropriate
@@ -176,8 +184,8 @@ config TIFM_CORE
 	  be called tifm_core.
 
 config TIFM_7XX1
-	tristate "TI Flash Media PCI74xx/PCI76xx host adapter support"
-	depends on PCI && TIFM_CORE
+	tristate "TI Flash Media PCI74xx/PCI76xx host adapter support (EXPERIMENTAL)"
+	depends on PCI && TIFM_CORE && EXPERIMENTAL
 	default TIFM_CORE
 	help
 	  This option enables support for Texas Instruments(R) PCI74xx and
@@ -190,7 +198,7 @@ config TIFM_7XX1
 
 config ICS932S401
 	tristate "Integrated Circuits ICS932S401"
-	depends on I2C
+	depends on I2C && EXPERIMENTAL
 	help
 	  If you say yes here you get support for the Integrated Circuits
 	  ICS932S401 clock control chips.
@@ -200,7 +208,7 @@ config ICS932S401
 
 config ATMEL_SSC
 	tristate "Device driver for Atmel SSC peripheral"
-	depends on HAS_IOMEM
+	depends on AVR32 || ARCH_AT91
 	---help---
 	  This option enables device driver support for Atmel Synchronized
 	  Serial Communication peripheral (SSC).
@@ -313,16 +321,6 @@ config APDS9802ALS
 	  This driver can also be built as a module.  If so, the module
 	  will be called apds9802als.
 
-config APDS9930
-	tristate "Avago APDS9930 combined als and proximity sensors"
-	depends on I2C
-	help
-	  Say Y here if you want to build a driver for Avago APDS9930
-	  combined ambient light and proximity sensor chip.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called apds9950. If unsure, say N here.
-
 config ISL29003
 	tristate "Intersil ISL29003 ambient light sensor"
 	depends on I2C && SYSFS
@@ -342,6 +340,11 @@ config ISL29020
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called isl29020.
+
+config VIB_TIMED
+	bool "Timed Output based Vibrator"
+	depends on ANDROID_TIMED_OUTPUT
+	default n
 
 config MOT_UTAG
 	tristate  "Motorola Configuration read/write support "
@@ -402,6 +405,30 @@ config HMC6352
 	  This driver provides support for the Honeywell HMC6352 compass,
 	  providing configuration and heading data via sysfs.
 
+config SENSORS_AK8975
+	tristate "AK8975 compass support"
+	default n
+	depends on I2C
+	help
+	  If you say yes here you get support for Asahi Kasei's
+	  orientation sensor AK8975.
+
+config SENSORS_MSP430
+	tristate "MSP430 Sensor Processor"
+	default n
+	depends on I2C
+	help
+	  Say yes here if you wish to include the TI
+	  MSP430 Sensor processor driver.
+
+config SENSORS_AK8963
+       tristate "AK8963 compass support"
+       default n
+       depends on I2C
+       help
+         If you say yes here you get support for Asahi Kasei's
+         orientation sensor AK8963.
+
 config EP93XX_PWM
 	tristate "EP93xx PWM support"
 	depends on ARCH_EP93XX
@@ -417,7 +444,7 @@ config EP93XX_PWM
 
 config DS1682
 	tristate "Dallas DS1682 Total Elapsed Time Recorder with Alarm"
-	depends on I2C
+	depends on I2C && EXPERIMENTAL
 	help
 	  If you say yes here you get support for Dallas Semiconductor
 	  DS1682 Total Elapsed Time Recorder.
@@ -427,7 +454,7 @@ config DS1682
 
 config SPEAR13XX_PCIE_GADGET
 	bool "PCIe gadget support for SPEAr13XX platform"
-	depends on ARCH_SPEAR13XX && BROKEN
+	depends on ARCH_SPEAR13XX
 	default n
 	help
 	 This option enables gadget support for PCIe controller. If
@@ -451,7 +478,7 @@ config UID_STAT
 
 config VMWARE_BALLOON
 	tristate "VMware Balloon Driver"
-	depends on X86 && HYPERVISOR_GUEST
+	depends on X86
 	help
 	  This is VMware physical memory management driver which acts
 	  like a "balloon" that can be inflated to reclaim physical pages
@@ -476,32 +503,14 @@ config ARM_CHARLCD
 	  still useful.
 
 config BMP085
-	bool
-	depends on SYSFS
-
-config BMP085_I2C
-	tristate "BMP085 digital pressure sensor on I2C"
-	select BMP085
-	select REGMAP_I2C
+	tristate "BMP085 digital pressure sensor"
 	depends on I2C && SYSFS
 	help
-	  Say Y here if you want to support Bosch Sensortec's digital pressure
-	  sensor hooked to an I2C bus.
+	  If you say yes here you get support for the Bosch Sensortec
+	  BMP085 digital pressure sensor.
 
 	  To compile this driver as a module, choose M here: the
-	  module will be called bmp085-i2c.
-
-config BMP085_SPI
-	tristate "BMP085 digital pressure sensor on SPI"
-	select BMP085
-	select REGMAP_SPI
-	depends on SPI_MASTER && SYSFS
-	help
-	  Say Y here if you want to support Bosch Sensortec's digital pressure
-	  sensor hooked to an SPI bus.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called bmp085-spi.
+	  module will be called bmp085.
 
 config PCH_PHUB
 	tristate "Intel EG20T PCH/LAPIS Semicon IOH(ML7213/ML7223/ML7831) PHUB"
@@ -532,25 +541,21 @@ config USB_SWITCH_FSA9480
 	  stereo and mono audio, video, microphone and UART data to use
 	  a common connector port.
 
-config LATTICE_ECP3_CONFIG
-	tristate "Lattice ECP3 FPGA bitstream configuration via SPI"
-	depends on SPI && SYSFS
-	select FW_LOADER
-	default	n
+config MAX8997_MUIC
+	tristate "MAX8997 MUIC Support"
+	depends on MFD_MAX8997
 	help
-	  This option enables support for bitstream configuration (programming
-	  or loading) of the Lattice ECP3 FPGA family via SPI.
+	  If you say yes here you get support for the MUIC device of
+	  Maxim MAX8997 PMIC.
+	  The MAX8997 MUIC is a USB port accessory detector and switch.
 
-	  If unsure, say N.
-
-config SRAM
-	bool "Generic on-chip SRAM driver"
-	depends on HAS_IOMEM
-	select GENERIC_ALLOCATOR
-	help
-	  This driver allows you to declare a memory region to be managed by
-	  the genalloc API. It is supposed to be used for small on-chip SRAM
-	  areas found on many SoCs.
+config WL127X_RFKILL
+	tristate "Bluetooth power control driver for TI wl127x"
+	depends on RFKILL
+	default n
+	---help---
+	 Creates an rfkill entry in sysfs for power control of Bluetooth
+	 TI wl127x chips.
 
 config APANIC_MMC
 	bool "Android kernel panic diagnostics driver on mmc"
@@ -587,6 +592,20 @@ config TSIF
 	  To compile this driver as module, choose M here: the
 	  module will be called msm_tsif.
 
+config TSIF_CHRDEV
+	tristate "TSIF character device"
+	depends on TSIF
+	default n
+	---help---
+	  This driver uses low level TSIF interface. It provides character
+	  device useable from user space programs: one can read TSIF stream
+	  from this device.
+
+	  This driver may be used as example for TSIF API usage.
+
+	  To compile this driver as module, choose M here: the
+	  module will be called tsif_chrdev.
+
 config TSIF_DEBUG
 	bool "Turn on debugging information for tsif driver"
 	depends on TSIF
@@ -594,12 +613,74 @@ config TSIF_DEBUG
 	---help---
 	  This turns on debugging information for the tsif driver
 
+config TSPP
+	depends on ARCH_MSM
+	tristate "TSPP (Transport Stream Packet Processor) Support"
+	---help---
+	Transport Stream Packet Processor is used to offload the
+	processing of MPEG transport streams from the main processor.
+	This can also be compiled as a loadable module.
+
+config CI_BRIDGE_SPI
+	depends on SPI_QUP
+	tristate "CI Bridge SPI Driver Support"
+	---help---
+	This driver provides a simple SPI read/write interface to
+	an external CI bridge. It implements a character device
+	driver interface which allows making SPI transactions
+	using the Linux SPI framework.
+
+	To compile this driver as module, choose M here.
+
 config HAPTIC_ISA1200
 	tristate "ISA1200 haptic support"
 	depends on I2C
 	default n
 	help
 	  The ISA1200 is a high performance enhanced haptic driver.
+
+config PMIC8058_PWM
+	tristate "Qualcomm PM8058 PWM support"
+	depends on PMIC8058
+	default y
+	help
+	  This option enables device driver support for the PWM channels
+	  on Qualcomm PM8058 chip. Pulse Width Modulation is used for
+	  purposes including software controlled brightness of backlight,
+	  motor control, and waveform generation.
+
+config PMIC8XXX_VIBRATOR
+	tristate "Qualcomm Vibrator support for PMIC8XXX"
+	depends on MFD_PM8XXX && ANDROID_TIMED_OUTPUT
+	help
+	  This option enables device driver support for the vibrator
+	  on the PM8XXX chips. The vibrator is controlled using the
+	  timed output class.
+
+config PMIC8XXX_NFC
+	tristate "Qualcomm PM8XXX support for Near Field Communication"
+	depends on MFD_PM8XXX
+	help
+	  Qualcomm PM8XXX chips have a module to support NFC (Near Field
+	  Communication). This option enables the driver to support it.
+
+config PMIC8XXX_UPL
+	tristate "Qualcomm PM8XXX support for User Programmable Logic"
+	depends on MFD_PM8XXX
+	help
+	  This option enables device driver support for User Programmable Logic
+	  on Qualcomm PM8XXX chips. The UPL module provides a means to implement
+	  simple truth table based logic via a set of control registers. I/O may
+	  be routed in and out of the UPL module via GPIO or DTEST pins.
+
+config PMIC8058_XOADC
+	tristate "Qualcomm PM8058 XOADC driver"
+	depends on PMIC8058
+	default n
+	help
+	  Enables User processor ADC reads over the XOADC module of Qualcomm's
+	  PMIC8058. Driver interface to program registers of the ADC over
+	  AMUX channels, devices on programmable MPP's and xotherm.
 
 config QSEECOM
 	tristate "Qualcomm Secure Execution Communicator driver"
@@ -646,21 +727,13 @@ config TI_DRV2667
 	  To compile this driver as a module, choose M here: the
 	  module will be called ti_drv2667.
 
-config QCOM_LIQUID_DOCK
-	tristate "QTI LiQUID Docking Station USB/Ethernet support"
-	depends on OF_GPIO
+config HAPTIC_DRV2605
+	tristate "TI DRV2605 haptic driver"
+	depends on I2C && SYSFS
 	help
-	  This option enables support for the USB and Ethernet ports found on
-	  the docking station of various models of Qualcomm Technology's
-	  LiQUID Mobile Development Platforms.
+	  If you say yes here you get support for the TI DRV2605
+	  haptic driver.
 
-config ALSA_TO_H2W
-	tristate "ALSA to H2W wired headset detection converter"
-	help
-	  This option enables a device driver that attach to the input queue and
-	  and exposes EV_SW events SW_HEADPHONE_INSERT & SW_MICROPHONE_INSERT in
-	  /sys/class/switch/h2w/state used by Android headset observer.
-	default n
 
 config MMI_FACTORY
 	tristate "Motorola Mobility Factory driver"
@@ -670,6 +743,30 @@ config MMI_FACTORY
 	  of the extensions needed by the Motorola factory.  If you
 	  aren't literally building a Motorola Device you can safely
 	  say no here.
+	default n
+
+config C55_CTRL
+	tristate "TI C55 Control driver"
+	help
+	  This option enables device driver to control the TI C55 IC. This
+	  is intended to be a simple driver which only exports the GPIOs
+	  for user space use.
+
+config ALSA_TO_H2W
+	tristate "ALSA to H2W wired headset detection converter"
+	help
+	  This option enables a device driver that attach to the input queue and
+	  and exposes EV_SW events SW_HEADPHONE_INSERT & SW_MICROPHONE_INSERT in
+	  /sys/class/switch/h2w/state used by Android headset observer.
+	default n
+
+config HOB_SHARED_RAM
+	bool "HOB RAM MMAP Client"
+	depends on OF
+	help
+	  Provide mechanism to access hob storage shared memory on apps
+	  processor. HOB - or the Hand Over Block - is the staging area for
+	  phasing data.
 	default n
 
 config DROPBOX
@@ -682,29 +779,44 @@ config DROPBOX
 	  in dropbox manager service.  This enables fast and simple logging of
 	  various critical events from kernel drivers.
 
-config HOB_SHARED_RAM
-	tristate "HOB RAM MMAP Client"
-	depends on OF
+config USR_RESET_WARNING
+	tristate "User reset warning driver"
 	help
-	  Provide mechanism to access hob storage shared memory on apps
-	  processor. HOB - or the Hand Over Block - is the staging area for
-	  phasing data.
+	  This option enables a device driver that monitors user reset warning
+	  GPIO.If the driver receives the warning it calls kernel_halt to notify
+	  drivers registered for the reboot notification about incoming HW reset.
 	default n
 
-config SENSORS_AK09912
-       tristate "AK09912 compass support"
-       default n
-       depends on I2C
-       help
-         If you say yes here you get support for Asahi Kasei's
-         orientation sensor AK09912.
-
-config HAPTIC_DRV2605
-	tristate "TI DRV2605 haptic driver"
-	depends on I2C && SYSFS
+config SENSORS_LIS3DH_MOT
+	tristate "LIS3DH_MOT Accelerometer"
+	default n
+	depends on I2C
 	help
-	  If you say yes here you get support for the TI DRV2605
-	  haptic driver.
+	 Say yes here if you wish to include the ST Micro
+	 LIS3DH Mot accelerometer driver.
+
+config SENSORS_BMA2X2
+	tristate "BMA255/BMA250E/BMA222E/BMA280 acceleration sensor support"
+	default n
+	depends on I2C
+	help
+	  If you say yes here you get support for Bosch Sensortec's
+	  acceleration sensors BMA255/BMA250E/BMA222E/BMA280.
+
+config SENSORS_BMG
+	tristate "Bosch Gyroscope Sensor Driver"
+	default n
+	depends on I2C
+	help
+	  If you say yes here you get support for Bosch Sensortec's
+	  gyroscope sensor drivers of BMG160/BMI055/etc.
+
+config SENSORS_BMM050
+	tristate "BMM050 Magnetic Sensor Driver"
+	default n
+	depends on I2C
+	help
+	  BMM050 Magnetic Sensor Driver implemented by Bosch-Sensortec.
 
 config UID_CPUTIME
 	tristate "Per-UID cpu time statistics"
@@ -715,13 +827,15 @@ config UID_CPUTIME
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
+source "drivers/misc/iwmc3200top/Kconfig"
 source "drivers/misc/ti-st/Kconfig"
 source "drivers/misc/lis3lv02d/Kconfig"
 source "drivers/misc/carma/Kconfig"
 source "drivers/misc/altera-stapl/Kconfig"
-source "drivers/misc/mei/Kconfig"
-source "drivers/misc/vmw_vmci/Kconfig"
-source "drivers/misc/qcom/Kconfig"
-source "drivers/misc/stml0xx/Kconfig"
 source "drivers/misc/sec/Kconfig"
+source "drivers/misc/capsense_prog/Kconfig"
+source "drivers/misc/stm401/Kconfig"
+source "drivers/misc/stml0xx/Kconfig"
+
 endmenu
+

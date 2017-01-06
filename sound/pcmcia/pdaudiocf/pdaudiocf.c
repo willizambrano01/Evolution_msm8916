@@ -251,7 +251,7 @@ static int pdacf_suspend(struct pcmcia_device *link)
 	snd_printdd(KERN_DEBUG "SUSPEND\n");
 	if (chip) {
 		snd_printdd(KERN_DEBUG "snd_pdacf_suspend calling\n");
-		snd_pdacf_suspend(chip);
+		snd_pdacf_suspend(chip, PMSG_SUSPEND);
 	}
 
 	return 0;
@@ -295,5 +295,18 @@ static struct pcmcia_driver pdacf_cs_driver = {
 	.suspend	= pdacf_suspend,
 	.resume		= pdacf_resume,
 #endif
+
 };
-module_pcmcia_driver(pdacf_cs_driver);
+
+static int __init init_pdacf(void)
+{
+	return pcmcia_register_driver(&pdacf_cs_driver);
+}
+
+static void __exit exit_pdacf(void)
+{
+	pcmcia_unregister_driver(&pdacf_cs_driver);
+}
+
+module_init(init_pdacf);
+module_exit(exit_pdacf);

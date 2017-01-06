@@ -184,15 +184,11 @@ early_param("ps3flash", early_parse_ps3flash);
 #define prealloc_ps3flash_bounce_buffer()	do { } while (0)
 #endif
 
-static int ps3_set_dabr(unsigned long dabr, unsigned long dabrx)
+static int ps3_set_dabr(unsigned long dabr)
 {
-	/* Have to set at least one bit in the DABRX */
-	if (dabrx == 0 && dabr == 0)
-		dabrx = DABRX_USER;
-	/* hypervisor only allows us to set BTI, Kernel and user */
-	dabrx &= DABRX_BTI | DABRX_KERNEL | DABRX_USER;
+	enum {DABR_USER = 1, DABR_KERNEL = 2,};
 
-	return lv1_set_dabr(dabr, dabrx) ? -1 : 0;
+	return lv1_set_dabr(dabr, DABR_KERNEL | DABR_USER) ? -1 : 0;
 }
 
 static void __init ps3_setup_arch(void)

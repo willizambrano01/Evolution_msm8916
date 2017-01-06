@@ -193,19 +193,15 @@ static u32 flow_get_rtclassid(const struct sk_buff *skb)
 
 static u32 flow_get_skuid(const struct sk_buff *skb)
 {
-	if (skb->sk && skb->sk->sk_socket && skb->sk->sk_socket->file) {
-		kuid_t skuid = skb->sk->sk_socket->file->f_cred->fsuid;
-		return from_kuid(&init_user_ns, skuid);
-	}
+	if (skb->sk && skb->sk->sk_socket && skb->sk->sk_socket->file)
+		return skb->sk->sk_socket->file->f_cred->fsuid;
 	return 0;
 }
 
 static u32 flow_get_skgid(const struct sk_buff *skb)
 {
-	if (skb->sk && skb->sk->sk_socket && skb->sk->sk_socket->file) {
-		kgid_t skgid = skb->sk->sk_socket->file->f_cred->fsgid;
-		return from_kgid(&init_user_ns, skgid);
-	}
+	if (skb->sk && skb->sk->sk_socket && skb->sk->sk_socket->file)
+		return skb->sk->sk_socket->file->f_cred->fsgid;
 	return 0;
 }
 
@@ -351,8 +347,7 @@ static const struct nla_policy flow_policy[TCA_FLOW_MAX + 1] = {
 	[TCA_FLOW_PERTURB]	= { .type = NLA_U32 },
 };
 
-static int flow_change(struct net *net, struct sk_buff *in_skb,
-		       struct tcf_proto *tp, unsigned long base,
+static int flow_change(struct tcf_proto *tp, unsigned long base,
 		       u32 handle, struct nlattr **tca,
 		       unsigned long *arg)
 {
@@ -391,13 +386,9 @@ static int flow_change(struct net *net, struct sk_buff *in_skb,
 
 		if (fls(keymask) - 1 > FLOW_KEY_MAX)
 			return -EOPNOTSUPP;
-
-		if ((keymask & (FLOW_KEY_SKUID|FLOW_KEY_SKGID)) &&
-		    sk_user_ns(NETLINK_CB(in_skb).sk) != &init_user_ns)
-			return -EOPNOTSUPP;
 	}
 
-	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &e, &flow_ext_map);
+	err = tcf_exts_validate(tp, tb, tca[TCA_RATE], &e, &flow_ext_map);
 	if (err < 0)
 		return err;
 
@@ -581,32 +572,25 @@ static int flow_dump(struct tcf_proto *tp, unsigned long fh,
 	if (nest == NULL)
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_FLOW_KEYS, f->keymask) ||
-	    nla_put_u32(skb, TCA_FLOW_MODE, f->mode))
-		goto nla_put_failure;
+	NLA_PUT_U32(skb, TCA_FLOW_KEYS, f->keymask);
+	NLA_PUT_U32(skb, TCA_FLOW_MODE, f->mode);
 
 	if (f->mask != ~0 || f->xor != 0) {
-		if (nla_put_u32(skb, TCA_FLOW_MASK, f->mask) ||
-		    nla_put_u32(skb, TCA_FLOW_XOR, f->xor))
-			goto nla_put_failure;
+		NLA_PUT_U32(skb, TCA_FLOW_MASK, f->mask);
+		NLA_PUT_U32(skb, TCA_FLOW_XOR, f->xor);
 	}
-	if (f->rshift &&
-	    nla_put_u32(skb, TCA_FLOW_RSHIFT, f->rshift))
-		goto nla_put_failure;
-	if (f->addend &&
-	    nla_put_u32(skb, TCA_FLOW_ADDEND, f->addend))
-		goto nla_put_failure;
+	if (f->rshift)
+		NLA_PUT_U32(skb, TCA_FLOW_RSHIFT, f->rshift);
+	if (f->addend)
+		NLA_PUT_U32(skb, TCA_FLOW_ADDEND, f->addend);
 
-	if (f->divisor &&
-	    nla_put_u32(skb, TCA_FLOW_DIVISOR, f->divisor))
-		goto nla_put_failure;
-	if (f->baseclass &&
-	    nla_put_u32(skb, TCA_FLOW_BASECLASS, f->baseclass))
-		goto nla_put_failure;
+	if (f->divisor)
+		NLA_PUT_U32(skb, TCA_FLOW_DIVISOR, f->divisor);
+	if (f->baseclass)
+		NLA_PUT_U32(skb, TCA_FLOW_BASECLASS, f->baseclass);
 
-	if (f->perturb_period &&
-	    nla_put_u32(skb, TCA_FLOW_PERTURB, f->perturb_period / HZ))
-		goto nla_put_failure;
+	if (f->perturb_period)
+		NLA_PUT_U32(skb, TCA_FLOW_PERTURB, f->perturb_period / HZ);
 
 	if (tcf_exts_dump(skb, &f->exts, &flow_ext_map) < 0)
 		goto nla_put_failure;

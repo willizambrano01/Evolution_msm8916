@@ -106,9 +106,9 @@ static struct pxa2xx_pcm_client pxa2xx_ac97_pcm_client = {
 	.prepare		= pxa2xx_ac97_pcm_prepare,
 };
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_PM
 
-static int pxa2xx_ac97_do_suspend(struct snd_card *card)
+static int pxa2xx_ac97_do_suspend(struct snd_card *card, pm_message_t state)
 {
 	pxa2xx_audio_ops_t *platform_ops = card->dev->platform_data;
 
@@ -144,7 +144,7 @@ static int pxa2xx_ac97_suspend(struct device *dev)
 	int ret = 0;
 
 	if (card)
-		ret = pxa2xx_ac97_do_suspend(card);
+		ret = pxa2xx_ac97_do_suspend(card, PMSG_SUSPEND);
 
 	return ret;
 }
@@ -160,10 +160,13 @@ static int pxa2xx_ac97_resume(struct device *dev)
 	return ret;
 }
 
-static SIMPLE_DEV_PM_OPS(pxa2xx_ac97_pm_ops, pxa2xx_ac97_suspend, pxa2xx_ac97_resume);
+static const struct dev_pm_ops pxa2xx_ac97_pm_ops = {
+	.suspend	= pxa2xx_ac97_suspend,
+	.resume		= pxa2xx_ac97_resume,
+};
 #endif
 
-static int pxa2xx_ac97_probe(struct platform_device *dev)
+static int __devinit pxa2xx_ac97_probe(struct platform_device *dev)
 {
 	struct snd_card *card;
 	struct snd_ac97_bus *ac97_bus;
@@ -224,7 +227,7 @@ err_dev:
 	return ret;
 }
 
-static int pxa2xx_ac97_remove(struct platform_device *dev)
+static int __devexit pxa2xx_ac97_remove(struct platform_device *dev)
 {
 	struct snd_card *card = platform_get_drvdata(dev);
 
@@ -239,11 +242,11 @@ static int pxa2xx_ac97_remove(struct platform_device *dev)
 
 static struct platform_driver pxa2xx_ac97_driver = {
 	.probe		= pxa2xx_ac97_probe,
-	.remove		= pxa2xx_ac97_remove,
+	.remove		= __devexit_p(pxa2xx_ac97_remove),
 	.driver		= {
 		.name	= "pxa2xx-ac97",
 		.owner	= THIS_MODULE,
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_PM
 		.pm	= &pxa2xx_ac97_pm_ops,
 #endif
 	},

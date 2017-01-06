@@ -10,8 +10,7 @@
  * option) any later version.
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/types.h>
@@ -21,8 +20,8 @@
 #include <linux/ctype.h>
 #include <linux/gpio.h>
 #include <linux/slab.h>
-#include <linux/vme.h>
 
+#include "../vme.h"
 #include "vme_pio2.h"
 
 
@@ -42,8 +41,8 @@ static int variant_num;
 static bool loopback;
 
 static int pio2_match(struct vme_dev *);
-static int pio2_probe(struct vme_dev *);
-static int pio2_remove(struct vme_dev *);
+static int __devinit pio2_probe(struct vme_dev *);
+static int __devexit pio2_remove(struct vme_dev *);
 
 static int pio2_get_led(struct pio2_card *card)
 {
@@ -156,25 +155,37 @@ static struct vme_driver pio2_driver = {
 	.name = driver_name,
 	.match = pio2_match,
 	.probe = pio2_probe,
-	.remove = pio2_remove,
+	.remove = __devexit_p(pio2_remove),
 };
 
 
 static int __init pio2_init(void)
 {
+	int retval = 0;
+
 	if (bus_num == 0) {
-		pr_err("No cards, skipping registration\n");
-		return -ENODEV;
+		printk(KERN_ERR "%s: No cards, skipping registration\n",
+			driver_name);
+		goto err_nocard;
 	}
 
 	if (bus_num > PIO2_CARDS_MAX) {
-		pr_err("Driver only able to handle %d PIO2 Cards\n",
-		       PIO2_CARDS_MAX);
+		printk(KERN_ERR
+			"%s: Driver only able to handle %d PIO2 Cards\n",
+			driver_name, PIO2_CARDS_MAX);
 		bus_num = PIO2_CARDS_MAX;
 	}
 
 	/* Register the PIO2 driver */
-	return  vme_register_driver(&pio2_driver, bus_num);
+	retval = vme_register_driver(&pio2_driver, bus_num);
+	if (retval != 0)
+		goto err_reg;
+
+	return retval;
+
+err_reg:
+err_nocard:
+	return retval;
 }
 
 static int pio2_match(struct vme_dev *vdev)
@@ -212,7 +223,7 @@ static int pio2_match(struct vme_dev *vdev)
 	return 1;
 }
 
-static int pio2_probe(struct vme_dev *vdev)
+static int __devinit pio2_probe(struct vme_dev *vdev)
 {
 	struct pio2_card *card;
 	int retval;
@@ -222,6 +233,7 @@ static int pio2_probe(struct vme_dev *vdev)
 
 	card = kzalloc(sizeof(struct pio2_card), GFP_KERNEL);
 	if (card == NULL) {
+		dev_err(&vdev->dev, "Unable to allocate card structure\n");
 		retval = -ENOMEM;
 		goto err_struct;
 	}
@@ -444,7 +456,7 @@ err_struct:
 	return retval;
 }
 
-static int pio2_remove(struct vme_dev *vdev)
+static int __devexit pio2_remove(struct vme_dev *vdev)
 {
 	int vec;
 	int i;

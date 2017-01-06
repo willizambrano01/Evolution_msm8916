@@ -41,7 +41,7 @@ static void dt_free_map(struct pinctrl_dev *pctldev,
 		     struct pinctrl_map *map, unsigned num_maps)
 {
 	if (pctldev) {
-		const struct pinctrl_ops *ops = pctldev->desc->pctlops;
+		struct pinctrl_ops *ops = pctldev->desc->pctlops;
 		ops->dt_free_map(pctldev, map, num_maps);
 	} else {
 		/* There is no pctldev for PIN_MAP_TYPE_DUMMY_STATE */
@@ -92,14 +92,25 @@ static int dt_remember_or_free_map(struct pinctrl *p, const char *statename,
 	dt_map->num_maps = num_maps;
 	list_add_tail(&dt_map->node, &p->dt_maps);
 
-	return pinctrl_register_map(map, num_maps, false);
+	return pinctrl_register_map(map, num_maps, false, true);
+}
+
+static struct pinctrl_dev *find_pinctrl_by_of_node(struct device_node *np)
+{
+	struct pinctrl_dev *pctldev;
+
+	list_for_each_entry(pctldev, &pinctrldev_list, node)
+		if (pctldev->dev->of_node == np)
+			return pctldev;
+
+	return NULL;
 }
 
 struct pinctrl_dev *of_pinctrl_get(struct device_node *np)
 {
 	struct pinctrl_dev *pctldev;
 
-	pctldev = get_pinctrl_dev_from_of_node(np);
+	pctldev = find_pinctrl_by_of_node(np);
 	if (!pctldev)
 		return NULL;
 
@@ -111,7 +122,7 @@ static int dt_to_map_one_config(struct pinctrl *p, const char *statename,
 {
 	struct device_node *np_pctldev;
 	struct pinctrl_dev *pctldev;
-	const struct pinctrl_ops *ops;
+	struct pinctrl_ops *ops;
 	int ret;
 	struct pinctrl_map *map;
 	unsigned num_maps;
@@ -127,7 +138,7 @@ static int dt_to_map_one_config(struct pinctrl *p, const char *statename,
 			/* OK let's just assume this will appear later then */
 			return -EPROBE_DEFER;
 		}
-		pctldev = get_pinctrl_dev_from_of_node(np_pctldev);
+		pctldev = find_pinctrl_by_of_node(np_pctldev);
 		if (pctldev)
 			break;
 		/* Do not defer probing of hogs (circular loop) */
@@ -199,13 +210,8 @@ int pinctrl_dt_to_map(struct pinctrl *p)
 		propname = kasprintf(GFP_KERNEL, "pinctrl-%d", state);
 		prop = of_find_property(np, propname, &size);
 		kfree(propname);
-		if (!prop) {
-			if (!state) {
-				ret = -EINVAL;
-				goto err;
-			}
+		if (!prop)
 			break;
-		}
 		list = prop->value;
 		size /= sizeof(*list);
 

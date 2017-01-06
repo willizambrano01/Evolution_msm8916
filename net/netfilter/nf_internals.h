@@ -18,13 +18,13 @@ extern unsigned int nf_iterate(struct list_head *head,
 				unsigned int hook,
 				const struct net_device *indev,
 				const struct net_device *outdev,
-				struct nf_hook_ops **elemp,
+				struct list_head **i,
 				int (*okfn)(struct sk_buff *),
 				int hook_thresh);
 
 /* nf_queue.c */
 extern int nf_queue(struct sk_buff *skb,
-		    struct nf_hook_ops *elem,
+		    struct list_head *elem,
 		    u_int8_t pf, unsigned int hook,
 		    struct net_device *indev,
 		    struct net_device *outdev,

@@ -805,11 +805,5 @@ struct MSTE_RTC {
 
 #define mste_rtc ((*(volatile struct MSTE_RTC *)MSTE_RTC_BAS))
 
-/*
-** EtherNAT add-on card for Falcon - combined ethernet and USB adapter
-*/
-
-#define ATARI_ETHERNAT_PHYS_ADDR	0x80000000
-
 #endif /* linux/atarihw.h */
 

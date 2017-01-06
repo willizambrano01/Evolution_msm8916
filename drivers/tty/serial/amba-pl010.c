@@ -116,6 +116,7 @@ static void pl010_enable_ms(struct uart_port *port)
 
 static void pl010_rx_chars(struct uart_amba_port *uap)
 {
+	struct tty_struct *tty = uap->port.state->port.tty;
 	unsigned int status, ch, flag, rsr, max_count = 256;
 
 	status = readb(uap->port.membase + UART01x_FR);
@@ -164,7 +165,7 @@ static void pl010_rx_chars(struct uart_amba_port *uap)
 		status = readb(uap->port.membase + UART01x_FR);
 	}
 	spin_unlock(&uap->port.lock);
-	tty_flip_buffer_push(&uap->port.state->port);
+	tty_flip_buffer_push(tty);
 	spin_lock(&uap->port.lock);
 }
 
@@ -311,12 +312,16 @@ static int pl010_startup(struct uart_port *port)
 	struct uart_amba_port *uap = (struct uart_amba_port *)port;
 	int retval;
 
+	retval = clk_prepare(uap->clk);
+	if (retval)
+		goto out;
+
 	/*
 	 * Try to enable the clock producer.
 	 */
-	retval = clk_prepare_enable(uap->clk);
+	retval = clk_enable(uap->clk);
 	if (retval)
-		goto out;
+		goto clk_unprep;
 
 	uap->port.uartclk = clk_get_rate(uap->clk);
 
@@ -341,7 +346,9 @@ static int pl010_startup(struct uart_port *port)
 	return 0;
 
  clk_dis:
-	clk_disable_unprepare(uap->clk);
+	clk_disable(uap->clk);
+ clk_unprep:
+	clk_unprepare(uap->clk);
  out:
 	return retval;
 }
@@ -368,7 +375,8 @@ static void pl010_shutdown(struct uart_port *port)
 	/*
 	 * Shut down the clock producer
 	 */
-	clk_disable_unprepare(uap->clk);
+	clk_disable(uap->clk);
+	clk_unprepare(uap->clk);
 }
 
 static void

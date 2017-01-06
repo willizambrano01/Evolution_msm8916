@@ -339,8 +339,8 @@ static int rds_ib_recv_refill_one(struct rds_connection *conn,
 	sge->length = sizeof(struct rds_header);
 
 	sge = &recv->r_sge[1];
-	sge->addr = ib_sg_dma_address(ic->i_cm_id->device, &recv->r_frag->f_sg);
-	sge->length = ib_sg_dma_len(ic->i_cm_id->device, &recv->r_frag->f_sg);
+	sge->addr = sg_dma_address(&recv->r_frag->f_sg);
+	sge->length = sg_dma_len(&recv->r_frag->f_sg);
 
 	ret = 0;
 out:
@@ -381,10 +381,7 @@ void rds_ib_recv_refill(struct rds_connection *conn, int prefill)
 		ret = ib_post_recv(ic->i_cm_id->qp, &recv->r_wr, &failed_wr);
 		rdsdebug("recv %p ibinc %p page %p addr %lu ret %d\n", recv,
 			 recv->r_ibinc, sg_page(&recv->r_frag->f_sg),
-			 (long) ib_sg_dma_address(
-				ic->i_cm_id->device,
-				&recv->r_frag->f_sg),
-			ret);
+			 (long) sg_dma_address(&recv->r_frag->f_sg), ret);
 		if (ret) {
 			rds_ib_conn_error(conn, "recv post on "
 			       "%pI4 returned %d, disconnecting and "
@@ -421,20 +418,20 @@ static void rds_ib_recv_cache_put(struct list_head *new_item,
 				 struct rds_ib_refill_cache *cache)
 {
 	unsigned long flags;
-	struct list_head *old, *chpfirst;
+	struct rds_ib_cache_head *chp;
+	struct list_head *old;
 
 	local_irq_save(flags);
 
-	chpfirst = __this_cpu_read(cache->percpu->first);
-	if (!chpfirst)
+	chp = per_cpu_ptr(cache->percpu, smp_processor_id());
+	if (!chp->first)
 		INIT_LIST_HEAD(new_item);
 	else /* put on front */
-		list_add_tail(new_item, chpfirst);
+		list_add_tail(new_item, chp->first);
+	chp->first = new_item;
+	chp->count++;
 
-	__this_cpu_write(cache->percpu->first, new_item);
-	__this_cpu_inc(cache->percpu->count);
-
-	if (__this_cpu_read(cache->percpu->count) < RDS_IB_RECYCLE_BATCH_COUNT)
+	if (chp->count < RDS_IB_RECYCLE_BATCH_COUNT)
 		goto end;
 
 	/*
@@ -446,13 +443,12 @@ static void rds_ib_recv_cache_put(struct list_head *new_item,
 	do {
 		old = xchg(&cache->xfer, NULL);
 		if (old)
-			list_splice_entire_tail(old, chpfirst);
-		old = cmpxchg(&cache->xfer, NULL, chpfirst);
+			list_splice_entire_tail(old, chp->first);
+		old = cmpxchg(&cache->xfer, NULL, chp->first);
 	} while (old);
 
-
-	__this_cpu_write(cache->percpu->first, NULL);
-	__this_cpu_write(cache->percpu->count, 0);
+	chp->first = NULL;
+	chp->count = 0;
 end:
 	local_irq_restore(flags);
 }
@@ -598,7 +594,7 @@ static void rds_ib_set_ack(struct rds_ib_connection *ic, u64 seq,
 {
 	atomic64_set(&ic->i_ack_next, seq);
 	if (ack_required) {
-		smp_mb__before_atomic();
+		smp_mb__before_clear_bit();
 		set_bit(IB_ACK_REQUESTED, &ic->i_ack_flags);
 	}
 }
@@ -606,7 +602,7 @@ static void rds_ib_set_ack(struct rds_ib_connection *ic, u64 seq,
 static u64 rds_ib_get_ack(struct rds_ib_connection *ic)
 {
 	clear_bit(IB_ACK_REQUESTED, &ic->i_ack_flags);
-	smp_mb__after_atomic();
+	smp_mb__after_clear_bit();
 
 	return atomic64_read(&ic->i_ack_next);
 }

@@ -41,7 +41,6 @@
 #include <asm-generic/bitops/non-atomic.h>
 #else
 
-#include <asm/barrier.h>
 #include <asm/byteorder.h>	/* swab32 */
 #include <linux/linkage.h>
 

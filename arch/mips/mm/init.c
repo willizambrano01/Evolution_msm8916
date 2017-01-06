@@ -29,7 +29,6 @@
 #include <linux/pfn.h>
 #include <linux/hardirq.h>
 #include <linux/gfp.h>
-#include <linux/kcore.h>
 
 #include <asm/asm-offsets.h>
 #include <asm/bootinfo.h>
@@ -67,7 +66,7 @@
 
 /*
  * We have up to 8 empty zeroed pages so we can map one of the right colour
- * when needed.	 This is necessary only on R4000 / R4400 SC and MC versions
+ * when needed.  This is necessary only on R4000 / R4400 SC and MC versions
  * where we have to avoid VCED / VECI exceptions for good performance at
  * any price.  Since page is never written to after the initialization we
  * don't have to care about aliases on other CPUs.
@@ -78,9 +77,10 @@ EXPORT_SYMBOL_GPL(empty_zero_page);
 /*
  * Not static inline because used by IP27 special magic initialization code
  */
-void setup_zero_pages(void)
+unsigned long setup_zero_pages(void)
 {
-	unsigned int order, i;
+	unsigned int order;
+	unsigned long size;
 	struct page *page;
 
 	if (cpu_has_vce)
@@ -94,10 +94,15 @@ void setup_zero_pages(void)
 
 	page = virt_to_page((void *)empty_zero_page);
 	split_page(page, order);
-	for (i = 0; i < (1 << order); i++, page++)
-		mark_page_reserved(page);
+	while (page < virt_to_page((void *)(empty_zero_page + (PAGE_SIZE << order)))) {
+		SetPageReserved(page);
+		page++;
+	}
 
-	zero_page_mask = ((PAGE_SIZE << order) - 1) & PAGE_MASK;
+	size = PAGE_SIZE << order;
+	zero_page_mask = (size - 1) & PAGE_MASK;
+
+	return 1UL << order;
 }
 
 #ifdef CONFIG_MIPS_MT_SMTC
@@ -374,8 +379,8 @@ void __init mem_init(void)
 #endif
 	high_memory = (void *) __va(max_low_pfn << PAGE_SHIFT);
 
-	free_all_bootmem();
-	setup_zero_pages();	/* Setup zeroed pages.  */
+	totalram_pages += free_all_bootmem();
+	totalram_pages -= setup_zero_pages();	/* Setup zeroed pages.  */
 
 	reservedpages = ram = 0;
 	for (tmp = 0; tmp < max_low_pfn; tmp++)
@@ -394,8 +399,12 @@ void __init mem_init(void)
 			SetPageReserved(page);
 			continue;
 		}
-		free_highmem_page(page);
+		ClearPageReserved(page);
+		init_page_count(page);
+		__free_page(page);
+		totalhigh_pages++;
 	}
+	totalram_pages += totalhigh_pages;
 	num_physpages += totalhigh_pages;
 #endif
 
@@ -431,8 +440,11 @@ void free_init_pages(const char *what, unsigned long begin, unsigned long end)
 		struct page *page = pfn_to_page(pfn);
 		void *addr = phys_to_virt(PFN_PHYS(pfn));
 
+		ClearPageReserved(page);
+		init_page_count(page);
 		memset(addr, POISON_FREE_INITMEM, PAGE_SIZE);
-		free_reserved_page(page);
+		__free_page(page);
+		totalram_pages++;
 	}
 	printk(KERN_INFO "Freeing %s: %ldk freed\n", what, (end - begin) >> 10);
 }
@@ -440,33 +452,36 @@ void free_init_pages(const char *what, unsigned long begin, unsigned long end)
 #ifdef CONFIG_BLK_DEV_INITRD
 void free_initrd_mem(unsigned long start, unsigned long end)
 {
-	free_reserved_area(start, end, POISON_FREE_INITMEM, "initrd");
+	free_init_pages("initrd memory",
+			virt_to_phys((void *)start),
+			virt_to_phys((void *)end));
 }
 #endif
 
 void __init_refok free_initmem(void)
 {
 	prom_free_prom_memory();
-	free_initmem_default(POISON_FREE_INITMEM);
+	free_init_pages("unused kernel memory",
+			__pa_symbol(&__init_begin),
+			__pa_symbol(&__init_end));
 }
 
 #ifndef CONFIG_MIPS_PGD_C0_CONTEXT
 unsigned long pgd_current[NR_CPUS];
 #endif
+/*
+ * On 64-bit we've got three-level pagetables with a slightly
+ * different layout ...
+ */
+#define __page_aligned(order) __attribute__((__aligned__(PAGE_SIZE<<order)))
 
 /*
  * gcc 3.3 and older have trouble determining that PTRS_PER_PGD and PGD_ORDER
  * are constants.  So we use the variants from asm-offset.h until that gcc
  * will officially be retired.
- *
- * Align swapper_pg_dir in to 64K, allows its address to be loaded
- * with a single LUI instruction in the TLB handlers.  If we used
- * __aligned(64K), its size would get rounded up to the alignment
- * size, and waste space.  So we place it in its own section and align
- * it in the linker script.
  */
-pgd_t swapper_pg_dir[_PTRS_PER_PGD] __section(.bss..swapper_pg_dir);
+pgd_t swapper_pg_dir[_PTRS_PER_PGD] __page_aligned(_PGD_ORDER);
 #ifndef __PAGETABLE_PMD_FOLDED
-pmd_t invalid_pmd_table[PTRS_PER_PMD] __page_aligned_bss;
+pmd_t invalid_pmd_table[PTRS_PER_PMD] __page_aligned(PMD_ORDER);
 #endif
-pte_t invalid_pte_table[PTRS_PER_PTE] __page_aligned_bss;
+pte_t invalid_pte_table[PTRS_PER_PTE] __page_aligned(PTE_ORDER);

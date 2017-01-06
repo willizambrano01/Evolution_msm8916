@@ -106,5 +106,4 @@ struct bms_battery_data oem_batt_data = {
 	.rbatt_sf_lut		= &rbatt_sf,
 	.default_rbatt_mohm	= 236,
 	.flat_ocv_threshold_uv	= 3800000,
-	.battery_type		= "oem_batt_data",
 };

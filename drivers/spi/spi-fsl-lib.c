@@ -22,10 +22,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/mm.h>
 #include <linux/of_platform.h>
-#include <linux/spi/spi.h>
-#ifdef CONFIG_FSL_SOC
+#include <linux/of_spi.h>
 #include <sysdev/fsl_soc.h>
-#endif
 
 #include "spi-fsl-lib.h"
 
@@ -171,7 +169,7 @@ err:
 	return ret;
 }
 
-int mpc8xxx_spi_remove(struct device *dev)
+int __devexit mpc8xxx_spi_remove(struct device *dev)
 {
 	struct mpc8xxx_spi *mpc8xxx_spi;
 	struct spi_master *master;
@@ -191,7 +189,7 @@ int mpc8xxx_spi_remove(struct device *dev)
 	return 0;
 }
 
-int of_mpc8xxx_spi_probe(struct platform_device *ofdev)
+int __devinit of_mpc8xxx_spi_probe(struct platform_device *ofdev)
 {
 	struct device *dev = &ofdev->dev;
 	struct device_node *np = ofdev->dev.of_node;
@@ -210,7 +208,6 @@ int of_mpc8xxx_spi_probe(struct platform_device *ofdev)
 	/* Allocate bus num dynamically. */
 	pdata->bus_num = -1;
 
-#ifdef CONFIG_FSL_SOC
 	/* SPI controller is either clocked from QE or SoC clock. */
 	pdata->sysclk = get_brgfreq();
 	if (pdata->sysclk == -1) {
@@ -220,11 +217,6 @@ int of_mpc8xxx_spi_probe(struct platform_device *ofdev)
 			goto err;
 		}
 	}
-#else
-	ret = of_property_read_u32(np, "clock-frequency", &pdata->sysclk);
-	if (ret)
-		goto err;
-#endif
 
 	prop = of_get_property(np, "mode", NULL);
 	if (prop && !strcmp(prop, "cpu-qe"))

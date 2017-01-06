@@ -9,13 +9,6 @@
 #define __attribute_const__
 #endif
 
-#ifndef __maybe_unused
-#define __maybe_unused		__attribute__((unused))
-#endif
-#define __packed	__attribute__((__packed__))
-
-#ifndef __force
-#define __force
-#endif
+#define __used		__attribute__((__unused__))
 
 #endif

@@ -43,9 +43,9 @@ extern unsigned long _ramend;
 #endif /* !__ASSEMBLY__ */
 
 #ifdef CONFIG_MMU
-#include <asm/page_mm.h>
+#include "page_mm.h"
 #else
-#include <asm/page_no.h>
+#include "page_no.h"
 #endif
 
 #include <asm-generic/getorder.h>

@@ -465,6 +465,8 @@ static inline void  smc_rcv(struct net_device *dev)
 		 */
 		skb = netdev_alloc_skb(dev, packet_len);
 		if (unlikely(skb == NULL)) {
+			printk(KERN_NOTICE "%s: Low memory, packet dropped.\n",
+				dev->name);
 			SMC_WAIT_MMU_BUSY(lp);
 			SMC_SET_MMU_CMD(lp, MC_RELEASE);
 			dev->stats.rx_dropped++;
@@ -940,7 +942,7 @@ static int smc_phy_fixed(struct net_device *dev)
 	return 1;
 }
 
-/**
+/*
  * smc_phy_reset - reset the phy
  * @dev: net device
  * @phy: phy address
@@ -974,7 +976,7 @@ static int smc_phy_reset(struct net_device *dev, int phy)
 	return bmcr & BMCR_RESET;
 }
 
-/**
+/*
  * smc_phy_powerdown - powerdown phy
  * @dev: net device
  *
@@ -998,7 +1000,7 @@ static void smc_phy_powerdown(struct net_device *dev)
 	smc_phy_write(dev, phy, MII_BMCR, bmcr | BMCR_PDOWN);
 }
 
-/**
+/*
  * smc_phy_check_media - check the media status and adjust TCR
  * @dev: net device
  * @init: set true for initialisation
@@ -1472,6 +1474,16 @@ smc_open(struct net_device *dev)
 
 	DBG(2, "%s: %s\n", dev->name, __func__);
 
+	/*
+	 * Check that the address is valid.  If its not, refuse
+	 * to bring the device up.  The user must specify an
+	 * address using ifconfig eth0 hw ether xx:xx:xx:xx:xx:xx
+	 */
+	if (!is_valid_ether_addr(dev->dev_addr)) {
+		PRINTK("%s: no valid ethernet hw addr\n", __func__);
+		return -EINVAL;
+	}
+
 	/* Setup the default Register Modes */
 	lp->tcr_cur_mode = TCR_DEFAULT;
 	lp->rcr_cur_mode = RCR_DEFAULT;
@@ -1595,10 +1607,9 @@ smc_ethtool_setsettings(struct net_device *dev, struct ethtool_cmd *cmd)
 static void
 smc_ethtool_getdrvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
-	strlcpy(info->driver, CARDNAME, sizeof(info->driver));
-	strlcpy(info->version, version, sizeof(info->version));
-	strlcpy(info->bus_info, dev_name(dev->dev.parent),
-		sizeof(info->bus_info));
+	strncpy(info->driver, CARDNAME, sizeof(info->driver));
+	strncpy(info->version, version, sizeof(info->version));
+	strncpy(info->bus_info, dev_name(dev->dev.parent), sizeof(info->bus_info));
 }
 
 static int smc_ethtool_nwayreset(struct net_device *dev)
@@ -1778,7 +1789,7 @@ static const struct net_device_ops smc_netdev_ops = {
  * I just deleted auto_irq.c, since it was never built...
  *   --jgarzik
  */
-static int smc_findirq(struct smc_local *lp)
+static int __devinit smc_findirq(struct smc_local *lp)
 {
 	void __iomem *ioaddr = lp->base;
 	int timeout = 20;
@@ -1852,8 +1863,8 @@ static int smc_findirq(struct smc_local *lp)
  * o  actually GRAB the irq.
  * o  GRAB the region
  */
-static int smc_probe(struct net_device *dev, void __iomem *ioaddr,
-		     unsigned long irq_flags)
+static int __devinit smc_probe(struct net_device *dev, void __iomem *ioaddr,
+			    unsigned long irq_flags)
 {
 	struct smc_local *lp = netdev_priv(dev);
 	static int version_printed = 0;
@@ -2200,7 +2211,7 @@ static void smc_release_datacs(struct platform_device *pdev, struct net_device *
  *	0 --> there is a device
  *	anything else, error
  */
-static int smc_drv_probe(struct platform_device *pdev)
+static int __devinit smc_drv_probe(struct platform_device *pdev)
 {
 	struct smc91x_platdata *pd = pdev->dev.platform_data;
 	struct smc_local *lp;
@@ -2313,7 +2324,7 @@ static int smc_drv_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int smc_drv_remove(struct platform_device *pdev)
+static int __devexit smc_drv_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct smc_local *lp = netdev_priv(ndev);
@@ -2385,6 +2396,8 @@ static const struct of_device_id smc91x_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, smc91x_match);
+#else
+#define smc91x_match NULL
 #endif
 
 static struct dev_pm_ops smc_drv_pm_ops = {
@@ -2394,12 +2407,12 @@ static struct dev_pm_ops smc_drv_pm_ops = {
 
 static struct platform_driver smc_driver = {
 	.probe		= smc_drv_probe,
-	.remove		= smc_drv_remove,
+	.remove		= __devexit_p(smc_drv_remove),
 	.driver		= {
 		.name	= CARDNAME,
 		.owner	= THIS_MODULE,
 		.pm	= &smc_drv_pm_ops,
-		.of_match_table = of_match_ptr(smc91x_match),
+		.of_match_table = smc91x_match,
 	},
 };
 

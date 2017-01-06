@@ -180,7 +180,6 @@ struct w1_master
 
 	struct task_struct	*thread;
 	struct mutex		mutex;
-	struct mutex		bus_mutex;
 
 	struct device_driver	*driver;
 	struct device		dev;

@@ -14,16 +14,17 @@
 #include <linux/mtd/physmap.h>
 #include <linux/interrupt.h>
 #include <linux/dm9000.h>
-#include <linux/gpio.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/time.h>
 
-#include "common.h"
+#include <mach/common.h>
+#include <mach/hardware.h>
+#include <mach/irqs.h>
+#include <mach/iomux-mx1.h>
+
 #include "devices-imx1.h"
-#include "hardware.h"
-#include "iomux-mx1.h"
 
 /*
  * This scb9328 has a 32MiB flash
@@ -77,7 +78,8 @@ static struct resource dm9000x_resources[] = {
 		.end	= MX1_CS5_PHYS + 5,
 		.flags	= IORESOURCE_MEM,	/* data access */
 	}, {
-		/* irq number is run-time assigned */
+		.start	= IRQ_GPIOC(3),
+		.end	= IRQ_GPIOC(3),
 		.flags	= IORESOURCE_IRQ | IORESOURCE_IRQ_LOWLEVEL,
 	},
 };
@@ -121,8 +123,6 @@ static void __init scb9328_init(void)
 	imx1_add_imx_uart0(&uart_pdata);
 
 	printk(KERN_INFO"Scb9328: Adding devices\n");
-	dm9000x_resources[2].start = gpio_to_irq(IMX_GPIO_NR(3, 3));
-	dm9000x_resources[2].end = gpio_to_irq(IMX_GPIO_NR(3, 3));
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 }
 
@@ -131,6 +131,10 @@ static void __init scb9328_timer_init(void)
 	mx1_clocks_init(32000);
 }
 
+static struct sys_timer scb9328_timer = {
+	.init	= scb9328_timer_init,
+};
+
 MACHINE_START(SCB9328, "Synertronixx scb9328")
 	/* Sascha Hauer */
 	.atag_offset = 100,
@@ -138,7 +142,7 @@ MACHINE_START(SCB9328, "Synertronixx scb9328")
 	.init_early = imx1_init_early,
 	.init_irq = mx1_init_irq,
 	.handle_irq = imx1_handle_irq,
-	.init_time	= scb9328_timer_init,
+	.timer = &scb9328_timer,
 	.init_machine = scb9328_init,
 	.restart	= mxc_restart,
 MACHINE_END

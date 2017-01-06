@@ -25,6 +25,7 @@
 #include <net/udp.h>
 #include <net/transp_v6.h>
 #include <net/ping.h>
+#include <linux/module.h>
 
 struct proto pingv6_prot = {
 	.name =		"PINGv6",
@@ -57,12 +58,11 @@ static struct inet_protosw pingv6_protosw = {
 
 
 /* Compatibility glue so we can support IPv6 when it's compiled as a module */
-int dummy_ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len,
-			  int *addr_len)
+int dummy_ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len)
 {
 	return -EAFNOSUPPORT;
 }
-int dummy_ip6_datagram_recv_ctl(struct sock *sk, struct msghdr *msg,
+int dummy_datagram_recv_ctl(struct sock *sk, struct msghdr *msg,
 				 struct sk_buff *skb)
 {
 	return -EAFNOSUPPORT;
@@ -74,7 +74,7 @@ int dummy_icmpv6_err_convert(u8 type, u8 code, int *err)
 void dummy_ipv6_icmp_error(struct sock *sk, struct sk_buff *skb, int err,
 			    __be16 port, u32 info, u8 *payload) {}
 int dummy_ipv6_chk_addr(struct net *net, const struct in6_addr *addr,
-			const struct net_device *dev, int strict)
+			struct net_device *dev, int strict)
 {
 	return 0;
 }
@@ -82,7 +82,7 @@ int dummy_ipv6_chk_addr(struct net *net, const struct in6_addr *addr,
 int __init pingv6_init(void)
 {
 	pingv6_ops.ipv6_recv_error = ipv6_recv_error;
-	pingv6_ops.ip6_datagram_recv_ctl = ip6_datagram_recv_ctl;
+	pingv6_ops.datagram_recv_ctl = datagram_recv_ctl;
 	pingv6_ops.icmpv6_err_convert = icmpv6_err_convert;
 	pingv6_ops.ipv6_icmp_error = ipv6_icmp_error;
 	pingv6_ops.ipv6_chk_addr = ipv6_chk_addr;
@@ -95,7 +95,7 @@ int __init pingv6_init(void)
 void pingv6_exit(void)
 {
 	pingv6_ops.ipv6_recv_error = dummy_ipv6_recv_error;
-	pingv6_ops.ip6_datagram_recv_ctl = dummy_ip6_datagram_recv_ctl;
+	pingv6_ops.datagram_recv_ctl = dummy_datagram_recv_ctl;
 	pingv6_ops.icmpv6_err_convert = dummy_icmpv6_err_convert;
 	pingv6_ops.ipv6_icmp_error = dummy_ipv6_icmp_error;
 	pingv6_ops.ipv6_chk_addr = dummy_ipv6_chk_addr;
@@ -110,7 +110,7 @@ int ping_v6_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	struct icmp6hdr user_icmph;
 	int addr_type;
 	struct in6_addr *daddr;
-	int oif = 0;
+	int iif = 0;
 	struct flowi6 fl6;
 	int err;
 	int hlimit;
@@ -132,30 +132,25 @@ int ping_v6_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		if (u->sin6_family != AF_INET6) {
 			return -EAFNOSUPPORT;
 		}
+		if (sk->sk_bound_dev_if &&
+		    sk->sk_bound_dev_if != u->sin6_scope_id) {
+			return -EINVAL;
+		}
 		daddr = &(u->sin6_addr);
-		if (__ipv6_addr_needs_scope_id(ipv6_addr_type(daddr)))
-			oif = u->sin6_scope_id;
+		iif = u->sin6_scope_id;
 	} else {
 		if (sk->sk_state != TCP_ESTABLISHED)
 			return -EDESTADDRREQ;
 		daddr = &np->daddr;
 	}
 
-	if (!oif)
-		oif = sk->sk_bound_dev_if;
-
-	if (!oif)
-		oif = np->sticky_pktinfo.ipi6_ifindex;
-
-	if (!oif && ipv6_addr_is_multicast(daddr))
-		oif = np->mcast_oif;
-	else if (!oif)
-		oif = np->ucast_oif;
+	if (!iif)
+		iif = sk->sk_bound_dev_if;
 
 	addr_type = ipv6_addr_type(daddr);
-	if ((__ipv6_addr_needs_scope_id(addr_type) && !oif) ||
-	    (addr_type & IPV6_ADDR_MAPPED) ||
-	    (oif && sk->sk_bound_dev_if && oif != sk->sk_bound_dev_if))
+	if (__ipv6_addr_needs_scope_id(addr_type) && !iif)
+		return -EINVAL;
+	if (addr_type & IPV6_ADDR_MAPPED)
 		return -EINVAL;
 
 	/* TODO: use ip6_datagram_send_ctl to get options from cmsg */
@@ -165,11 +160,10 @@ int ping_v6_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	fl6.flowi6_proto = IPPROTO_ICMPV6;
 	fl6.saddr = np->saddr;
 	fl6.daddr = *daddr;
-	fl6.flowi6_oif = oif;
 	fl6.flowi6_mark = sk->sk_mark;
-	fl6.flowi6_uid = sock_i_uid(sk);
 	fl6.fl6_icmp_type = user_icmph.icmp6_type;
 	fl6.fl6_icmp_code = user_icmph.icmp6_code;
+	fl6.flowi6_uid = sock_i_uid(sk);
 	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
 
 	if (!fl6.flowi6_oif && ipv6_addr_is_multicast(&fl6.daddr))
@@ -185,6 +179,11 @@ int ping_v6_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	np = inet6_sk(sk);
 	if (!np)
 		return -EBADF;
+
+	if (!fl6.flowi6_oif && ipv6_addr_is_multicast(&fl6.daddr))
+		fl6.flowi6_oif = np->mcast_oif;
+	else if (!fl6.flowi6_oif)
+		fl6.flowi6_oif = np->ucast_oif;
 
 	pfh.icmph.type = user_icmph.icmp6_type;
 	pfh.icmph.code = user_icmph.icmp6_code;

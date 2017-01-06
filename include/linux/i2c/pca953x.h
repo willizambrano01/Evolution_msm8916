@@ -11,7 +11,7 @@ struct pca953x_platform_data {
 	unsigned	gpio_base;
 
 	/* initial polarity inversion setting */
-	u32		invert;
+	uint16_t	invert;
 
 	/* interrupt base */
 	int		irq_base;

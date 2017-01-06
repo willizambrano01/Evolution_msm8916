@@ -140,7 +140,6 @@ extern NORETURN void usage_with_options(const char * const *usagestr,
 enum {
 	PARSE_OPT_HELP = -1,
 	PARSE_OPT_DONE,
-	PARSE_OPT_LIST,
 	PARSE_OPT_UNKNOWN,
 };
 

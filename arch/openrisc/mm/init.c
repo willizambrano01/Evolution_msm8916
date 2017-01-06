@@ -43,7 +43,6 @@
 #include <asm/kmap_types.h>
 #include <asm/fixmap.h>
 #include <asm/tlbflush.h>
-#include <asm/sections.h>
 
 int mem_init_done;
 
@@ -168,25 +167,14 @@ void __init paging_init(void)
 		unsigned long *dtlb_vector = __va(0x900);
 		unsigned long *itlb_vector = __va(0xa00);
 
-		printk(KERN_INFO "itlb_miss_handler %p\n", &itlb_miss_handler);
-		*itlb_vector = ((unsigned long)&itlb_miss_handler -
-				(unsigned long)itlb_vector) >> 2;
-
-		/* Soft ordering constraint to ensure that dtlb_vector is
-		 * the last thing updated
-		 */
-		barrier();
-
 		printk(KERN_INFO "dtlb_miss_handler %p\n", &dtlb_miss_handler);
 		*dtlb_vector = ((unsigned long)&dtlb_miss_handler -
 				(unsigned long)dtlb_vector) >> 2;
 
+		printk(KERN_INFO "itlb_miss_handler %p\n", &itlb_miss_handler);
+		*itlb_vector = ((unsigned long)&itlb_miss_handler -
+				(unsigned long)itlb_vector) >> 2;
 	}
-
-	/* Soft ordering constraint to ensure that cache invalidation and
-	 * TLB flush really happen _after_ code has been modified.
-	 */
-	barrier();
 
 	/* Invalidate instruction caches after code modification */
 	mtspr(SPR_ICBIR, 0x900);
@@ -202,12 +190,15 @@ void __init paging_init(void)
 
 /* References to section boundaries */
 
+extern char _stext, _etext, _edata, __bss_start, _end;
+extern char __init_begin, __init_end;
+
 static int __init free_pages_init(void)
 {
 	int reservedpages, pfn;
 
 	/* this will put all low memory onto the freelists */
-	free_all_bootmem();
+	totalram_pages = free_all_bootmem();
 
 	reservedpages = 0;
 	for (pfn = 0; pfn < max_low_pfn; pfn++) {
@@ -261,11 +252,30 @@ void __init mem_init(void)
 #ifdef CONFIG_BLK_DEV_INITRD
 void free_initrd_mem(unsigned long start, unsigned long end)
 {
-	free_reserved_area(start, end, 0, "initrd");
+	printk(KERN_INFO "Freeing initrd memory: %ldk freed\n",
+	       (end - start) >> 10);
+
+	for (; start < end; start += PAGE_SIZE) {
+		ClearPageReserved(virt_to_page(start));
+		init_page_count(virt_to_page(start));
+		free_page(start);
+		totalram_pages++;
+	}
 }
 #endif
 
 void free_initmem(void)
 {
-	free_initmem_default(0);
+	unsigned long addr;
+
+	addr = (unsigned long)(&__init_begin);
+	for (; addr < (unsigned long)(&__init_end); addr += PAGE_SIZE) {
+		ClearPageReserved(virt_to_page(addr));
+		init_page_count(virt_to_page(addr));
+		free_page(addr);
+		totalram_pages++;
+	}
+	printk(KERN_INFO "Freeing unused kernel memory: %luk freed\n",
+	       ((unsigned long)&__init_end -
+		(unsigned long)&__init_begin) >> 10);
 }

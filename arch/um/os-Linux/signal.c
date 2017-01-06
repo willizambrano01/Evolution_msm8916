@@ -9,13 +9,12 @@
 #include <errno.h>
 #include <signal.h>
 #include <strings.h>
-#include <as-layout.h>
-#include <kern_util.h>
-#include <os.h>
-#include <sysdep/mcontext.h>
-#include "internal.h"
+#include "as-layout.h"
+#include "kern_util.h"
+#include "os.h"
+#include "sysdep/mcontext.h"
 
-void (*sig_info[NSIG])(int, struct siginfo *, struct uml_pt_regs *) = {
+void (*sig_info[NSIG])(int, struct uml_pt_regs *) = {
 	[SIGTRAP]	= relay_signal,
 	[SIGFPE]	= relay_signal,
 	[SIGILL]	= relay_signal,
@@ -25,7 +24,7 @@ void (*sig_info[NSIG])(int, struct siginfo *, struct uml_pt_regs *) = {
 	[SIGIO]		= sigio_handler,
 	[SIGVTALRM]	= timer_handler };
 
-static void sig_handler_common(int sig, siginfo_t *si, mcontext_t *mc)
+static void sig_handler_common(int sig, mcontext_t *mc)
 {
 	struct uml_pt_regs r;
 	int save_errno = errno;
@@ -41,7 +40,7 @@ static void sig_handler_common(int sig, siginfo_t *si, mcontext_t *mc)
 	if ((sig != SIGIO) && (sig != SIGWINCH) && (sig != SIGVTALRM))
 		unblock_signals();
 
-	(*sig_info[sig])(sig, si, &r);
+	(*sig_info[sig])(sig, &r);
 
 	errno = save_errno;
 }
@@ -61,7 +60,7 @@ static void sig_handler_common(int sig, siginfo_t *si, mcontext_t *mc)
 static int signals_enabled;
 static unsigned int signals_pending;
 
-void sig_handler(int sig, siginfo_t *si, mcontext_t *mc)
+void sig_handler(int sig, mcontext_t *mc)
 {
 	int enabled;
 
@@ -73,7 +72,7 @@ void sig_handler(int sig, siginfo_t *si, mcontext_t *mc)
 
 	block_signals();
 
-	sig_handler_common(sig, si, mc);
+	sig_handler_common(sig, mc);
 
 	set_signals(enabled);
 }
@@ -86,10 +85,10 @@ static void real_alarm_handler(mcontext_t *mc)
 		get_regs_from_mc(&regs, mc);
 	regs.is_user = 0;
 	unblock_signals();
-	timer_handler(SIGVTALRM, NULL, &regs);
+	timer_handler(SIGVTALRM, &regs);
 }
 
-void alarm_handler(int sig, struct siginfo *unused_si, mcontext_t *mc)
+void alarm_handler(int sig, mcontext_t *mc)
 {
 	int enabled;
 
@@ -120,7 +119,7 @@ void set_sigstack(void *sig_stack, int size)
 		panic("enabling signal stack failed, errno = %d\n", errno);
 }
 
-static void (*handlers[_NSIG])(int sig, siginfo_t *si, mcontext_t *mc) = {
+static void (*handlers[_NSIG])(int sig, mcontext_t *mc) = {
 	[SIGSEGV] = sig_handler,
 	[SIGBUS] = sig_handler,
 	[SIGILL] = sig_handler,
@@ -133,7 +132,7 @@ static void (*handlers[_NSIG])(int sig, siginfo_t *si, mcontext_t *mc) = {
 };
 
 
-static void hard_handler(int sig, siginfo_t *si, void *p)
+static void hard_handler(int sig, siginfo_t *info, void *p)
 {
 	struct ucontext *uc = p;
 	mcontext_t *mc = &uc->uc_mcontext;
@@ -162,7 +161,7 @@ static void hard_handler(int sig, siginfo_t *si, void *p)
 		while ((sig = ffs(pending)) != 0){
 			sig--;
 			pending &= ~(1 << sig);
-			(*handlers[sig])(sig, si, mc);
+			(*handlers[sig])(sig, mc);
 		}
 
 		/*
@@ -274,12 +273,9 @@ void unblock_signals(void)
 		 * Deal with SIGIO first because the alarm handler might
 		 * schedule, leaving the pending SIGIO stranded until we come
 		 * back here.
-		 *
-		 * SIGIO's handler doesn't use siginfo or mcontext,
-		 * so they can be NULL.
 		 */
 		if (save_pending & SIGIO_MASK)
-			sig_handler_common(SIGIO, NULL, NULL);
+			sig_handler_common(SIGIO, NULL);
 
 		if (save_pending & SIGVTALRM_MASK)
 			real_alarm_handler(NULL);

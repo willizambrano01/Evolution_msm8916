@@ -1,5 +1,3 @@
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/init.h>
@@ -77,12 +75,6 @@ unsigned long long
 sched_clock(void) __attribute__((alias("native_sched_clock")));
 #endif
 
-unsigned long long native_read_tsc(void)
-{
-	return __native_read_tsc();
-}
-EXPORT_SYMBOL(native_read_tsc);
-
 int check_tsc_unstable(void)
 {
 	return tsc_unstable;
@@ -92,7 +84,8 @@ EXPORT_SYMBOL_GPL(check_tsc_unstable);
 #ifdef CONFIG_X86_TSC
 int __init notsc_setup(char *str)
 {
-	pr_warn("Kernel compiled with CONFIG_X86_TSC, cannot disable TSC completely\n");
+	printk(KERN_WARNING "notsc: Kernel compiled with CONFIG_X86_TSC, "
+			"cannot disable TSC completely.\n");
 	tsc_disabled = 1;
 	return 1;
 }
@@ -380,7 +373,7 @@ static unsigned long quick_pit_calibrate(void)
 			goto success;
 		}
 	}
-	pr_err("Fast TSC calibration failed\n");
+	printk("Fast TSC calibration failed\n");
 	return 0;
 
 success:
@@ -399,7 +392,7 @@ success:
 	 */
 	delta *= PIT_TICK_RATE;
 	do_div(delta, i*256*1000);
-	pr_info("Fast TSC calibration using PIT\n");
+	printk("Fast TSC calibration using PIT\n");
 	return delta;
 }
 
@@ -494,8 +487,9 @@ unsigned long native_calibrate_tsc(void)
 		 * use the reference value, as it is more precise.
 		 */
 		if (delta >= 90 && delta <= 110) {
-			pr_info("PIT calibration matches %s. %d loops\n",
-				hpet ? "HPET" : "PMTIMER", i + 1);
+			printk(KERN_INFO
+			       "TSC: PIT calibration matches %s. %d loops\n",
+			       hpet ? "HPET" : "PMTIMER", i + 1);
 			return tsc_ref_min;
 		}
 
@@ -517,36 +511,38 @@ unsigned long native_calibrate_tsc(void)
 	 */
 	if (tsc_pit_min == ULONG_MAX) {
 		/* PIT gave no useful value */
-		pr_warn("Unable to calibrate against PIT\n");
+		printk(KERN_WARNING "TSC: Unable to calibrate against PIT\n");
 
 		/* We don't have an alternative source, disable TSC */
 		if (!hpet && !ref1 && !ref2) {
-			pr_notice("No reference (HPET/PMTIMER) available\n");
+			printk("TSC: No reference (HPET/PMTIMER) available\n");
 			return 0;
 		}
 
 		/* The alternative source failed as well, disable TSC */
 		if (tsc_ref_min == ULONG_MAX) {
-			pr_warn("HPET/PMTIMER calibration failed\n");
+			printk(KERN_WARNING "TSC: HPET/PMTIMER calibration "
+			       "failed.\n");
 			return 0;
 		}
 
 		/* Use the alternative source */
-		pr_info("using %s reference calibration\n",
-			hpet ? "HPET" : "PMTIMER");
+		printk(KERN_INFO "TSC: using %s reference calibration\n",
+		       hpet ? "HPET" : "PMTIMER");
 
 		return tsc_ref_min;
 	}
 
 	/* We don't have an alternative source, use the PIT calibration value */
 	if (!hpet && !ref1 && !ref2) {
-		pr_info("Using PIT calibration value\n");
+		printk(KERN_INFO "TSC: Using PIT calibration value\n");
 		return tsc_pit_min;
 	}
 
 	/* The alternative source failed, use the PIT calibration value */
 	if (tsc_ref_min == ULONG_MAX) {
-		pr_warn("HPET/PMTIMER calibration failed. Using PIT calibration.\n");
+		printk(KERN_WARNING "TSC: HPET/PMTIMER calibration failed. "
+		       "Using PIT calibration\n");
 		return tsc_pit_min;
 	}
 
@@ -555,9 +551,9 @@ unsigned long native_calibrate_tsc(void)
 	 * the PIT value as we know that there are PMTIMERs around
 	 * running at double speed. At least we let the user know:
 	 */
-	pr_warn("PIT calibration deviates from %s: %lu %lu\n",
-		hpet ? "HPET" : "PMTIMER", tsc_pit_min, tsc_ref_min);
-	pr_info("Using PIT calibration value\n");
+	printk(KERN_WARNING "TSC: PIT calibration deviates from %s: %lu %lu.\n",
+	       hpet ? "HPET" : "PMTIMER", tsc_pit_min, tsc_ref_min);
+	printk(KERN_INFO "TSC: Using PIT calibration value\n");
 	return tsc_pit_min;
 }
 
@@ -623,8 +619,7 @@ static void set_cyc2ns_scale(unsigned long cpu_khz, int cpu)
 	ns_now = __cycles_2_ns(tsc_now);
 
 	if (cpu_khz) {
-		*scale = ((NSEC_PER_MSEC << CYC2NS_SCALE_FACTOR) +
-				cpu_khz / 2) / cpu_khz;
+		*scale = (NSEC_PER_MSEC << CYC2NS_SCALE_FACTOR)/cpu_khz;
 		*offset = ns_now - mult_frac(tsc_now, *scale,
 					     (1UL << CYC2NS_SCALE_FACTOR));
 	}
@@ -768,8 +763,7 @@ static cycle_t read_tsc(struct clocksource *cs)
 
 static void resume_tsc(struct clocksource *cs)
 {
-	if (!boot_cpu_has(X86_FEATURE_NONSTOP_TSC_S3))
-		clocksource_tsc.cycle_last = 0;
+	clocksource_tsc.cycle_last = 0;
 }
 
 static struct clocksource clocksource_tsc = {
@@ -791,7 +785,7 @@ void mark_tsc_unstable(char *reason)
 		tsc_unstable = 1;
 		sched_clock_stable = 0;
 		disable_sched_clock_irqtime();
-		pr_info("Marking TSC unstable due to %s\n", reason);
+		printk(KERN_INFO "Marking TSC unstable due to %s\n", reason);
 		/* Change only the rating, when not registered */
 		if (clocksource_tsc.mult)
 			clocksource_mark_unstable(&clocksource_tsc);
@@ -918,9 +912,9 @@ static void tsc_refine_calibration_work(struct work_struct *work)
 		goto out;
 
 	tsc_khz = freq;
-	pr_info("Refined TSC clocksource calibration: %lu.%03lu MHz\n",
-		(unsigned long)tsc_khz / 1000,
-		(unsigned long)tsc_khz % 1000);
+	printk(KERN_INFO "Refined TSC clocksource calibration: "
+		"%lu.%03lu MHz.\n", (unsigned long)tsc_khz / 1000,
+					(unsigned long)tsc_khz % 1000);
 
 out:
 	clocksource_register_khz(&clocksource_tsc, tsc_khz);
@@ -939,9 +933,6 @@ static int __init init_tsc_clocksource(void)
 		clocksource_tsc.rating = 0;
 		clocksource_tsc.flags &= ~CLOCK_SOURCE_IS_CONTINUOUS;
 	}
-
-	if (boot_cpu_has(X86_FEATURE_NONSTOP_TSC_S3))
-		clocksource_tsc.flags |= CLOCK_SOURCE_SUSPEND_NONSTOP;
 
 	/*
 	 * Trust the results of the earlier calibration on systems
@@ -979,9 +970,9 @@ void __init tsc_init(void)
 		return;
 	}
 
-	pr_info("Detected %lu.%03lu MHz processor\n",
-		(unsigned long)cpu_khz / 1000,
-		(unsigned long)cpu_khz % 1000);
+	printk("Detected %lu.%03lu MHz processor.\n",
+			(unsigned long)cpu_khz / 1000,
+			(unsigned long)cpu_khz % 1000);
 
 	/*
 	 * Secondary CPUs do not run through tsc_init(), so set up

@@ -15,14 +15,13 @@
 #include <linux/preempt.h>
 #include <linux/module.h>
 #include <linux/debugfs.h>
-#include <soc/qcom/mmi_watchdog.h>
+#include <mach/mmi_watchdog.h>
 
 struct completion wdt_timeout_complete;
 static void wdt_timeout_work(struct work_struct *work)
 {
 	local_irq_disable();
-	while (1)
-	;
+	while (1) { }
 	local_irq_enable();
 	complete(&wdt_timeout_complete);
 }
@@ -48,8 +47,7 @@ static int fire_softlockup_reset_set(void *data, u64 val)
 	printk(KERN_WARNING "Fire softlockup watchdog reset.\n");
 	printk(KERN_WARNING "Please wait ...\n");
 	preempt_disable();
-	while (1)
-	;
+	while (1) { }
 
 	return 0;
 }

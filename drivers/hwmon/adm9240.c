@@ -50,7 +50,6 @@
 #include <linux/hwmon-vid.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
-#include <linux/jiffies.h>
 
 /* Addresses to scan */
 static const unsigned short normal_i2c[] = { 0x2c, 0x2d, 0x2e, 0x2f,
@@ -98,13 +97,13 @@ static inline unsigned int IN_FROM_REG(u8 reg, int n)
 
 static inline u8 IN_TO_REG(unsigned long val, int n)
 {
-	return clamp_val(SCALE(val, 192, nom_mv[n]), 0, 255);
+	return SENSORS_LIMIT(SCALE(val, 192, nom_mv[n]), 0, 255);
 }
 
 /* temperature range: -40..125, 127 disables temperature alarm */
 static inline s8 TEMP_TO_REG(long val)
 {
-	return clamp_val(SCALE(val, 1, 1000), -40, 127);
+	return SENSORS_LIMIT(SCALE(val, 1, 1000), -40, 127);
 }
 
 /* two fans, each with low fan speed limit */
@@ -122,7 +121,7 @@ static inline unsigned int FAN_FROM_REG(u8 reg, u8 div)
 /* analog out 0..1250mV */
 static inline u8 AOUT_TO_REG(unsigned long val)
 {
-	return clamp_val(SCALE(val, 255, 1250), 0, 255);
+	return SENSORS_LIMIT(SCALE(val, 255, 1250), 0, 255);
 }
 
 static inline unsigned int AOUT_FROM_REG(u8 reg)
@@ -351,9 +350,8 @@ static void adm9240_write_fan_div(struct i2c_client *client, int nr,
 	reg &= ~(3 << shift);
 	reg |= (fan_div << shift);
 	i2c_smbus_write_byte_data(client, ADM9240_REG_VID_FAN_DIV, reg);
-	dev_dbg(&client->dev,
-		"fan%d clock divider changed from %u to %u\n",
-		nr + 1, 1 << old, 1 << fan_div);
+	dev_dbg(&client->dev, "fan%d clock divider changed from %u "
+			"to %u\n", nr + 1, 1 << old, 1 << fan_div);
 }
 
 /*
@@ -502,6 +500,31 @@ static ssize_t set_aout(struct device *dev,
 }
 static DEVICE_ATTR(aout_output, S_IRUGO | S_IWUSR, show_aout, set_aout);
 
+/* chassis_clear */
+static ssize_t chassis_clear_legacy(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	long val;
+	int err;
+
+	err = kstrtol(buf, 10, &val);
+	if (err)
+		return err;
+
+	dev_warn(dev, "Attribute chassis_clear is deprecated, "
+		 "use intrusion0_alarm instead\n");
+
+	if (val == 1) {
+		i2c_smbus_write_byte_data(client,
+				ADM9240_REG_CHASSIS_CLEAR, 0x80);
+		dev_dbg(&client->dev, "chassis intrusion latch cleared\n");
+	}
+	return count;
+}
+static DEVICE_ATTR(chassis_clear, S_IWUSR, NULL, chassis_clear_legacy);
+
 static ssize_t chassis_clear(struct device *dev,
 		struct device_attribute *attr,
 		const char *buf, size_t count)
@@ -563,6 +586,7 @@ static struct attribute *adm9240_attributes[] = {
 	&sensor_dev_attr_fan2_alarm.dev_attr.attr,
 	&dev_attr_alarms.attr,
 	&dev_attr_aout_output.attr,
+	&dev_attr_chassis_clear.attr,
 	&sensor_dev_attr_intrusion0_alarm.dev_attr.attr,
 	&dev_attr_cpu0_vid.attr,
 	NULL
@@ -626,9 +650,11 @@ static int adm9240_probe(struct i2c_client *new_client,
 	struct adm9240_data *data;
 	int err;
 
-	data = devm_kzalloc(&new_client->dev, sizeof(*data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(new_client, data);
 	mutex_init(&data->update_lock);
@@ -638,7 +664,7 @@ static int adm9240_probe(struct i2c_client *new_client,
 	/* populate sysfs filesystem */
 	err = sysfs_create_group(&new_client->dev.kobj, &adm9240_group);
 	if (err)
-		return err;
+		goto exit_free;
 
 	data->hwmon_dev = hwmon_device_register(&new_client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -650,6 +676,9 @@ static int adm9240_probe(struct i2c_client *new_client,
 
 exit_remove:
 	sysfs_remove_group(&new_client->dev.kobj, &adm9240_group);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -660,6 +689,7 @@ static int adm9240_remove(struct i2c_client *client)
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &adm9240_group);
 
+	kfree(data);
 	return 0;
 }
 
@@ -700,8 +730,8 @@ static void adm9240_init_client(struct i2c_client *client)
 		/* start measurement cycle */
 		i2c_smbus_write_byte_data(client, ADM9240_REG_CONFIG, 1);
 
-		dev_info(&client->dev,
-			 "cold start: config was 0x%02x mode %u\n", conf, mode);
+		dev_info(&client->dev, "cold start: config was 0x%02x "
+				"mode %u\n", conf, mode);
 	}
 }
 

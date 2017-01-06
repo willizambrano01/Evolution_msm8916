@@ -168,7 +168,7 @@ static int __init pasic3_probe(struct platform_device *pdev)
 		/* the first 5 PASIC3 registers control the DS1WM */
 		ds1wm_resources[0].end = (5 << asic->bus_shift) - 1;
 		ret = mfd_add_devices(&pdev->dev, pdev->id,
-				      &ds1wm_cell, 1, r, irq, NULL);
+				&ds1wm_cell, 1, r, irq);
 		if (ret < 0)
 			dev_warn(dev, "failed to register DS1WM\n");
 	}
@@ -176,8 +176,7 @@ static int __init pasic3_probe(struct platform_device *pdev)
 	if (pdata && pdata->led_pdata) {
 		led_cell.platform_data = pdata->led_pdata;
 		led_cell.pdata_size = sizeof(struct pasic3_leds_machinfo);
-		ret = mfd_add_devices(&pdev->dev, pdev->id, &led_cell, 1, r,
-				      0, NULL);
+		ret = mfd_add_devices(&pdev->dev, pdev->id, &led_cell, 1, r, 0);
 		if (ret < 0)
 			dev_warn(dev, "failed to register LED device\n");
 	}
@@ -208,7 +207,18 @@ static struct platform_driver pasic3_driver = {
 	.remove		= pasic3_remove,
 };
 
-module_platform_driver_probe(pasic3_driver, pasic3_probe);
+static int __init pasic3_base_init(void)
+{
+	return platform_driver_probe(&pasic3_driver, pasic3_probe);
+}
+
+static void __exit pasic3_base_exit(void)
+{
+	platform_driver_unregister(&pasic3_driver);
+}
+
+module_init(pasic3_base_init);
+module_exit(pasic3_base_exit);
 
 MODULE_AUTHOR("Philipp Zabel <philipp.zabel@gmail.com>");
 MODULE_DESCRIPTION("Core driver for HTC PASIC3");

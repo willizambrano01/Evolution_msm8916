@@ -33,6 +33,7 @@
 
 /*---------------------  Export Definitions -------------------------*/
 
+
 /*---------------------  Export Classes  ----------------------------*/
 
 /*---------------------  Export Variables  --------------------------*/
@@ -42,12 +43,15 @@
 int private_ioctl(PSDevice pDevice, struct ifreq *rq);
 
 /*
-  void vConfigWEPKey(
-  PSDevice pDevice,
-  unsigned long dwKeyIndex,
-  unsigned char *pbyKey,
-  unsigned long uKeyLength
-);
+void vConfigWEPKey (
+    PSDevice pDevice,
+    unsigned long dwKeyIndex,
+    unsigned char *pbyKey,
+    unsigned long uKeyLength
+    );
 */
 
 #endif // __IOCTL_H__
+
+
+

@@ -45,15 +45,14 @@ static int rbtx4939_flash_remove(struct platform_device *dev)
 	return 0;
 }
 
-static const char * const rom_probe_types[] = {
-	"cfi_probe", "jedec_probe", NULL };
+static const char *rom_probe_types[] = { "cfi_probe", "jedec_probe", NULL };
 
 static int rbtx4939_flash_probe(struct platform_device *dev)
 {
 	struct rbtx4939_flash_data *pdata;
 	struct rbtx4939_flash_info *info;
 	struct resource *res;
-	const char * const *probe_type;
+	const char **probe_type;
 	int err = 0;
 	unsigned long size;
 
@@ -101,6 +100,8 @@ static int rbtx4939_flash_probe(struct platform_device *dev)
 		goto err_out;
 	}
 	info->mtd->owner = THIS_MODULE;
+	if (err)
+		goto err_out;
 	err = mtd_device_parse_register(info->mtd, NULL, NULL, pdata->parts,
 					pdata->nr_parts);
 

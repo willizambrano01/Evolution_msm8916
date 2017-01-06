@@ -16,8 +16,13 @@
 
 #define FLASH_NAME "qcom,led-flash"
 
+/*#define CONFIG_MSMB_CAMERA_DEBUG*/
 #undef CDBG
-#define CDBG(fmt, args...) pr_debug(fmt, ##args)
+#ifdef CONFIG_MSMB_CAMERA_DEBUG
+#define CDBG(fmt, args...) pr_err(fmt, ##args)
+#else
+#define CDBG(fmt, args...) do { } while (0)
+#endif
 
 static struct msm_led_flash_ctrl_t fctrl;
 static struct i2c_driver adp1660_i2c_driver;
@@ -26,7 +31,6 @@ static struct msm_camera_i2c_reg_array adp1660_init_array[] = {
 	{0x01, 0x03},
 	{0x02, 0x0F},
 	{0x09, 0x28},
-	{0x03, 0x09},
 };
 
 static struct msm_camera_i2c_reg_array adp1660_off_array[] = {
@@ -75,6 +79,14 @@ static const struct i2c_device_id adp1660_i2c_id[] = {
 	{ }
 };
 
+static struct platform_driver adp1660_platform_driver = {
+	.driver = {
+		.name = "qcom,led-flash",
+		.owner = THIS_MODULE,
+		.of_match_table = adp1660_trigger_dt_match,
+	},
+};
+
 static int msm_flash_adp1660_i2c_probe(struct i2c_client *client,
 		const struct i2c_device_id *id)
 {
@@ -106,19 +118,12 @@ static int msm_flash_adp1660_platform_probe(struct platform_device *pdev)
 	return msm_flash_probe(pdev, match->data);
 }
 
-static struct platform_driver adp1660_platform_driver = {
-	.probe = msm_flash_adp1660_platform_probe,
-	.driver = {
-		.name = "qcom,led-flash",
-		.owner = THIS_MODULE,
-		.of_match_table = adp1660_trigger_dt_match,
-	},
-};
-
 static int __init msm_flash_adp1660_init_module(void)
 {
 	int32_t rc = 0;
-	rc = platform_driver_register(&adp1660_platform_driver);
+	pr_info("%s:%d\n", __func__, __LINE__);
+	rc = platform_driver_probe(&adp1660_platform_driver,
+		msm_flash_adp1660_platform_probe);
 	if (!rc)
 		return rc;
 	pr_debug("%s:%d rc %d\n", __func__, __LINE__, rc);
@@ -127,10 +132,12 @@ static int __init msm_flash_adp1660_init_module(void)
 
 static void __exit msm_flash_adp1660_exit_module(void)
 {
+	pr_debug("%s:%d\n", __func__, __LINE__);
 	if (fctrl.pdev)
 		platform_driver_unregister(&adp1660_platform_driver);
 	else
 		i2c_del_driver(&adp1660_i2c_driver);
+	return;
 }
 
 static struct msm_camera_i2c_client adp1660_i2c_client = {

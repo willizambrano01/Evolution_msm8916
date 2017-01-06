@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -121,8 +121,6 @@ enum sdmx_raw_out_format {
 	SDMX_192_TAIL_OUTPUT
 };
 
-#pragma pack(push, sdmx, 1)
-
 struct sdmx_session_dbg_counters {
 	/* Total number of TS-packets input to SDMX. */
 	u32 ts_pkt_in;
@@ -166,7 +164,7 @@ struct sdmx_pes_counters {
 
 struct sdmx_buff_descr {
 	/* Physical address where buffer starts */
-	u64 base_addr;
+	void *base_addr;
 
 	/* Size of buffer */
 	u32 size;
@@ -230,9 +228,6 @@ struct sdmx_filter_status {
 	/* General status (bitmap) reported by secure demux for this filter */
 	u32 status_indicators;
 };
-#pragma pack(pop, sdmx)
-
-#ifdef CONFIG_QSEECOM
 
 int sdmx_open_session(int *session_handle);
 
@@ -273,96 +268,5 @@ int sdmx_get_dbg_counters(int session_handle,
 int sdmx_reset_dbg_counters(int session_handle);
 
 int sdmx_set_log_level(int session_handle, enum sdmx_log_level level);
-
-#else
-
-static inline int sdmx_open_session(int *session_handle)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_close_session(int session_handle)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_get_version(int session_handle, int32_t *version)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_set_session_cfg(int session_handle,
-	enum sdmx_proc_mode proc_mode,
-	enum sdmx_inp_mode inp_mode, enum sdmx_pkt_format pkt_format,
-	u8 odd_scramble_bits, u8 even_scramble_bits)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_add_filter(int session_handle, u16 pid,
-	enum sdmx_filter filter_type,
-	struct sdmx_buff_descr *meta_data_buf, enum sdmx_buf_mode data_buf_mode,
-	u32 num_data_bufs, struct sdmx_data_buff_descr *data_bufs,
-	int *filter_handle, enum sdmx_raw_out_format ts_out_format, u32 flags)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_remove_filter(int session_handle, int filter_handle)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_set_kl_ind(int session_handle, u16 pid,
-	u32 key_ladder_index)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_add_raw_pid(int session_handle, int filter_handle,
-	u16 pid)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_remove_raw_pid(int session_handle, int filter_handle,
-	u16 pid)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_process(int session_handle, u8 flags,
-	struct sdmx_buff_descr *input_buf_desc,
-	u32 *input_fill_count, u32 *input_read_offset,
-	u32 *error_indicators,
-	u32 *status_indicators,
-	u32 num_filters,
-	struct sdmx_filter_status *filter_status)
-{
-	*status_indicators = 0;
-	*error_indicators = 0;
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_get_dbg_counters(int session_handle,
-	struct sdmx_session_dbg_counters *session_counters,
-	u32 *num_filters,
-	struct sdmx_filter_dbg_counters *filter_counters)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_reset_dbg_counters(int session_handle)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-static inline int sdmx_set_log_level(int session_handle,
-	enum sdmx_log_level level)
-{
-	return SDMX_STATUS_GENERAL_FAILURE;
-}
-
-#endif
 
 #endif /* _MPQ_SDMX_H */

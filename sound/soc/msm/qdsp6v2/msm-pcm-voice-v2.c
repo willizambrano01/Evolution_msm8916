@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,7 +25,6 @@
 #include <sound/initval.h>
 #include <sound/control.h>
 #include <asm/dma.h>
-#include <linux/of_device.h>
 
 #include "msm-pcm-voice-v2.h"
 #include "q6voice.h"
@@ -323,8 +322,8 @@ static int msm_pcm_ioctl(struct snd_pcm_substream *substream,
 	case SNDRV_VOICE_IOCTL_LCH:
 		if (copy_from_user(&lch_mode, (void *)arg,
 				   sizeof(enum voice_lch_mode))) {
-			pr_err("%s: Copy from user failed, size %zd\n",
-				__func__, sizeof(enum voice_lch_mode));
+			pr_err("%s: Copy from user failed, size %d\n", __func__,
+			       sizeof(enum voice_lch_mode));
 
 			ret = -EFAULT;
 			break;
@@ -509,74 +508,6 @@ static int msm_voice_slowtalk_put(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static int msm_voice_hd_voice_put(struct snd_kcontrol *kcontrol,
-				  struct snd_ctl_elem_value *ucontrol)
-{
-	int ret = 0;
-	uint32_t hd_enable = ucontrol->value.integer.value[0];
-	uint32_t session_id = ucontrol->value.integer.value[1];
-
-	pr_debug("%s: HD Voice enable=%d session_id=%#x\n", __func__, hd_enable,
-		 session_id);
-
-	ret = voc_set_hd_enable(session_id, hd_enable);
-
-	return ret;
-}
-
-static int msm_voice_topology_disable_put(struct snd_kcontrol *kcontrol,
-					  struct snd_ctl_elem_value *ucontrol)
-{
-	int ret = 0;
-	int disable = ucontrol->value.integer.value[0];
-	uint32_t session_id = ucontrol->value.integer.value[1];
-
-	if ((disable < 0) || (disable > 1)) {
-		pr_err(" %s Invalid arguments: %d\n", __func__, disable);
-
-		ret = -EINVAL;
-		goto done;
-	}
-	pr_debug("%s: disable = %d, session_id = %d\n", __func__, disable,
-		 session_id);
-
-	ret = voc_disable_topology(session_id, disable);
-
-done:
-	return ret;
-}
-
-static int msm_voice_cvd_version_info(struct snd_kcontrol *kcontrol,
-				      struct snd_ctl_elem_info *uinfo)
-{
-	int ret = 0;
-
-	pr_debug("%s:\n", __func__);
-
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BYTES;
-	uinfo->count = CVD_VERSION_STRING_MAX_SIZE;
-
-	return ret;
-}
-
-static int msm_voice_cvd_version_get(struct snd_kcontrol *kcontrol,
-				     struct snd_ctl_elem_value *ucontrol)
-{
-	char cvd_version[CVD_VERSION_STRING_MAX_SIZE] = CVD_VERSION_DEFAULT;
-	int ret;
-
-	pr_debug("%s:\n", __func__);
-
-	ret = voc_get_cvd_version(cvd_version);
-
-	if (ret)
-		pr_err("%s: Error retrieving CVD version, error:%d\n",
-			__func__, ret);
-
-	memcpy(ucontrol->value.bytes.data, cvd_version, sizeof(cvd_version));
-
-	return 0;
-}
 static struct snd_kcontrol_new msm_voice_controls[] = {
 	SOC_SINGLE_MULTI_EXT("Voice Rx Device Mute", SND_SOC_NOPM, 0, VSID_MAX,
 				0, 3, NULL, msm_voice_rx_device_mute_put),
@@ -590,18 +521,6 @@ static struct snd_kcontrol_new msm_voice_controls[] = {
 				msm_voice_tty_mode_put),
 	SOC_SINGLE_MULTI_EXT("Slowtalk Enable", SND_SOC_NOPM, 0, VSID_MAX, 0, 2,
 				NULL, msm_voice_slowtalk_put),
-	SOC_SINGLE_MULTI_EXT("Voice Topology Disable", SND_SOC_NOPM, 0,
-			     VSID_MAX, 0, 2, NULL,
-			     msm_voice_topology_disable_put),
-	SOC_SINGLE_MULTI_EXT("HD Voice Enable", SND_SOC_NOPM, 0, VSID_MAX, 0, 2,
-			     NULL, msm_voice_hd_voice_put),
-	{
-		.access = SNDRV_CTL_ELEM_ACCESS_READ,
-		.iface	= SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name	= "CVD Version",
-		.info	= msm_voice_cvd_version_info,
-		.get	= msm_voice_cvd_version_get,
-	},
 };
 
 static struct snd_pcm_ops msm_pcm_ops = {
@@ -611,7 +530,6 @@ static struct snd_pcm_ops msm_pcm_ops = {
 	.prepare		= msm_pcm_prepare,
 	.trigger		= msm_pcm_trigger,
 	.ioctl			= msm_pcm_ioctl,
-	.compat_ioctl		= msm_pcm_ioctl,
 };
 
 
@@ -639,13 +557,9 @@ static struct snd_soc_platform_driver msm_soc_platform = {
 	.probe		= msm_pcm_voice_probe,
 };
 
-static int msm_pcm_probe(struct platform_device *pdev)
+static __devinit int msm_pcm_probe(struct platform_device *pdev)
 {
 	int rc;
-	bool destroy_cvd = false;
-	bool vote_bms = false;
-	const char *is_destroy_cvd = "qcom,destroy-cvd";
-	const char *is_vote_bms = "qcom,vote-bms";
 
 	if (!is_voc_initialized()) {
 		pr_debug("%s: voice module not initialized yet, deferring probe()\n",
@@ -666,16 +580,10 @@ static int msm_pcm_probe(struct platform_device *pdev)
 		       __func__, rc);
 	}
 
-	pr_debug("%s: dev name %s\n",
-			__func__, dev_name(&pdev->dev));
-	destroy_cvd = of_property_read_bool(pdev->dev.of_node,
-						is_destroy_cvd);
-	voc_set_destroy_cvd_flag(destroy_cvd);
+	if (pdev->dev.of_node)
+		dev_set_name(&pdev->dev, "%s", "msm-pcm-voice");
 
-	vote_bms = of_property_read_bool(pdev->dev.of_node,
-					 is_vote_bms);
-	voc_set_vote_bms_flag(vote_bms);
-
+	pr_debug("%s: dev name %s\n", __func__, dev_name(&pdev->dev));
 	rc = snd_soc_register_platform(&pdev->dev,
 				       &msm_soc_platform);
 
@@ -702,7 +610,7 @@ static struct platform_driver msm_pcm_driver = {
 		.of_match_table = msm_voice_dt_match,
 	},
 	.probe = msm_pcm_probe,
-	.remove = msm_pcm_remove,
+	.remove = __devexit_p(msm_pcm_remove),
 };
 
 static int __init msm_soc_platform_init(void)

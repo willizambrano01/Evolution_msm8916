@@ -27,7 +27,6 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/pci.h>
 #include <mach/orion5x.h>
-#include <plat/orion-gpio.h>
 #include "common.h"
 #include "mpp.h"
 
@@ -317,8 +316,8 @@ static void __init d2net_init(void)
 	d2net_sata_power_init();
 	orion5x_sata_init(&d2net_sata_data);
 
-	mvebu_mbus_add_window("devbus-boot", D2NET_NOR_BOOT_BASE,
-			      D2NET_NOR_BOOT_SIZE);
+	orion5x_setup_dev_boot_win(D2NET_NOR_BOOT_BASE,
+				D2NET_NOR_BOOT_SIZE);
 	platform_device_register(&d2net_nor_flash);
 
 	platform_device_register(&d2net_gpio_buttons);
@@ -342,7 +341,7 @@ MACHINE_START(D2NET, "LaCie d2 Network")
 	.map_io		= orion5x_map_io,
 	.init_early	= orion5x_init_early,
 	.init_irq	= orion5x_init_irq,
-	.init_time	= orion5x_timer_init,
+	.timer		= &orion5x_timer,
 	.fixup		= tag_fixup_mem32,
 	.restart	= orion5x_restart,
 MACHINE_END
@@ -355,7 +354,7 @@ MACHINE_START(BIGDISK, "LaCie Big Disk Network")
 	.map_io		= orion5x_map_io,
 	.init_early	= orion5x_init_early,
 	.init_irq	= orion5x_init_irq,
-	.init_time	= orion5x_timer_init,
+	.timer		= &orion5x_timer,
 	.fixup		= tag_fixup_mem32,
 	.restart	= orion5x_restart,
 MACHINE_END

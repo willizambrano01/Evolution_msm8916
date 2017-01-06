@@ -1,4 +1,6 @@
-/*
+/**
+ * arch/s390/oprofile/hwsampler.c
+ *
  * Copyright IBM Corp. 2010
  * Author: Heinz Graalfs <graalfs@de.ibm.com>
  */
@@ -233,7 +235,7 @@ static void hws_ext_handler(struct ext_code ext_code,
 	if (!(param32 & CPU_MF_INT_SF_MASK))
 		return;
 
-	inc_irq_stat(IRQEXT_CMS);
+	kstat_cpu(smp_processor_id()).irqs[EXTINT_CPM]++;
 	atomic_xchg(&cb->ext_params, atomic_read(&cb->ext_params) | param32);
 
 	if (hws_wq)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,8 +22,9 @@
 #include <linux/completion.h>
 #include <linux/of_gpio.h>
 #include <linux/mutex.h>
-#include <soc/qcom/smsm.h>
+#include <mach/msm_smsm.h>
 #include <linux/uaccess.h>
+#include <asm/system.h>
 
 #define SMP2P_NUM_PROCS 8
 
@@ -784,11 +785,8 @@ static int rdbg_open(struct inode *inode, struct file *filp)
 		goto bail;
 	}
 
-	rdbgdata->smem_addr = smem_find(
-		proc_info[device_id].smem_buffer_addr,
-		rdbgdata->smem_size,
-		0,
-		SMEM_ANY_HOST_FLAG);
+	rdbgdata->smem_addr = smem_alloc(proc_info[device_id].smem_buffer_addr,
+		rdbgdata->smem_size);
 	if (!rdbgdata->smem_addr) {
 		dev_err(rdbgdata->device, "%s: Could not allocate smem memory",
 			__func__);

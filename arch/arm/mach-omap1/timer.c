@@ -25,7 +25,6 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
-#include <linux/platform_data/dmtimer-omap.h>
 
 #include <mach/irqs.h>
 
@@ -55,7 +54,8 @@ static int omap1_dm_timer_set_src(struct platform_device *pdev,
 	return 0;
 }
 
-static int __init omap1_dm_timer_init(void)
+
+int __init omap1_dm_timer_init(void)
 {
 	int i;
 	int ret;
@@ -141,8 +141,7 @@ static int __init omap1_dm_timer_init(void)
 		}
 
 		pdata->set_timer_src = omap1_dm_timer_set_src;
-		pdata->timer_capability = OMAP_TIMER_ALWON |
-				OMAP_TIMER_NEEDS_RESET | OMAP_TIMER_HAS_DSP_IRQ;
+		pdata->needs_manual_reset = 1;
 
 		ret = platform_device_add_data(pdev, pdata, sizeof(*pdata));
 		if (ret) {

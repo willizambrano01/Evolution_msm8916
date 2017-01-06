@@ -86,10 +86,10 @@ fixup_cats(struct tag *tags, char **cmdline, struct meminfo *mi)
 MACHINE_START(CATS, "Chalice-CATS")
 	/* Maintainer: Philip Blundell */
 	.atag_offset	= 0x100,
-	.reboot_mode	= REBOOT_SOFT,
+	.restart_mode	= 's',
 	.fixup		= fixup_cats,
 	.map_io		= footbridge_map_io,
 	.init_irq	= footbridge_init_irq,
-	.init_time	= isa_timer_init,
+	.timer		= &isa_timer,
 	.restart	= footbridge_restart,
 MACHINE_END

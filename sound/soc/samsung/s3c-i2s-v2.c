@@ -731,9 +731,8 @@ static int s3c2412_i2s_resume(struct snd_soc_dai *dai)
 #define s3c2412_i2s_resume  NULL
 #endif
 
-int s3c_i2sv2_register_component(struct device *dev, int id,
-			   struct snd_soc_component_driver *cmp_drv,
-			   struct snd_soc_dai_driver *dai_drv)
+int s3c_i2sv2_register_dai(struct device *dev, int id,
+		struct snd_soc_dai_driver *drv)
 {
 	struct snd_soc_dai_ops *ops = drv->ops;
 
@@ -751,8 +750,8 @@ int s3c_i2sv2_register_component(struct device *dev, int id,
 	drv->suspend = s3c2412_i2s_suspend;
 	drv->resume = s3c2412_i2s_resume;
 
-	return snd_soc_register_component(dev, cmp_drv, dai_drv, 1);
+	return snd_soc_register_dai(dev, drv);
 }
-EXPORT_SYMBOL_GPL(s3c_i2sv2_register_component);
+EXPORT_SYMBOL_GPL(s3c_i2sv2_register_dai);
 
 MODULE_LICENSE("GPL");

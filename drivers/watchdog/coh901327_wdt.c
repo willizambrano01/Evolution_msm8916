@@ -263,7 +263,6 @@ static int __exit coh901327_remove(struct platform_device *pdev)
 	watchdog_unregister_device(&coh901327_wdt);
 	coh901327_disable();
 	free_irq(irq, pdev);
-	clk_unprepare(clk);
 	clk_put(clk);
 	iounmap(virtbase);
 	release_mem_region(phybase, physize);
@@ -301,9 +300,9 @@ static int __init coh901327_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "could not get clock\n");
 		goto out_no_clk;
 	}
-	ret = clk_prepare_enable(clk);
+	ret = clk_enable(clk);
 	if (ret) {
-		dev_err(&pdev->dev, "could not prepare and enable clock\n");
+		dev_err(&pdev->dev, "could not enable clock\n");
 		goto out_no_clk_enable;
 	}
 
@@ -370,7 +369,7 @@ static int __init coh901327_probe(struct platform_device *pdev)
 out_no_wdog:
 	free_irq(irq, pdev);
 out_no_irq:
-	clk_disable_unprepare(clk);
+	clk_disable(clk);
 out_no_clk_enable:
 	clk_put(clk);
 out_no_clk:
@@ -451,7 +450,17 @@ static struct platform_driver coh901327_driver = {
 	.resume		= coh901327_resume,
 };
 
-module_platform_driver_probe(coh901327_driver, coh901327_probe);
+static int __init coh901327_init(void)
+{
+	return platform_driver_probe(&coh901327_driver, coh901327_probe);
+}
+module_init(coh901327_init);
+
+static void __exit coh901327_exit(void)
+{
+	platform_driver_unregister(&coh901327_driver);
+}
+module_exit(coh901327_exit);
 
 MODULE_AUTHOR("Linus Walleij <linus.walleij@stericsson.com>");
 MODULE_DESCRIPTION("COH 901 327 Watchdog");

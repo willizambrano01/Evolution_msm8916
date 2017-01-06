@@ -344,7 +344,7 @@ MODULE_DEVICE_TABLE(pci, esb_pci_tbl);
  *      Init & exit routines
  */
 
-static unsigned char esb_getdevice(struct pci_dev *pdev)
+static unsigned char __devinit esb_getdevice(struct pci_dev *pdev)
 {
 	if (pci_enable_device(pdev)) {
 		pr_err("failed to enable device\n");
@@ -375,7 +375,7 @@ err_devput:
 	return 0;
 }
 
-static void esb_initdevice(void)
+static void __devinit esb_initdevice(void)
 {
 	u8 val1;
 	u16 val2;
@@ -416,7 +416,7 @@ static void esb_initdevice(void)
 	esb_timer_set_heartbeat(heartbeat);
 }
 
-static int esb_probe(struct pci_dev *pdev,
+static int __devinit esb_probe(struct pci_dev *pdev,
 		const struct pci_device_id *ent)
 {
 	int ret;
@@ -465,7 +465,7 @@ err_unmap:
 	return ret;
 }
 
-static void esb_remove(struct pci_dev *pdev)
+static void __devexit esb_remove(struct pci_dev *pdev)
 {
 	/* Stop the timer before we leave */
 	if (!nowayout)
@@ -488,11 +488,23 @@ static struct pci_driver esb_driver = {
 	.name		= ESB_MODULE_NAME,
 	.id_table	= esb_pci_tbl,
 	.probe          = esb_probe,
-	.remove         = esb_remove,
+	.remove         = __devexit_p(esb_remove),
 	.shutdown       = esb_shutdown,
 };
 
-module_pci_driver(esb_driver);
+static int __init watchdog_init(void)
+{
+	return pci_register_driver(&esb_driver);
+}
+
+static void __exit watchdog_cleanup(void)
+{
+	pci_unregister_driver(&esb_driver);
+	pr_info("Watchdog Module Unloaded\n");
+}
+
+module_init(watchdog_init);
+module_exit(watchdog_cleanup);
 
 MODULE_AUTHOR("Ross Biro and David Härdeman");
 MODULE_DESCRIPTION("Watchdog driver for Intel 6300ESB chipsets");

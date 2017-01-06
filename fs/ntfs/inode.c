@@ -28,7 +28,6 @@
 #include <linux/quotaops.h>
 #include <linux/slab.h>
 #include <linux/log2.h>
-#include <linux/aio.h>
 
 #include "aops.h"
 #include "attrib.h"
@@ -2125,8 +2124,7 @@ int ntfs_read_inode_mount(struct inode *vi)
 			 * ntfs_read_inode() will have set up the default ones.
 			 */
 			/* Set uid and gid to root. */
-			vi->i_uid = GLOBAL_ROOT_UID;
-			vi->i_gid = GLOBAL_ROOT_GID;
+			vi->i_uid = vi->i_gid = 0;
 			/* Regular file. No access for anyone. */
 			vi->i_mode = S_IFREG;
 			/* No VFS initiated operations allowed for $MFT. */
@@ -2260,7 +2258,7 @@ void ntfs_evict_big_inode(struct inode *vi)
 	ntfs_inode *ni = NTFS_I(vi);
 
 	truncate_inode_pages(&vi->i_data, 0);
-	clear_inode(vi);
+	end_writeback(vi);
 
 #ifdef NTFS_RW
 	if (NInoDirty(ni)) {
@@ -2314,8 +2312,8 @@ int ntfs_show_options(struct seq_file *sf, struct dentry *root)
 	ntfs_volume *vol = NTFS_SB(root->d_sb);
 	int i;
 
-	seq_printf(sf, ",uid=%i", from_kuid_munged(&init_user_ns, vol->uid));
-	seq_printf(sf, ",gid=%i", from_kgid_munged(&init_user_ns, vol->gid));
+	seq_printf(sf, ",uid=%i", vol->uid);
+	seq_printf(sf, ",gid=%i", vol->gid);
 	if (vol->fmask == vol->dmask)
 		seq_printf(sf, ",umask=0%o", vol->fmask);
 	else {
@@ -2867,11 +2865,9 @@ conv_err_out:
  *
  * See ntfs_truncate() description above for details.
  */
-#ifdef NTFS_RW
 void ntfs_truncate_vfs(struct inode *vi) {
 	ntfs_truncate(vi);
 }
-#endif
 
 /**
  * ntfs_setattr - called from notify_change() when an attribute is being changed
@@ -2917,10 +2913,8 @@ int ntfs_setattr(struct dentry *dentry, struct iattr *attr)
 						NInoCompressed(ni) ?
 						"compressed" : "encrypted");
 				err = -EOPNOTSUPP;
-			} else {
-				truncate_setsize(vi, attr->ia_size);
-				ntfs_truncate_vfs(vi);
-			}
+			} else
+				err = vmtruncate(vi, attr->ia_size);
 			if (err || ia_valid == ATTR_SIZE)
 				goto out;
 		} else {

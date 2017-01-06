@@ -11,7 +11,6 @@
 
 #include <linux/stddef.h>
 #include <linux/proc_fs.h>
-#include <linux/seq_file.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/fs.h>
@@ -139,34 +138,30 @@ static char *port_status(int portno)
 	return result;
 }
 
-static int gpio_proc_show(struct seq_file *m, void *v)
+static int gpio_proc_read(char *buf, char **start, off_t offset, 
+                          int len, int *unused_i, void *unused_v)
 {
+	int c,outlen;
 	static const char port_name[]="123456789ABCDEFGH";
-	int c;
-
+	outlen = 0;
 	for (c = 0; c < MAX_PORT; c++) {
 		if (ddrs[c] == NULL)
-			continue;
-		seq_printf(m, "P%c: %s\n", port_name[c], port_status(c));
+			continue ;
+		len = sprintf(buf,"P%c: %s\n",port_name[c],port_status(c));
+		buf += len;
+		outlen += len;
 	}
-	return 0;
+	return outlen;
 }
-
-static int gpio_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, gpio_proc_show, PDE_DATA(inode));
-}
-
-static const struct file_operations gpio_proc_fops = {
-	.open		= gpio_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
 
 static __init int register_proc(void)
 {
-	return proc_create("gpio", S_IRUGO, NULL, &gpio_proc_fops) != NULL;
+	struct proc_dir_entry *proc_gpio;
+
+	proc_gpio = create_proc_entry("gpio", S_IRUGO, NULL);
+	if (proc_gpio) 
+		proc_gpio->read_proc = gpio_proc_read;
+	return proc_gpio != NULL;
 }
 
 __initcall(register_proc);

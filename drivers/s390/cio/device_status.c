@@ -1,5 +1,8 @@
 /*
- *    Copyright IBM Corp. 2002
+ * drivers/s390/cio/device_status.c
+ *
+ *    Copyright (C) 2002 IBM Deutschland Entwicklung GmbH,
+ *			 IBM Corporation
  *    Author(s): Cornelia Huck (cornelia.huck@de.ibm.com)
  *		 Martin Schwidefsky (schwidefsky@de.ibm.com)
  *

@@ -8,7 +8,7 @@
 #ifndef LINUX_MMC_CORE_H
 #define LINUX_MMC_CORE_H
 
-#include <uapi/linux/mmc/core.h>
+#ifdef __KERNEL__
 #include <linux/interrupt.h>
 #include <linux/completion.h>
 
@@ -24,6 +24,40 @@ struct mmc_command {
 #define MMC_CMD23_ARG_TAG_REQ	(1 << 29)
 	u32			resp[4];
 	unsigned int		flags;		/* expected response type */
+#endif /* __KERNEL__ */
+#define MMC_RSP_PRESENT	(1 << 0)
+#define MMC_RSP_136	(1 << 1)		/* 136 bit response */
+#define MMC_RSP_CRC	(1 << 2)		/* expect valid crc */
+#define MMC_RSP_BUSY	(1 << 3)		/* card may send busy */
+#define MMC_RSP_OPCODE	(1 << 4)		/* response contains opcode */
+
+#define MMC_CMD_MASK	(3 << 5)		/* non-SPI command type */
+#define MMC_CMD_AC	(0 << 5)
+#define MMC_CMD_ADTC	(1 << 5)
+#define MMC_CMD_BC	(2 << 5)
+#define MMC_CMD_BCR	(3 << 5)
+
+#define MMC_RSP_SPI_S1	(1 << 7)		/* one status byte */
+#define MMC_RSP_SPI_S2	(1 << 8)		/* second byte */
+#define MMC_RSP_SPI_B4	(1 << 9)		/* four data bytes */
+#define MMC_RSP_SPI_BUSY (1 << 10)		/* card may send busy */
+
+/*
+ * These are the native response types, and correspond to valid bit
+ * patterns of the above flags.  One additional valid pattern
+ * is all zeros, which means we don't expect a response.
+ */
+#define MMC_RSP_NONE	(0)
+#define MMC_RSP_R1	(MMC_RSP_PRESENT|MMC_RSP_CRC|MMC_RSP_OPCODE)
+#define MMC_RSP_R1B	(MMC_RSP_PRESENT|MMC_RSP_CRC|MMC_RSP_OPCODE|MMC_RSP_BUSY)
+#define MMC_RSP_R2	(MMC_RSP_PRESENT|MMC_RSP_136|MMC_RSP_CRC)
+#define MMC_RSP_R3	(MMC_RSP_PRESENT)
+#define MMC_RSP_R4	(MMC_RSP_PRESENT)
+#define MMC_RSP_R5	(MMC_RSP_PRESENT|MMC_RSP_CRC|MMC_RSP_OPCODE)
+#define MMC_RSP_R6	(MMC_RSP_PRESENT|MMC_RSP_CRC|MMC_RSP_OPCODE)
+#define MMC_RSP_R7	(MMC_RSP_PRESENT|MMC_RSP_CRC|MMC_RSP_OPCODE)
+
+#ifdef __KERNEL__
 #define mmc_resp_type(cmd)	((cmd)->flags & (MMC_RSP_PRESENT|MMC_RSP_136|MMC_RSP_CRC|MMC_RSP_BUSY|MMC_RSP_OPCODE))
 
 /*
@@ -65,8 +99,6 @@ struct mmc_command {
  */
 
 	unsigned int		cmd_timeout_ms;	/* in milliseconds */
-	/* Set this flag only for sanitize request */
-	bool			sanitize_busy;
 	/* Set this flag only for commands which can be HPIed */
 	bool			ignore_timeout;
 
@@ -173,14 +205,6 @@ extern void mmc_set_ios(struct mmc_host *host);
 extern int mmc_flush_cache(struct mmc_card *);
 
 extern int mmc_detect_card_removed(struct mmc_host *host);
-extern void mmc_prepare_mrq(struct mmc_card *card,
-	struct mmc_request *mrq, struct scatterlist *sg, unsigned sg_len,
-	unsigned dev_addr, unsigned blocks, unsigned blksz, int write);
-extern int mmc_wait_busy(struct mmc_card *card);
-extern int mmc_check_result(struct mmc_request *mrq);
-extern int mmc_simple_transfer(struct mmc_card *card,
-	struct scatterlist *sg, unsigned sg_len, unsigned dev_addr,
-	unsigned blocks, unsigned blksz, int write);
 
 extern void mmc_blk_init_bkops_statistics(struct mmc_card *card);
 extern void mmc_rpm_hold(struct mmc_host *host, struct device *dev);
@@ -199,26 +223,5 @@ static inline void mmc_claim_host(struct mmc_host *host)
 
 extern u32 mmc_vddrange_to_ocrmask(int vdd_min, int vdd_max);
 
-/*
- * eMMC5.0 Field Firmware Update (FFU) opcodes
-*/
-#define MMC_FFU_INVOKE_OP 302
-
-#define MMC_FFU_MODE_SET 0x1
-#define MMC_FFU_MODE_NORMAL 0x0
-#define MMC_FFU_INSTALL_SET 0x2
-
-#ifdef CONFIG_MMC_FFU
-#define MMC_FFU_FEATURES 0x1
-#define FFU_FEATURES(ffu_features) (ffu_features & MMC_FFU_FEATURES)
-
-int mmc_ffu_invoke(struct mmc_card *card, const char *name);
-
-#else
-static inline int mmc_ffu_invoke(struct mmc_card *card, const char *name)
-{
-	return -ENOSYS;
-}
-#endif
-
+#endif /* __KERNEL__ */
 #endif /* LINUX_MMC_CORE_H */

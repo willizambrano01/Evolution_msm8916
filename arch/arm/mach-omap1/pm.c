@@ -37,32 +37,30 @@
 
 #include <linux/suspend.h>
 #include <linux/sched.h>
-#include <linux/debugfs.h>
-#include <linux/seq_file.h>
+#include <linux/proc_fs.h>
 #include <linux/interrupt.h>
 #include <linux/sysfs.h>
 #include <linux/module.h>
 #include <linux/io.h>
 #include <linux/atomic.h>
-#include <linux/cpu.h>
 
-#include <asm/fncpy.h>
 #include <asm/system_misc.h>
 #include <asm/irq.h>
 #include <asm/mach/time.h>
 #include <asm/mach/irq.h>
 
-#include <mach/tc.h>
-#include <mach/mux.h>
-#include <linux/omap-dma.h>
+#include <plat/cpu.h>
+#include <plat/clock.h>
+#include <plat/sram.h>
+#include <plat/tc.h>
+#include <plat/mux.h>
+#include <plat/dma.h>
 #include <plat/dmtimer.h>
 
 #include <mach/irqs.h>
 
 #include "iomap.h"
-#include "clock.h"
 #include "pm.h"
-#include "sram.h"
 
 static unsigned int arm_sleep_save[ARM_SLEEP_SAVE_SIZE];
 static unsigned short dsp_sleep_save[DSP_SLEEP_SAVE_SIZE];
@@ -424,12 +422,23 @@ void omap1_pm_suspend(void)
 		omap_rev());
 }
 
-#ifdef CONFIG_DEBUG_FS
+#if defined(DEBUG) && defined(CONFIG_PROC_FS)
+static int g_read_completed;
+
 /*
  * Read system PM registers for debugging
  */
-static int omap_pm_debug_show(struct seq_file *m, void *v)
+static int omap_pm_read_proc(
+	char *page_buffer,
+	char **my_first_byte,
+	off_t virtual_start,
+	int length,
+	int *eof,
+	void *data)
 {
+	int my_buffer_offset = 0;
+	char * const my_base = page_buffer;
+
 	ARM_SAVE(ARM_CKCTL);
 	ARM_SAVE(ARM_IDLECT1);
 	ARM_SAVE(ARM_IDLECT2);
@@ -470,7 +479,10 @@ static int omap_pm_debug_show(struct seq_file *m, void *v)
 		MPUI1610_SAVE(EMIFS_CONFIG);
 	}
 
-	seq_printf(m,
+	if (virtual_start == 0) {
+		g_read_completed = 0;
+
+		my_buffer_offset += sprintf(my_base + my_buffer_offset,
 		   "ARM_CKCTL_REG:            0x%-8x     \n"
 		   "ARM_IDLECT1_REG:          0x%-8x     \n"
 		   "ARM_IDLECT2_REG:          0x%-8x     \n"
@@ -500,8 +512,8 @@ static int omap_pm_debug_show(struct seq_file *m, void *v)
 		   ULPD_SHOW(ULPD_STATUS_REQ),
 		   ULPD_SHOW(ULPD_POWER_CTRL));
 
-	if (cpu_is_omap7xx()) {
-		seq_printf(m,
+		if (cpu_is_omap7xx()) {
+			my_buffer_offset += sprintf(my_base + my_buffer_offset,
 			   "MPUI7XX_CTRL_REG	     0x%-8x \n"
 			   "MPUI7XX_DSP_STATUS_REG:      0x%-8x \n"
 			   "MPUI7XX_DSP_BOOT_CONFIG_REG: 0x%-8x \n"
@@ -514,8 +526,8 @@ static int omap_pm_debug_show(struct seq_file *m, void *v)
 			   MPUI7XX_SHOW(MPUI_DSP_API_CONFIG),
 			   MPUI7XX_SHOW(EMIFF_SDRAM_CONFIG),
 			   MPUI7XX_SHOW(EMIFS_CONFIG));
-	} else if (cpu_is_omap15xx()) {
-		seq_printf(m,
+		} else if (cpu_is_omap15xx()) {
+			my_buffer_offset += sprintf(my_base + my_buffer_offset,
 			   "MPUI1510_CTRL_REG             0x%-8x \n"
 			   "MPUI1510_DSP_STATUS_REG:      0x%-8x \n"
 			   "MPUI1510_DSP_BOOT_CONFIG_REG: 0x%-8x \n"
@@ -528,8 +540,8 @@ static int omap_pm_debug_show(struct seq_file *m, void *v)
 			   MPUI1510_SHOW(MPUI_DSP_API_CONFIG),
 			   MPUI1510_SHOW(EMIFF_SDRAM_CONFIG),
 			   MPUI1510_SHOW(EMIFS_CONFIG));
-	} else if (cpu_is_omap16xx()) {
-		seq_printf(m,
+		} else if (cpu_is_omap16xx()) {
+			my_buffer_offset += sprintf(my_base + my_buffer_offset,
 			   "MPUI1610_CTRL_REG             0x%-8x \n"
 			   "MPUI1610_DSP_STATUS_REG:      0x%-8x \n"
 			   "MPUI1610_DSP_BOOT_CONFIG_REG: 0x%-8x \n"
@@ -542,37 +554,29 @@ static int omap_pm_debug_show(struct seq_file *m, void *v)
 			   MPUI1610_SHOW(MPUI_DSP_API_CONFIG),
 			   MPUI1610_SHOW(EMIFF_SDRAM_CONFIG),
 			   MPUI1610_SHOW(EMIFS_CONFIG));
+		}
+
+		g_read_completed++;
+	} else if (g_read_completed >= 1) {
+		 *eof = 1;
+		 return 0;
 	}
+	g_read_completed++;
 
-	return 0;
+	*my_first_byte = page_buffer;
+	return  my_buffer_offset;
 }
 
-static int omap_pm_debug_open(struct inode *inode, struct file *file)
+static void omap_pm_init_proc(void)
 {
-	return single_open(file, omap_pm_debug_show,
-				&inode->i_private);
+	struct proc_dir_entry *entry;
+
+	entry = create_proc_read_entry("driver/omap_pm",
+				       S_IWUSR | S_IRUGO, NULL,
+				       omap_pm_read_proc, NULL);
 }
 
-static const struct file_operations omap_pm_debug_fops = {
-	.open		= omap_pm_debug_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
-static void omap_pm_init_debugfs(void)
-{
-	struct dentry *d;
-
-	d = debugfs_create_dir("pm_debug", NULL);
-	if (!d)
-		return;
-
-	(void) debugfs_create_file("omap_pm", S_IWUSR | S_IRUGO,
-					d, NULL, &omap_pm_debug_fops);
-}
-
-#endif /* CONFIG_DEBUG_FS */
+#endif /* DEBUG && CONFIG_PROC_FS */
 
 /*
  *	omap_pm_prepare - Do preliminary suspend work.
@@ -581,7 +585,8 @@ static void omap_pm_init_debugfs(void)
 static int omap_pm_prepare(void)
 {
 	/* We cannot sleep in idle until we have resumed */
-	cpu_idle_poll_ctrl(true);
+	disable_hlt();
+
 	return 0;
 }
 
@@ -617,7 +622,7 @@ static int omap_pm_enter(suspend_state_t state)
 
 static void omap_pm_finish(void)
 {
-	cpu_idle_poll_ctrl(false);
+	enable_hlt();
 }
 
 
@@ -697,8 +702,8 @@ static int __init omap_pm_init(void)
 
 	suspend_set_ops(&omap_pm_ops);
 
-#ifdef CONFIG_DEBUG_FS
-	omap_pm_init_debugfs();
+#if defined(DEBUG) && defined(CONFIG_PROC_FS)
+	omap_pm_init_proc();
 #endif
 
 #ifdef CONFIG_OMAP_32K_TIMER

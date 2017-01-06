@@ -33,7 +33,6 @@
 #include <linux/err.h>
 #include <linux/sysfs.h>
 #include <linux/mutex.h>
-#include <linux/jiffies.h>
 
 #define THERMAL_PID_REG		0xfd
 #define THERMAL_SMSC_ID_REG	0xfe
@@ -162,7 +161,7 @@ static ssize_t store_hyst(struct device *dev,
 	if (retval < 0)
 		goto fail;
 
-	hyst = retval * 1000 - val;
+	hyst = val - retval * 1000;
 	hyst = DIV_ROUND_CLOSEST(hyst, 1000);
 	if (hyst < 0 || hyst > 255) {
 		retval = -ERANGE;
@@ -295,7 +294,7 @@ static int emc1403_detect(struct i2c_client *client,
 	}
 
 	id = i2c_smbus_read_byte_data(client, THERMAL_REVISION_REG);
-	if (id < 0x01 || id > 0x04)
+	if (id != 0x01)
 		return -ENODEV;
 
 	return 0;
@@ -307,10 +306,11 @@ static int emc1403_probe(struct i2c_client *client,
 	int res;
 	struct thermal_data *data;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct thermal_data),
-			    GFP_KERNEL);
-	if (data == NULL)
+	data = kzalloc(sizeof(struct thermal_data), GFP_KERNEL);
+	if (data == NULL) {
+		dev_warn(&client->dev, "out of memory");
 		return -ENOMEM;
+	}
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->mutex);
@@ -319,19 +319,21 @@ static int emc1403_probe(struct i2c_client *client,
 	res = sysfs_create_group(&client->dev.kobj, &m_thermal_gr);
 	if (res) {
 		dev_warn(&client->dev, "create group failed\n");
-		return res;
+		goto thermal_error1;
 	}
 	data->hwmon_dev = hwmon_device_register(&client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
 		res = PTR_ERR(data->hwmon_dev);
 		dev_warn(&client->dev, "register hwmon dev failed\n");
-		goto thermal_error;
+		goto thermal_error2;
 	}
 	dev_info(&client->dev, "EMC1403 Thermal chip found\n");
-	return 0;
+	return res;
 
-thermal_error:
+thermal_error2:
 	sysfs_remove_group(&client->dev.kobj, &m_thermal_gr);
+thermal_error1:
+	kfree(data);
 	return res;
 }
 
@@ -341,6 +343,7 @@ static int emc1403_remove(struct i2c_client *client)
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &m_thermal_gr);
+	kfree(data);
 	return 0;
 }
 

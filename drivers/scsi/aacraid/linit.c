@@ -88,7 +88,13 @@ char aac_driver_version[] = AAC_DRIVER_FULL_VERSION;
  *
  * Note: The last field is used to index into aac_drivers below.
  */
-static const struct pci_device_id aac_pci_tbl[] = {
+#ifdef DECLARE_PCI_DEVICE_TABLE
+static DECLARE_PCI_DEVICE_TABLE(aac_pci_tbl) = {
+#elif defined(__devinitconst)
+static const struct pci_device_id aac_pci_tbl[] __devinitconst = {
+#else
+static const struct pci_device_id aac_pci_tbl[] __devinitdata = {
+#endif
 	{ 0x1028, 0x0001, 0x1028, 0x0001, 0, 0, 0 }, /* PERC 2/Si (Iguana/PERC2Si) */
 	{ 0x1028, 0x0002, 0x1028, 0x0002, 0, 0, 1 }, /* PERC 3/Di (Opal/PERC3Di) */
 	{ 0x1028, 0x0003, 0x1028, 0x0003, 0, 0, 2 }, /* PERC 3/Si (SlimFast/PERC3Si */
@@ -771,8 +777,6 @@ static long aac_compat_do_ioctl(struct aac_dev *dev, unsigned cmd, unsigned long
 static int aac_compat_ioctl(struct scsi_device *sdev, int cmd, void __user *arg)
 {
 	struct aac_dev *dev = (struct aac_dev *)sdev->host->hostdata;
-	if (!capable(CAP_SYS_RAWIO))
-		return -EPERM;
 	return aac_compat_do_ioctl(dev, cmd, (unsigned long)arg);
 }
 
@@ -1081,22 +1085,12 @@ static struct scsi_host_template aac_driver_template = {
 #endif
 	.use_clustering			= ENABLE_CLUSTERING,
 	.emulated			= 1,
-	.no_write_same			= 1,
 };
 
 static void __aac_shutdown(struct aac_dev * aac)
 {
-	if (aac->aif_thread) {
-		int i;
-		/* Clear out events first */
-		for (i = 0; i < (aac->scsi_host_ptr->can_queue + AAC_NUM_MGT_FIB); i++) {
-			struct fib *fib = &aac->fibs[i];
-			if (!(fib->hw_fib_va->header.XferState & cpu_to_le32(NoResponseExpected | Async)) &&
-			    (fib->hw_fib_va->header.XferState & cpu_to_le32(ResponseExpected)))
-				up(&fib->event_wait);
-		}
+	if (aac->aif_thread)
 		kthread_stop(aac->thread);
-	}
 	aac_send_shutdown(aac);
 	aac_adapter_disable_int(aac);
 	free_irq(aac->pdev->irq, aac);
@@ -1104,7 +1098,8 @@ static void __aac_shutdown(struct aac_dev * aac)
 		pci_disable_msi(aac->pdev);
 }
 
-static int aac_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
+static int __devinit aac_probe_one(struct pci_dev *pdev,
+		const struct pci_device_id *id)
 {
 	unsigned index = id->driver_data;
 	struct Scsi_Host *shost;
@@ -1150,11 +1145,11 @@ static int aac_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto out_disable_pdev;
 
 	shost->irq = pdev->irq;
+	shost->base = pci_resource_start(pdev, 0);
 	shost->unique_id = unique_id;
 	shost->max_cmd_len = 16;
 
 	aac = (struct aac_dev *)shost->hostdata;
-	aac->base_start = pci_resource_start(pdev, 0);
 	aac->scsi_host_ptr = shost;
 	aac->pdev = pdev;
 	aac->name = aac_driver_template.name;
@@ -1162,7 +1157,7 @@ static int aac_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	aac->cardtype = index;
 	INIT_LIST_HEAD(&aac->entry);
 
-	aac->fibs = kzalloc(sizeof(struct fib) * (shost->can_queue + AAC_NUM_MGT_FIB), GFP_KERNEL);
+	aac->fibs = kmalloc(sizeof(struct fib) * (shost->can_queue + AAC_NUM_MGT_FIB), GFP_KERNEL);
 	if (!aac->fibs)
 		goto out_free_host;
 	spin_lock_init(&aac->fib_lock);
@@ -1196,7 +1191,6 @@ static int aac_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (IS_ERR(aac->thread)) {
 		printk(KERN_ERR "aacraid: Unable to create command thread.\n");
 		error = PTR_ERR(aac->thread);
-		aac->thread = NULL;
 		goto out_deinit;
 	}
 
@@ -1306,7 +1300,7 @@ static void aac_shutdown(struct pci_dev *dev)
 	__aac_shutdown((struct aac_dev *)shost->hostdata);
 }
 
-static void aac_remove_one(struct pci_dev *pdev)
+static void __devexit aac_remove_one(struct pci_dev *pdev)
 {
 	struct Scsi_Host *shost = pci_get_drvdata(pdev);
 	struct aac_dev *aac = (struct aac_dev *)shost->hostdata;
@@ -1337,7 +1331,7 @@ static struct pci_driver aac_pci_driver = {
 	.name		= AAC_DRIVERNAME,
 	.id_table	= aac_pci_tbl,
 	.probe		= aac_probe_one,
-	.remove		= aac_remove_one,
+	.remove		= __devexit_p(aac_remove_one),
 	.shutdown	= aac_shutdown,
 };
 

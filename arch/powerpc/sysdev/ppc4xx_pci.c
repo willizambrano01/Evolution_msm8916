@@ -257,7 +257,6 @@ static void __init ppc4xx_configure_pci_PMMs(struct pci_controller *hose,
 	/* Setup outbound memory windows */
 	for (i = j = 0; i < 3; i++) {
 		struct resource *res = &hose->mem_resources[i];
-		resource_size_t offset = hose->mem_offset[i];
 
 		/* we only care about memory windows */
 		if (!(res->flags & IORESOURCE_MEM))
@@ -271,7 +270,7 @@ static void __init ppc4xx_configure_pci_PMMs(struct pci_controller *hose,
 		/* Configure the resource */
 		if (ppc4xx_setup_one_pci_PMM(hose, reg,
 					     res->start,
-					     res->start - offset,
+					     res->start - hose->pci_mem_offset,
 					     resource_size(res),
 					     res->flags,
 					     j) == 0) {
@@ -280,7 +279,7 @@ static void __init ppc4xx_configure_pci_PMMs(struct pci_controller *hose,
 			/* If the resource PCI address is 0 then we have our
 			 * ISA memory hole
 			 */
-			if (res->start == offset)
+			if (res->start == hose->pci_mem_offset)
 				found_isa_hole = 1;
 		}
 	}
@@ -458,7 +457,6 @@ static void __init ppc4xx_configure_pcix_POMs(struct pci_controller *hose,
 	/* Setup outbound memory windows */
 	for (i = j = 0; i < 3; i++) {
 		struct resource *res = &hose->mem_resources[i];
-		resource_size_t offset = hose->mem_offset[i];
 
 		/* we only care about memory windows */
 		if (!(res->flags & IORESOURCE_MEM))
@@ -472,7 +470,7 @@ static void __init ppc4xx_configure_pcix_POMs(struct pci_controller *hose,
 		/* Configure the resource */
 		if (ppc4xx_setup_one_pcix_POM(hose, reg,
 					      res->start,
-					      res->start - offset,
+					      res->start - hose->pci_mem_offset,
 					      resource_size(res),
 					      res->flags,
 					      j) == 0) {
@@ -481,7 +479,7 @@ static void __init ppc4xx_configure_pcix_POMs(struct pci_controller *hose,
 			/* If the resource PCI address is 0 then we have our
 			 * ISA memory hole
 			 */
-			if (res->start == offset)
+			if (res->start == hose->pci_mem_offset)
 				found_isa_hole = 1;
 		}
 	}
@@ -1794,7 +1792,6 @@ static void __init ppc4xx_configure_pciex_POMs(struct ppc4xx_pciex_port *port,
 	/* Setup outbound memory windows */
 	for (i = j = 0; i < 3; i++) {
 		struct resource *res = &hose->mem_resources[i];
-		resource_size_t offset = hose->mem_offset[i];
 
 		/* we only care about memory windows */
 		if (!(res->flags & IORESOURCE_MEM))
@@ -1808,7 +1805,7 @@ static void __init ppc4xx_configure_pciex_POMs(struct ppc4xx_pciex_port *port,
 		/* Configure the resource */
 		if (ppc4xx_setup_one_pciex_POM(port, hose, mbase,
 					       res->start,
-					       res->start - offset,
+					       res->start - hose->pci_mem_offset,
 					       resource_size(res),
 					       res->flags,
 					       j) == 0) {
@@ -1817,7 +1814,7 @@ static void __init ppc4xx_configure_pciex_POMs(struct ppc4xx_pciex_port *port,
 			/* If the resource PCI address is 0 then we have our
 			 * ISA memory hole
 			 */
-			if (res->start == offset)
+			if (res->start == hose->pci_mem_offset)
 				found_isa_hole = 1;
 		}
 	}

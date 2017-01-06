@@ -22,13 +22,12 @@
 
 #include "arizona.h"
 
-static int arizona_spi_probe(struct spi_device *spi)
+static int __devinit arizona_spi_probe(struct spi_device *spi)
 {
 	const struct spi_device_id *id = spi_get_device_id(spi);
 	struct arizona *arizona;
 	const struct regmap_config *regmap_config;
-	unsigned long type;
-	int ret;
+	int ret, type;
 
 	if (spi->dev.of_node)
 		type = arizona_of_get_type(&spi->dev);
@@ -41,10 +40,9 @@ static int arizona_spi_probe(struct spi_device *spi)
 		regmap_config = &wm5102_spi_regmap;
 		break;
 #endif
-#ifdef CONFIG_MFD_FLORIDA
-	case WM8280:
+#ifdef CONFIG_MFD_WM5110
 	case WM5110:
-		regmap_config = &florida_spi_regmap;
+		regmap_config = &wm5110_spi_regmap;
 		break;
 #endif
 	default:
@@ -72,17 +70,15 @@ static int arizona_spi_probe(struct spi_device *spi)
 	return arizona_dev_init(arizona);
 }
 
-static int arizona_spi_remove(struct spi_device *spi)
+static int __devexit arizona_spi_remove(struct spi_device *spi)
 {
-	struct arizona *arizona = spi_get_drvdata(spi);
+	struct arizona *arizona = dev_get_drvdata(&spi->dev);
 	arizona_dev_exit(arizona);
 	return 0;
 }
 
 static const struct spi_device_id arizona_spi_ids[] = {
 	{ "wm5102", WM5102 },
-	{ "wm8280", WM8280 },
-	{ "wm8281", WM8280 },
 	{ "wm5110", WM5110 },
 	{ },
 };
@@ -96,7 +92,7 @@ static struct spi_driver arizona_spi_driver = {
 		.of_match_table	= of_match_ptr(arizona_of_match),
 	},
 	.probe		= arizona_spi_probe,
-	.remove		= arizona_spi_remove,
+	.remove		= __devexit_p(arizona_spi_remove),
 	.id_table	= arizona_spi_ids,
 };
 

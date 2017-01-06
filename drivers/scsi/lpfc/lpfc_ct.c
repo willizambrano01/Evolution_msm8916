@@ -104,8 +104,7 @@ lpfc_ct_unsol_event(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 	if (unlikely(icmd->ulpStatus == IOSTAT_NEED_BUFFER)) {
 		lpfc_sli_hbqbuf_add_hbqs(phba, LPFC_ELS_HBQ);
 	} else if ((icmd->ulpStatus == IOSTAT_LOCAL_REJECT) &&
-		   ((icmd->un.ulpWord[4] & IOERR_PARAM_MASK) ==
-		   IOERR_RCV_BUFFER_WAITING)) {
+		((icmd->un.ulpWord[4] & 0xff) == IOERR_RCV_BUFFER_WAITING)) {
 		/* Not enough posted buffers; Try posting more buffers */
 		phba->fc_stat.NoRcvBuf++;
 		if (!(phba->sli3_options & LPFC_SLI3_HBQ_ENABLED))
@@ -164,24 +163,37 @@ lpfc_ct_unsol_event(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 }
 
 /**
- * lpfc_ct_handle_unsol_abort - ct upper level protocol abort handler
+ * lpfc_sli4_ct_abort_unsol_event - Default handle for sli4 unsol abort
  * @phba: Pointer to HBA context object.
- * @dmabuf: pointer to a dmabuf that describes the FC sequence
+ * @pring: Pointer to the driver internal I/O ring.
+ * @piocbq: Pointer to the IOCBQ.
  *
- * This function serves as the upper level protocol abort handler for CT
- * protocol.
- *
- * Return 1 if abort has been handled, 0 otherwise.
+ * This function serves as the default handler for the sli4 unsolicited
+ * abort event. It shall be invoked when there is no application interface
+ * registered unsolicited abort handler. This handler does nothing but
+ * just simply releases the dma buffer used by the unsol abort event.
  **/
-int
-lpfc_ct_handle_unsol_abort(struct lpfc_hba *phba, struct hbq_dmabuf *dmabuf)
+void
+lpfc_sli4_ct_abort_unsol_event(struct lpfc_hba *phba,
+			       struct lpfc_sli_ring *pring,
+			       struct lpfc_iocbq *piocbq)
 {
-	int handled;
+	IOCB_t *icmd = &piocbq->iocb;
+	struct lpfc_dmabuf *bdeBuf;
+	uint32_t size;
 
-	/* CT upper level goes through BSG */
-	handled = lpfc_bsg_ct_unsol_abort(phba, dmabuf);
+	/* Forward abort event to any process registered to receive ct event */
+	if (lpfc_bsg_ct_unsol_event(phba, pring, piocbq) == 0)
+		return;
 
-	return handled;
+	/* If there is no BDE associated with IOCB, there is nothing to do */
+	if (icmd->ulpBdeCount == 0)
+		return;
+	bdeBuf = piocbq->context2;
+	piocbq->context2 = NULL;
+	size  = icmd->un.cont64[0].tus.f.bdeSize;
+	lpfc_ct_unsol_buffer(phba, piocbq, bdeBuf, size);
+	lpfc_in_buf_free(phba, bdeBuf);
 }
 
 static void
@@ -621,8 +633,7 @@ lpfc_cmpl_ct_cmd_gid_ft(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 		/* Check for retry */
 		if (vport->fc_ns_retry < LPFC_MAX_NS_RETRY) {
 			if (irsp->ulpStatus != IOSTAT_LOCAL_REJECT ||
-			    (irsp->un.ulpWord[4] & IOERR_PARAM_MASK) !=
-			    IOERR_NO_RESOURCES)
+			    irsp->un.ulpWord[4] != IOERR_NO_RESOURCES)
 				vport->fc_ns_retry++;
 
 			/* CT command is being retried */
@@ -772,9 +783,7 @@ lpfc_cmpl_ct_cmd_gff_id(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 		if (cmdiocb->retry < LPFC_MAX_NS_RETRY) {
 			retry = 1;
 			if (irsp->ulpStatus == IOSTAT_LOCAL_REJECT) {
-				switch ((irsp->un.ulpWord[4] &
-					IOERR_PARAM_MASK)) {
-
+				switch (irsp->un.ulpWord[4]) {
 				case IOERR_NO_RESOURCES:
 					/* We don't increment the retry
 					 * count for this case.
@@ -899,10 +908,8 @@ lpfc_cmpl_ct(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 				 cmdcode, irsp->ulpStatus, irsp->un.ulpWord[4]);
 
 		if ((irsp->ulpStatus == IOSTAT_LOCAL_REJECT) &&
-			(((irsp->un.ulpWord[4] & IOERR_PARAM_MASK) ==
-			  IOERR_SLI_DOWN) ||
-			 ((irsp->un.ulpWord[4] & IOERR_PARAM_MASK) ==
-			  IOERR_SLI_ABORTED)))
+			((irsp->un.ulpWord[4] == IOERR_SLI_DOWN) ||
+			 (irsp->un.ulpWord[4] == IOERR_SLI_ABORTED)))
 			goto out;
 
 		retry = cmdiocb->retry;
@@ -1811,8 +1818,7 @@ lpfc_fdmi_timeout_handler(struct lpfc_vport *vport)
 		if (init_utsname()->nodename[0] != '\0')
 			lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DHBA);
 		else
-			mod_timer(&vport->fc_fdmitmo, jiffies +
-				  msecs_to_jiffies(1000 * 60));
+			mod_timer(&vport->fc_fdmitmo, jiffies + HZ * 60);
 	}
 	return;
 }

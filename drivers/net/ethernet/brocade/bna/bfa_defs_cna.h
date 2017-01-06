@@ -20,7 +20,10 @@
 
 #include "bfa_defs.h"
 
-/* FC physical port statistics. */
+/**
+ * @brief
+ * FC physical port statistics.
+ */
 struct bfa_port_fc_stats {
 	u64	secs_reset;	/*!< Seconds since stats is reset */
 	u64	tx_frames;	/*!< Tx frames			*/
@@ -56,7 +59,10 @@ struct bfa_port_fc_stats {
 	u64	bbsc_link_resets; /*!< Credit Recovery-Link Resets   */
 };
 
-/* Eth Physical Port statistics. */
+/**
+ * @brief
+ * Eth Physical Port statistics.
+ */
 struct bfa_port_eth_stats {
 	u64	secs_reset;	/*!< Seconds since stats is reset */
 	u64	frame_64;	/*!< Frames 64 bytes		*/
@@ -102,7 +108,10 @@ struct bfa_port_eth_stats {
 	u64	tx_iscsi_zero_pause; /*!< Tx iSCSI zero pause	*/
 };
 
-/* Port statistics. */
+/**
+ * @brief
+ *		Port statistics.
+ */
 union bfa_port_stats_u {
 	struct bfa_port_fc_stats fc;
 	struct bfa_port_eth_stats eth;

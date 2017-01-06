@@ -50,7 +50,7 @@ void revert_fsids(const struct cred * old_cred)
 }
 
 static int sdcardfs_create(struct inode *dir, struct dentry *dentry,
-			 umode_t mode, bool want_excl)
+			 umode_t mode, struct nameidata *nd)
 {
 	int err = 0;
 	struct dentry *lower_dentry;
@@ -75,6 +75,10 @@ static int sdcardfs_create(struct inode *dir, struct dentry *dentry,
 	lower_dentry = lower_path.dentry;
 	lower_parent_dentry = lock_parent(lower_dentry);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
+
 	/* set last 16bytes of mode field to 0664 */
 	mode = (mode & S_IFMT) | 00664;
 
@@ -83,7 +87,7 @@ static int sdcardfs_create(struct inode *dir, struct dentry *dentry,
 	copied_fs = copy_fs_struct(current->fs);
 	current->fs = copied_fs;
 	current->fs->umask = 0;
-	err = vfs_create(lower_parent_dentry->d_inode, lower_dentry, mode, want_excl);
+	err = vfs_create(lower_parent_dentry->d_inode, lower_dentry, mode, nd);
 	if (err)
 		goto out;
 
@@ -94,8 +98,10 @@ static int sdcardfs_create(struct inode *dir, struct dentry *dentry,
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 out:
+	mnt_drop_write(lower_path.mnt);
 	current->fs = saved_fs;
 	free_fs_struct(copied_fs);
+out_unlock:
 	unlock_dir(lower_parent_dentry);
 	sdcardfs_put_lower_path(dentry, &lower_path);
 	REVERT_CRED(saved_cred);
@@ -123,6 +129,10 @@ static int sdcardfs_link(struct dentry *old_dentry, struct inode *dir,
 	lower_new_dentry = lower_new_path.dentry;
 	lower_dir_dentry = lock_parent(lower_new_dentry);
 
+	err = mnt_want_write(lower_new_path.mnt);
+	if (err)
+		goto out_unlock;
+
 	err = vfs_link(lower_old_dentry, lower_dir_dentry->d_inode,
 		       lower_new_dentry);
 	if (err || !lower_new_dentry->d_inode)
@@ -133,10 +143,12 @@ static int sdcardfs_link(struct dentry *old_dentry, struct inode *dir,
 		goto out;
 	fsstack_copy_attr_times(dir, lower_new_dentry->d_inode);
 	fsstack_copy_inode_size(dir, lower_new_dentry->d_inode);
-	set_nlink(old_dentry->d_inode,
-		  sdcardfs_lower_inode(old_dentry->d_inode)->i_nlink);
+	old_dentry->d_inode->i_nlink =
+		  sdcardfs_lower_inode(old_dentry->d_inode)->i_nlink;
 	i_size_write(new_dentry->d_inode, file_size_save);
 out:
+	mnt_drop_write(lower_new_path.mnt);
+out_unlock:
 	unlock_dir(lower_dir_dentry);
 	sdcardfs_put_lower_path(old_dentry, &lower_old_path);
 	sdcardfs_put_lower_path(new_dentry, &lower_new_path);
@@ -170,6 +182,9 @@ static int sdcardfs_unlink(struct inode *dir, struct dentry *dentry)
 	dget(lower_dentry);
 	lower_dir_dentry = lock_parent(lower_dentry);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
 	err = vfs_unlink(lower_dir_inode, lower_dentry);
 
 	/*
@@ -190,6 +205,8 @@ static int sdcardfs_unlink(struct inode *dir, struct dentry *dentry)
 	dentry->d_inode->i_ctime = dir->i_ctime;
 	d_drop(dentry); /* this is needed, else LTP fails (VFS won't do it) */
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_dir_dentry);
 	dput(lower_dentry);
 	sdcardfs_put_lower_path(dentry, &lower_path);
@@ -213,6 +230,9 @@ static int sdcardfs_symlink(struct inode *dir, struct dentry *dentry,
 	lower_dentry = lower_path.dentry;
 	lower_parent_dentry = lock_parent(lower_dentry);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
 	err = vfs_symlink(lower_parent_dentry->d_inode, lower_dentry, symname);
 	if (err)
 		goto out;
@@ -223,6 +243,8 @@ static int sdcardfs_symlink(struct inode *dir, struct dentry *dentry,
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_parent_dentry);
 	sdcardfs_put_lower_path(dentry, &lower_path);
 	REVERT_CRED();
@@ -283,6 +305,10 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 	lower_dentry = lower_path.dentry;
 	lower_parent_dentry = lock_parent(lower_dentry);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
+
 	/* set last 16bytes of mode field to 0775 */
 	mode = (mode & S_IFMT) | 00775;
 
@@ -340,8 +366,10 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 		}
 	}
 out:
+	mnt_drop_write(lower_path.mnt);
 	current->fs = saved_fs;
 	free_fs_struct(copied_fs);
+out_unlock:
 	unlock_dir(lower_parent_dentry);
 	sdcardfs_put_lower_path(dentry, &lower_path);
 out_revert:
@@ -376,6 +404,9 @@ static int sdcardfs_rmdir(struct inode *dir, struct dentry *dentry)
 	lower_dentry = lower_path.dentry;
 	lower_dir_dentry = lock_parent(lower_dentry);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
 	err = vfs_rmdir(lower_dir_dentry->d_inode, lower_dentry);
 	if (err)
 		goto out;
@@ -388,6 +419,8 @@ static int sdcardfs_rmdir(struct inode *dir, struct dentry *dentry)
 	set_nlink(dir, lower_dir_dentry->d_inode->i_nlink);
 
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_dir_dentry);
 	sdcardfs_put_real_lower(dentry, &lower_path);
 	REVERT_CRED(saved_cred);
@@ -396,7 +429,7 @@ out_eacces:
 }
 
 #if 0
-static int sdcardfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
+static int sdcardfs_mknod(struct inode *dir, struct dentry *dentry, int mode,
 			dev_t dev)
 {
 	int err = 0;
@@ -410,17 +443,22 @@ static int sdcardfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode
 	lower_dentry = lower_path.dentry;
 	lower_parent_dentry = lock_parent(lower_dentry);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
 	err = vfs_mknod(lower_parent_dentry->d_inode, lower_dentry, mode, dev);
 	if (err)
 		goto out;
 
-	err = sdcardfs_interpose(dentry, dir->i_sb, &lower_path);
+	err = sdcardfs_interpose(dentry, dir->i_sb, &lower_path, SDCARDFS_I(dir)->userid);
 	if (err)
 		goto out;
 	fsstack_copy_attr_times(dir, sdcardfs_lower_inode(dir));
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_parent_dentry);
 	sdcardfs_put_lower_path(dentry, &lower_path);
 	REVERT_CRED();
@@ -476,10 +514,17 @@ static int sdcardfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		goto out;
 	}
 
+	err = mnt_want_write(lower_old_path.mnt);
+	if (err)
+		goto out;
+	err = mnt_want_write(lower_new_path.mnt);
+	if (err)
+		goto out_drop_old_write;
+
 	err = vfs_rename(lower_old_dir_dentry->d_inode, lower_old_dentry,
 			 lower_new_dir_dentry->d_inode, lower_new_dentry);
 	if (err)
-		goto out;
+		goto out_err;
 
 	/* Copy attrs from lower dir, but i_uid/i_gid */
 	sdcardfs_copy_and_fix_attrs(new_dir, lower_new_dir_dentry->d_inode);
@@ -500,11 +545,17 @@ static int sdcardfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			dput(new_parent);
 		}
 	}
+
 	/* At this point, not all dentry information has been moved, so
 	 * we pass along new_dentry for the name.*/
 	get_derived_permission_new(new_dentry->d_parent, old_dentry, new_dentry);
 	fix_derived_permission(old_dentry->d_inode);
 	fixup_top_recursive(old_dentry);
+
+out_err:
+	mnt_drop_write(lower_new_path.mnt);
+out_drop_old_write:
+	mnt_drop_write(lower_old_path.mnt);
 out:
 	unlock_rename(lower_old_dir_dentry, lower_new_dir_dentry);
 	dput(lower_old_dir_dentry);
@@ -631,24 +682,6 @@ static int sdcardfs_permission(struct inode *inode, int mask)
 
 }
 
-static void sdcardfs_fillattr(struct inode *inode, struct kstat *stat)
-{
-	struct sdcardfs_inode_info *info = SDCARDFS_I(inode);
-	stat->dev = inode->i_sb->s_dev;
-	stat->ino = inode->i_ino;
-	stat->mode = (inode->i_mode  & S_IFMT) | get_mode(SDCARDFS_I(info->top));
-	stat->nlink = inode->i_nlink;
-	stat->uid = SDCARDFS_I(info->top)->d_uid;
-	stat->gid = get_gid(SDCARDFS_I(info->top));
-	stat->rdev = inode->i_rdev;
-	stat->size = i_size_read(inode);
-	stat->atime = inode->i_atime;
-	stat->mtime = inode->i_mtime;
-	stat->ctime = inode->i_ctime;
-	stat->blksize = (1 << inode->i_blkbits);
-	stat->blocks = inode->i_blocks;
-}
-
 static int sdcardfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		 struct kstat *stat)
 {
@@ -674,11 +707,11 @@ static int sdcardfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	lower_dentry = lower_path.dentry;
 	lower_inode = sdcardfs_lower_inode(inode);
 
-
 	sdcardfs_copy_and_fix_attrs(inode, lower_inode);
 	fsstack_copy_inode_size(inode, lower_inode);
 
-	sdcardfs_fillattr(inode, stat);
+
+	generic_fillattr(inode, stat);
 	sdcardfs_put_lower_path(dentry, &lower_path);
 	return 0;
 }

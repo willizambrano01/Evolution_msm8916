@@ -150,20 +150,6 @@ static void rfkill_led_trigger_activate(struct led_classdev *led)
 	rfkill_led_trigger_event(rfkill);
 }
 
-const char *rfkill_get_led_trigger_name(struct rfkill *rfkill)
-{
-	return rfkill->led_trigger.name;
-}
-EXPORT_SYMBOL(rfkill_get_led_trigger_name);
-
-void rfkill_set_led_trigger_name(struct rfkill *rfkill, const char *name)
-{
-	BUG_ON(!rfkill);
-
-	rfkill->ledtrigname = name;
-}
-EXPORT_SYMBOL(rfkill_set_led_trigger_name);
-
 static int rfkill_led_trigger_register(struct rfkill *rfkill)
 {
 	rfkill->led_trigger.name = rfkill->ledtrigname
@@ -317,12 +303,14 @@ static void rfkill_set_block(struct rfkill *rfkill, bool blocked)
 	rfkill->state &= ~RFKILL_BLOCK_SW_SETCALL;
 	rfkill->state &= ~RFKILL_BLOCK_SW_PREV;
 	curr = rfkill->state & RFKILL_BLOCK_SW;
+
 	spin_unlock_irqrestore(&rfkill->lock, flags);
 
 	rfkill_led_trigger_event(rfkill);
 
 	if (prev != curr)
 		rfkill_event(rfkill);
+
 }
 
 #ifdef CONFIG_RFKILL_INPUT
@@ -345,7 +333,7 @@ static void __rfkill_switch_all(const enum rfkill_type type, bool blocked)
 
 	rfkill_global_states[type].cur = blocked;
 	list_for_each_entry(rfkill, &rfkill_list, node) {
-		if (rfkill->type != type && type != RFKILL_TYPE_ALL)
+		if (rfkill->type != type)
 			continue;
 
 		rfkill_set_block(rfkill, blocked);
@@ -587,7 +575,7 @@ static ssize_t rfkill_name_show(struct device *dev,
 
 static const char *rfkill_get_type_str(enum rfkill_type type)
 {
-	BUILD_BUG_ON(NUM_RFKILL_TYPES != RFKILL_TYPE_NFC + 1);
+	BUILD_BUG_ON(NUM_RFKILL_TYPES != RFKILL_TYPE_FM + 1);
 
 	switch (type) {
 	case RFKILL_TYPE_WLAN:
@@ -604,8 +592,6 @@ static const char *rfkill_get_type_str(enum rfkill_type type)
 		return "gps";
 	case RFKILL_TYPE_FM:
 		return "fm";
-	case RFKILL_TYPE_NFC:
-		return "nfc";
 	default:
 		BUG();
 	}
@@ -678,7 +664,7 @@ static ssize_t rfkill_soft_store(struct device *dev,
 	rfkill_set_block(rfkill, state);
 	mutex_unlock(&rfkill_global_mutex);
 
-	return count;
+	return err ?: count;
 }
 
 static u8 user_state_from_blocked(unsigned long state)
@@ -723,7 +709,7 @@ static ssize_t rfkill_state_store(struct device *dev,
 	rfkill_set_block(rfkill, state == RFKILL_USER_STATE_SOFT_BLOCKED);
 	mutex_unlock(&rfkill_global_mutex);
 
-	return count;
+	return err ?: count;
 }
 
 static ssize_t rfkill_claim_show(struct device *dev,
@@ -800,7 +786,7 @@ void rfkill_resume_polling(struct rfkill *rfkill)
 	if (!rfkill->ops->poll)
 		return;
 
-	queue_delayed_work(system_power_efficient_wq, &rfkill->poll_work, 0);
+	schedule_work(&rfkill->poll_work.work);
 }
 EXPORT_SYMBOL(rfkill_resume_polling);
 
@@ -908,7 +894,8 @@ static void rfkill_poll(struct work_struct *work)
 	 */
 	rfkill->ops->poll(rfkill, rfkill->data);
 
-	queue_delayed_work(system_power_efficient_wq, &rfkill->poll_work, round_jiffies_relative(POLL_INTERVAL));
+	schedule_delayed_work(&rfkill->poll_work,
+		round_jiffies_relative(POLL_INTERVAL));
 }
 
 static void rfkill_uevent_work(struct work_struct *work)
@@ -971,7 +958,8 @@ int __must_check rfkill_register(struct rfkill *rfkill)
 	INIT_WORK(&rfkill->sync_work, rfkill_sync_work);
 
 	if (rfkill->ops->poll)
-		queue_delayed_work(system_power_efficient_wq, &rfkill->poll_work, round_jiffies_relative(POLL_INTERVAL));
+		schedule_delayed_work(&rfkill->poll_work,
+			round_jiffies_relative(POLL_INTERVAL));
 
 	if (!rfkill->persistent || rfkill_epo_lock_active) {
 		schedule_work(&rfkill->sync_work);

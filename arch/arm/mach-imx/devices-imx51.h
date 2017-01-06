@@ -6,7 +6,8 @@
  * the terms of the GNU General Public License version 2 as published by the
  * Free Software Foundation.
  */
-#include "devices/devices-common.h"
+#include <mach/mx51.h>
+#include <mach/devices-common.h>
 
 extern const struct imx_fec_data imx51_fec_data;
 #define imx51_add_fec(pdata)	\
@@ -54,7 +55,7 @@ extern const struct imx_spi_imx_data imx51_ecspi_data[];
 	imx_add_spi_imx(&imx51_ecspi_data[id], pdata)
 
 extern const struct imx_imx2_wdt_data imx51_imx2_wdt_data[];
-#define imx51_add_imx2_wdt(id)	\
+#define imx51_add_imx2_wdt(id, pdata)	\
 	imx_add_imx2_wdt(&imx51_imx2_wdt_data[id])
 
 extern const struct imx_mxc_pwm_data imx51_mxc_pwm_data[];

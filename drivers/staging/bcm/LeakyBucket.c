@@ -15,18 +15,16 @@
 * Returns     - None
 **********************************************************************/
 
-static VOID UpdateTokenCount(register struct bcm_mini_adapter *Adapter)
+static VOID UpdateTokenCount(register PMINI_ADAPTER Adapter)
 {
 	ULONG 	liCurrentTime;
 	INT 	i = 0;
 	struct timeval tv;
 
-	BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, TOKEN_COUNTS, DBG_LVL_ALL,
-			"=====>\n");
+	BCM_DEBUG_PRINT(Adapter,DBG_TYPE_TX, TOKEN_COUNTS, DBG_LVL_ALL, "=====>\n");
 	if(NULL == Adapter)
 	{
-		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, TOKEN_COUNTS, 
-				DBG_LVL_ALL, "Adapter found NULL!\n");
+		BCM_DEBUG_PRINT(Adapter,DBG_TYPE_TX, TOKEN_COUNTS, DBG_LVL_ALL, "Adapter found NULL!\n");
 		return;
 	}
 
@@ -77,7 +75,7 @@ static VOID UpdateTokenCount(register struct bcm_mini_adapter *Adapter)
 * Returns     - The number of bytes allowed for transmission.
 *
 ***********************************************************************/
-static ULONG GetSFTokenCount(struct bcm_mini_adapter *Adapter, struct bcm_packet_info *psSF)
+static ULONG GetSFTokenCount(PMINI_ADAPTER Adapter, PacketInfo *psSF)
 {
 	BCM_DEBUG_PRINT(Adapter,DBG_TYPE_TX, TOKEN_COUNTS, DBG_LVL_ALL, "IsPacketAllowedForFlow ===>");
 	/* Validate the parameters */
@@ -114,8 +112,8 @@ static ULONG GetSFTokenCount(struct bcm_mini_adapter *Adapter, struct bcm_packet
 This function despatches packet from the specified queue.
 @return Zero(success) or Negative value(failure)
 */
-static INT SendPacketFromQueue(struct bcm_mini_adapter *Adapter,/**<Logical Adapter*/
-			struct bcm_packet_info *psSF, /**<Queue identifier*/
+static INT SendPacketFromQueue(PMINI_ADAPTER Adapter,/**<Logical Adapter*/
+			       PacketInfo *psSF,		/**<Queue identifier*/
 			       struct sk_buff*  Packet)	/**<Pointer to the packet to be sent*/
 {
 	INT  	Status=STATUS_FAILURE;
@@ -158,7 +156,7 @@ static INT SendPacketFromQueue(struct bcm_mini_adapter *Adapter,/**<Logical Adap
 * Returns     - None.
 *
 ****************************************************************************/
-static VOID CheckAndSendPacketFromIndex(struct bcm_mini_adapter *Adapter, struct bcm_packet_info *psSF)
+static VOID CheckAndSendPacketFromIndex(PMINI_ADAPTER Adapter, PacketInfo *psSF)
 {
 	struct sk_buff	*QueuePacket=NULL;
 	char 			*pControlPacket = NULL;
@@ -245,10 +243,10 @@ static VOID CheckAndSendPacketFromIndex(struct bcm_mini_adapter *Adapter, struct
 				{
 					spin_lock_bh(&psSF->SFQueueLock);
 					psSF->NumOfPacketsSent++;
-					psSF->uiSentBytes+=((struct bcm_leader *)pControlPacket)->PLength;
+					psSF->uiSentBytes+=((PLEADER)pControlPacket)->PLength;
 					psSF->uiSentPackets++;
 					atomic_dec(&Adapter->TotalPacketCount);
-					psSF->uiCurrentBytesOnHost -= ((struct bcm_leader *)pControlPacket)->PLength;
+					psSF->uiCurrentBytesOnHost -= ((PLEADER)pControlPacket)->PLength;
 					psSF->uiCurrentPacketsOnHost--;
 					atomic_inc(&Adapter->index_rd_txcntrlpkt);
 					spin_unlock_bh(&psSF->SFQueueLock);
@@ -275,7 +273,7 @@ static VOID CheckAndSendPacketFromIndex(struct bcm_mini_adapter *Adapter, struct
 *
 * Returns     - None.
 ********************************************************************/
-VOID transmit_packets(struct bcm_mini_adapter *Adapter)
+VOID transmit_packets(PMINI_ADAPTER Adapter)
 {
 	UINT 	uiPrevTotalCount = 0;
 	int iIndex = 0;

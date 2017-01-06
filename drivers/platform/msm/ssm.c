@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -27,8 +27,8 @@
 #include <linux/platform_device.h>
 #include <linux/msm_ion.h>
 #include <linux/platform_data/qcom_ssm.h>
-#include <soc/qcom/scm.h>
-#include <soc/qcom/smd.h>
+#include <mach/scm.h>
+#include <mach/msm_smd.h>
 
 #include "qseecom_kernel.h"
 #include "ssm.h"
@@ -249,6 +249,7 @@ static int ssm_load_app(struct ssm_driver *ssm)
 static struct ssm_platform_data *populate_ssm_pdata(struct device *dev)
 {
 	struct ssm_platform_data *pdata;
+	int rc;
 
 	pdata = devm_kzalloc(dev, sizeof(struct ssm_platform_data),
 								GFP_KERNEL);
@@ -258,12 +259,18 @@ static struct ssm_platform_data *populate_ssm_pdata(struct device *dev)
 	pdata->need_key_exchg =
 		of_property_read_bool(dev->of_node, "qcom,need-keyexhg");
 
-	pdata->channel_name = CHANNEL_NAME;
+	rc = of_property_read_string(dev->of_node, "qcom,channel-name",
+							&pdata->channel_name);
+	if (rc && rc != -EINVAL) {
+		dev_err(dev, "Error reading channel_name property %d\n", rc);
+		return NULL;
+	} else if (rc == -EINVAL)
+		pdata->channel_name = CHANNEL_NAME;
 
 	return pdata;
 }
 
-static int ssm_probe(struct platform_device *pdev)
+static int __devinit ssm_probe(struct platform_device *pdev)
 {
 	int rc;
 	struct ssm_platform_data *pdata;
@@ -326,7 +333,7 @@ exit:
 
 }
 
-static int ssm_remove(struct platform_device *pdev)
+static int __devexit ssm_remove(struct platform_device *pdev)
 {
 
 	if (!ssm_drv)
@@ -339,7 +346,7 @@ static int ssm_remove(struct platform_device *pdev)
 	 */
 	ssm_drv->ready = false;
 	smd_close(ssm_drv->ch);
-	flush_work(&ssm_drv->ipc_work);
+	flush_work_sync(&ssm_drv->ipc_work);
 
 	/* Shutdown tzapp */
 	dev_dbg(&pdev->dev, "Shutting down TZapp\n");
@@ -357,7 +364,7 @@ static struct of_device_id ssm_match_table[] = {
 
 static struct platform_driver ssm_pdriver = {
 	.probe          = ssm_probe,
-	.remove         = ssm_remove,
+	.remove         = __devexit_p(ssm_remove),
 	.driver = {
 		.name   = SSM_DEV_NAME,
 		.owner  = THIS_MODULE,
@@ -400,10 +407,7 @@ int ssm_oem_driver_intf(int cmd, char *mode, int len)
 
 	/* Open modem SMD interface */
 	if (!ssm_drv->ready) {
-		rc = smd_named_open_on_edge(ssm_drv->channel_name,
-							SMD_APPS_MODEM,
-							&ssm_drv->ch,
-							ssm_drv,
+		rc = smd_open(ssm_drv->channel_name, &ssm_drv->ch, ssm_drv,
 							modem_request);
 		if (rc) {
 			rc = -EAGAIN;

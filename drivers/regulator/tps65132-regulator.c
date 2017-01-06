@@ -1,663 +1,441 @@
-/* Copyright (c) 2014, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (C) 2013 Motorola Mobility LLC
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+ * 02111-1307, USA
  */
 
-#define pr_fmt(fmt) "%s: " fmt, __func__
-
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/init.h>
+#include <linux/delay.h>
+#include <linux/i2c.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/of_device.h>
-#include <linux/err.h>
-#include <linux/i2c.h>
-#include <linux/regmap.h>
-#include <linux/regulator/of_regulator.h>
-#include <linux/regulator/driver.h>
-#include <linux/regulator/machine.h>
-#include <linux/bitops.h>
+#include <linux/platform_device.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/delay.h>
+#include <linux/regulator/consumer.h>
+#include <linux/err.h>
+#include <linux/gpio.h>
+#include <linux/regulator/machine.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/of_regulator.h>
 
-struct tps65132_regulator {
-	struct regulator_init_data	*init_data;
-	struct regulator_dev		*rdev;
-	struct device_node		*node;
-	struct regulator_desc		rdesc;
-	struct tps65132_chip		*chip;
-	const char			*name;
-	u8				vol_reg;
-	u8				dischg_bit_pos;
-	bool				dischg_en;
-	u8				ctrl_reg;
-	u8				wrt_en_bit_pos;
-	u8				read_eeprom_bit_pos;
-	int				en_gpio;
-	enum				of_gpio_flags gpio_flags;
-	bool				is_enabled;
-	int				curr_uV;
-	u8				vol_set_val;
-	bool				vol_set_postpone;
+#define TPS65132_NAME "tps65132"
+
+struct tps65132_data {
+	struct regulator_dev *rdev;
+	int enable_p_gpio;
+	int enable_n_gpio;
+	u32 bias_delay_us;
+	bool enabled;
 };
 
-struct tps65132_chip {
-	struct tps65132_regulator	*vreg;
-	struct regulator		*i2c_pwr;
-	struct regmap			*regmap;
-	struct device			*dev;
-	u8				num_regulators;
-	u8				apps_cfg;
-	u8				apps_dischg_reg;
-	u8				apps_cfg_bit_pos;
-	u8				apps_dischg_val;
-	bool				apps_dischg_cfg_postpone;
-	bool				en_gpio_lpm;
-	bool				nt50358;
-};
+/* volt postive/negative output level reg */
+#define	VPOS_REG		0x00
+#define VNEG_REG		0x01
+#define ACTIVE_DIS_REG		0x03
+#define APPS_REG		0x03
 
-#define TPS65132_REG_VPOS		0x00
-#define TPS65132_REG_VNEG		0x01
-#define TPS65132_VOLTAGE_MASK		0x1f
-#define TPS65132_REG_APPS_DISCHARGE	0x03
-#define TPS65132_DISCHARGE_NEG_BIT	0
-#define TPS65132_DISCHARGE_POS_BIT	1
-#define TPS65132_APPSCFG_BIT		6
-#define TPS65132_REG_CTRL		0xff
-#define TPS65132_WRITE_EN_BIT		7
+#define VPOS_MASK		0x1f
+#define VNEG_MASK		0x1f
+#define ACTIVE_DIS_REG_MASK	0x03
+#define APPS_MASK		0x40
 
-#define TPS65132_VOLTAGE_MIN	4000000
-#define TPS65132_VOLTAGE_MAX	6000000
-#define TPS65132_VOLTAGE_STEP	100000
-#define TPS65132_VOLTAGE_LEVELS	\
-	((TPS65132_VOLTAGE_MAX - TPS65132_VOLTAGE_MIN) \
-	 / TPS65132_VOLTAGE_STEP + 1)
-#define TPS65132_CTRL_READ_DAC		0
-#define TPS65132_CTRL_READ_EEPROM	1
+#define I2C_RETRY_DELAY		10	/* 10ms */
+#define I2C_MAX_RW_RETRIES	10	/* retry 10 times max */
 
-#define TPS65132_NEG_TABLET_CURR_LIMIT_UA	80000
-#define TPS65132_NEG_SMARTPHONE_CURR_LIMIT_UA	40000
-#define TPS65132_POS_CURR_LIMIT_UA		200000
-
-#define I2C_VOLTAGE_LEVEL	1800000
-
-enum {
-	TPS65132_POSITIVE_BOOST = 0,
-	TPS65132_NEGATIVE_BOOST,
-};
-
-static struct of_regulator_match tps65132_reg_matches[] = {
-	{ .name = "pos-boost", .driver_data = (void *)TPS65132_POSITIVE_BOOST },
-	{ .name = "neg-boost", .driver_data = (void *)TPS65132_NEGATIVE_BOOST },
-};
-
-static int tps65132_regulator_disable(struct regulator_dev *rdev)
+static int tps65132_read_reg(struct i2c_client *client, uint8_t reg,
+			uint8_t *value)
 {
-	struct tps65132_regulator *vreg = rdev_get_drvdata(rdev);
-	struct tps65132_chip *chip = vreg->chip;
+	int error;
+	int i = 0;
 
-	if (chip->nt50358) {
-		if (chip->en_gpio_lpm) {
-			gpio_direction_input(chip->vreg[1].en_gpio);
-			mdelay(2);
-			gpio_direction_input(chip->vreg[0].en_gpio);
-		} else {
-			gpio_set_value_cansleep(chip->vreg[1].en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 1 : 0);
-			mdelay(2);
-			gpio_set_value_cansleep(chip->vreg[0].en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 1 : 0);
+	do {
+		error = i2c_smbus_read_i2c_block_data(client,
+			reg, 1, value);
+		if (error < 0) {
+			dev_err(&client->dev, "%s: i2c_smbus_read_i2c_block_data: %d\n",
+				__func__, error);
+			msleep(I2C_RETRY_DELAY);
 		}
-	} else {
-		if (chip->en_gpio_lpm)
-			gpio_direction_input(vreg->en_gpio);
-		else
-			gpio_set_value_cansleep(vreg->en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 1 : 0);
+	} while ((error < 0) && ((++i) < I2C_MAX_RW_RETRIES));
+
+	if (error < 0)
+		dev_err(&client->dev, "%s: i2c_smbus_read_i2c_block_data [0x%02X] failed:%d\n",
+			__func__, reg, error);
+
+	return error;
+}
+
+static int tps65132_write_reg(struct i2c_client *client, uint8_t reg,
+			uint8_t value)
+{
+	int i = 0;
+	int error;
+
+	do {
+		error = i2c_smbus_write_byte_data(client,
+			 reg, value);
+		if (error < 0) {
+			dev_err(&client->dev, "%s: i2c_smbus_write_byte_data: %d\n",
+				__func__, error);
+			msleep(I2C_RETRY_DELAY);
+		}
+	} while ((error < 0) && ((++i) < I2C_MAX_RW_RETRIES));
+
+	if (error < 0)
+		dev_err(&client->dev, "%s: i2c_smbus_write_byte_data [0x%02X] failed:%d\n",
+			__func__, reg, error);
+
+	return error;
+}
+
+/* TPS65132 init register */
+static int tps65132_init_registers_dt(struct i2c_client *client,
+			struct device_node *node)
+{
+	bool active_dis;
+	bool app_tablet;
+
+	uint8_t value = 0;
+
+	active_dis = of_property_read_bool(node, "active-dis");
+	app_tablet = of_property_read_bool(node, "app-tablet");
+
+	if (tps65132_read_reg(client, ACTIVE_DIS_REG, &value) < 0) {
+		dev_err(&client->dev, "%s: Register ACTIVE_DIS_REG read failed\n",
+			__func__);
+		return -ENODEV;
 	}
 
-	vreg->is_enabled = false;
+	value = (value & ~ACTIVE_DIS_REG_MASK) |
+			(active_dis ? ACTIVE_DIS_REG_MASK : 0);
+	if (tps65132_write_reg(client, ACTIVE_DIS_REG, value)) {
+		dev_err(&client->dev, "%s: Register ACTIVE_DIS_REG initialization failed\n",
+			__func__);
+		return -EINVAL;
+	}
+
+	if (tps65132_read_reg(client, APPS_REG, &value) < 0) {
+		dev_err(&client->dev, "%s: Register APPS_REG read failed\n",
+			__func__);
+		return -ENODEV;
+	}
+
+	value = (value & ~APPS_MASK) | (app_tablet ? APPS_MASK : 0);
+	if (tps65132_write_reg(client, APPS_REG, value)) {
+		dev_err(&client->dev, "%s: Register APPS_REG initialization failed\n",
+			__func__);
+		return -EINVAL;
+	}
 
 	return 0;
 }
+
+/* Index maps to dac_value to store into register */
+static int tps65132_voltages[] =
+{	/* voltage	index/dac_value */
+	4000000,	/* 0x00 */
+	4100000,	/* 0x01 */
+	4200000,	/* 0x02 */
+	4300000,	/* 0x03 */
+	4400000,	/* 0x04 */
+	4500000,	/* 0x05 */
+	4600000,	/* 0x06 */
+	4700000,	/* 0x07 */
+	4800000,	/* 0x08 */
+	4900000,	/* 0x09 */
+	5000000,	/* 0x0a */
+	5100000,	/* 0x0b */
+	5200000,	/* 0x0c */
+	5300000,	/* 0x0d */
+	5400000,	/* 0x0e */
+	5500000,	/* 0x0f */
+	5600000,	/* 0x10 */
+	5700000,	/* 0x11 */
+	5800000,	/* 0x12 */
+	5900000,	/* 0x13 */
+	6000000,	/* 0x14 */
+};
 
 static int tps65132_regulator_enable(struct regulator_dev *rdev)
 {
-	struct tps65132_regulator *vreg = rdev_get_drvdata(rdev);
-	struct tps65132_chip *chip = vreg->chip;
-	int rc;
+	struct tps65132_data *tps65132 = rdev_get_drvdata(rdev);
 
-	if (chip->nt50358) {
-		if (chip->en_gpio_lpm) {
-			gpio_direction_output(chip->vreg[0].en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 0 : 1);
-			mdelay(2);
-			gpio_direction_output(chip->vreg[1].en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 0 : 1);
-		} else {
-			gpio_set_value_cansleep(chip->vreg[0].en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 0 : 1);
-			mdelay(2);
-			gpio_set_value_cansleep(chip->vreg[1].en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 0 : 1);
-		}
-		vreg->vol_set_postpone = true;
-	} else {
-		if (chip->en_gpio_lpm)
-			gpio_direction_output(vreg->en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 0 : 1);
-		else
-			gpio_set_value_cansleep(vreg->en_gpio,
-				vreg->gpio_flags & OF_GPIO_ACTIVE_LOW ? 0 : 1);
-	}
-	vreg->is_enabled = true;
+	if (gpio_is_valid(tps65132->enable_p_gpio))
+		gpio_set_value(tps65132->enable_p_gpio, 1);
 
-	if (chip->apps_dischg_cfg_postpone) {
-		rc = regmap_write(chip->regmap, chip->apps_dischg_reg,
-						chip->apps_dischg_val);
-		if (rc) {
-			pr_err("apps_dischg set failed, rc = %d\n", rc);
-			return rc;
-		}
-		chip->apps_dischg_cfg_postpone = false;
-	}
+	if (tps65132->bias_delay_us)
+		usleep_range(tps65132->bias_delay_us,
+			tps65132->bias_delay_us + 100);
 
-	if (vreg->vol_set_postpone) {
-		rc = regmap_write(rdev->regmap, vreg->vol_reg,
-					vreg->vol_set_val);
+	if (gpio_is_valid(tps65132->enable_n_gpio))
+		gpio_set_value(tps65132->enable_n_gpio, 1);
 
-		if (rc) {
-			pr_err("set voltage failed, rc = %d\n", rc);
-			return rc;
-		}
-		vreg->vol_set_postpone = false;
-	}
+	tps65132->enabled = true;
 
 	return 0;
 }
 
-static int tps65132_regulator_get_voltage(struct regulator_dev *rdev)
+static int tps65132_regulator_disable(struct regulator_dev *rdev)
 {
-	struct tps65132_regulator *vreg = rdev_get_drvdata(rdev);
-	int rc, val;
+	struct tps65132_data *tps65132 = rdev_get_drvdata(rdev);
 
-	if (!rdev->regmap) {
-		pr_err("regmap not found\n");
-		return -EINVAL;
-	}
-	if (!vreg->is_enabled)
-		return vreg->curr_uV;
+	if (gpio_is_valid(tps65132->enable_n_gpio))
+		gpio_set_value(tps65132->enable_n_gpio, 0);
 
-	rc = regmap_write(rdev->regmap, vreg->ctrl_reg, TPS65132_CTRL_READ_DAC);
-	if (rc) {
-		pr_err("failed to write reg %d, rc = %d\n", vreg->ctrl_reg, rc);
-		return rc;
-	}
+	if (tps65132->bias_delay_us)
+		usleep_range(tps65132->bias_delay_us,
+			tps65132->bias_delay_us + 100);
 
-	rc = regmap_read(rdev->regmap, vreg->vol_reg, &val);
-	if (rc) {
-		pr_err("read reg %d failed, rc = %d\n", vreg->vol_reg, rc);
-		return rc;
-	} else {
-		vreg->curr_uV = (val & TPS65132_VOLTAGE_MASK) *
-			TPS65132_VOLTAGE_STEP + TPS65132_VOLTAGE_MIN;
-	}
+	if (gpio_is_valid(tps65132->enable_p_gpio))
+		gpio_set_value(tps65132->enable_p_gpio, 0);
 
-	return vreg->curr_uV;
+	tps65132->enabled = false;
+
+	return 0;
 }
 
-static int tps65132_regulator_set_voltage(struct regulator_dev *rdev,
-		int min_uV, int max_uV, unsigned *selector)
+static int tps65132_regulator_is_enabled(struct regulator_dev *rdev)
 {
-	struct tps65132_regulator *vreg = rdev_get_drvdata(rdev);
-	struct tps65132_chip *chip = vreg->chip;
-	int val, new_uV, rc;
+	struct tps65132_data *tps65132 = rdev_get_drvdata(rdev);
 
-	if (!rdev->regmap) {
-		pr_err("regmap not found\n");
+	return tps65132->enabled;
+}
+
+static int tps65132_regulator_get_voltage_sel(struct regulator_dev *rdev)
+{
+	struct device *dev = rdev_get_dev(rdev);
+	struct i2c_client *client = to_i2c_client(dev->parent);
+	uint8_t value;
+
+	if (tps65132_read_reg(client, VPOS_REG, &value) < 0)
 		return -EINVAL;
-	}
 
-	val = DIV_ROUND_UP(min_uV - TPS65132_VOLTAGE_MIN,
-				TPS65132_VOLTAGE_STEP);
-	val = val & TPS65132_VOLTAGE_MASK;
-	new_uV = TPS65132_VOLTAGE_MIN + (val * TPS65132_VOLTAGE_STEP);
-	if (new_uV > max_uV) {
-		pr_err("failed to set voltage (%d %d)\n", min_uV, max_uV);
+	value &= VPOS_MASK;
+
+	if (value >= ARRAY_SIZE(tps65132_voltages))
 		return -EINVAL;
-	}
-	if (!vreg->is_enabled) {
-		vreg->vol_set_val = val;
-		vreg->vol_set_postpone = true;
-	} else {
-		if (chip->nt50358)
-			vreg->vol_set_val = val;
-		rc = regmap_write(rdev->regmap, vreg->vol_reg, val);
-		if (rc) {
-			pr_err("failed to write reg %d, rc = %d\n",
-						vreg->vol_reg, rc);
-			return rc;
-		}
-	}
-	vreg->curr_uV = new_uV;
 
-	*selector = val;
+	return value;
+}
+
+static int tps65132_regulator_set_voltage_sel(struct regulator_dev *rdev,
+			unsigned selector)
+{
+	struct device *dev = rdev_get_dev(rdev);
+	struct i2c_client *client = to_i2c_client(dev->parent);
+	uint8_t value;
+
+	value = selector & VPOS_MASK;
+
+	if (tps65132_write_reg(client, VPOS_REG, value) < 0)
+		return -EINVAL;
+
+	value = selector & VNEG_MASK;
+
+	if (tps65132_write_reg(client, VNEG_REG, value) < 0)
+		return -EINVAL;
 
 	return 0;
 }
 
 static int tps65132_regulator_list_voltage(struct regulator_dev *rdev,
-							unsigned selector)
+			unsigned selector)
 {
-	if (selector >= TPS65132_VOLTAGE_LEVELS)
-		return 0;
+	if (selector >= ARRAY_SIZE(tps65132_voltages))
+		return -EINVAL;
 
-	return selector * TPS65132_VOLTAGE_STEP + TPS65132_VOLTAGE_MIN;
+	return tps65132_voltages[selector];
 }
 
-static int tps65132_regulator_is_enabled(struct regulator_dev *rdev)
-{
-	struct tps65132_regulator *vreg = rdev_get_drvdata(rdev);
-
-	return vreg->is_enabled ? 1 : 0;
-}
-
-static struct regulator_ops tps65132_ops = {
-	.set_voltage = tps65132_regulator_set_voltage,
-	.get_voltage = tps65132_regulator_get_voltage,
-	.list_voltage = tps65132_regulator_list_voltage,
-	.enable = tps65132_regulator_enable,
-	.disable = tps65132_regulator_disable,
-	.is_enabled = tps65132_regulator_is_enabled,
+static struct regulator_ops tps65132_regulator_ops = {
+	.enable		= tps65132_regulator_enable,
+	.disable	= tps65132_regulator_disable,
+	.is_enabled	= tps65132_regulator_is_enabled,
+	.get_voltage_sel = tps65132_regulator_get_voltage_sel,
+	.set_voltage_sel = tps65132_regulator_set_voltage_sel,
+	.list_voltage	= tps65132_regulator_list_voltage,
 };
 
-static int tps65132_regulator_gpio_init(struct tps65132_chip *chip)
+static struct regulator_desc tps65132_regulator_desc = {
+	.name		= "tps65132",
+	.ops		= &tps65132_regulator_ops,
+	.type		= REGULATOR_VOLTAGE,
+	.id			= 0,
+	.owner		= THIS_MODULE,
+	.n_voltages	= ARRAY_SIZE(tps65132_voltages),
+};
+
+static int tps65132_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
-	struct tps65132_regulator *vreg;
-	u32 gpio;
-	enum of_gpio_flags flags;
-	int state;
-	int i, rc = 0;
+	struct tps65132_data *tps65132;
+	struct regulator_init_data *init_data;
+	struct device_node *regulator_node = NULL;
+	int error;
 
-	for (i = 0; i < chip->num_regulators; i++) {
-		vreg = &chip->vreg[i];
-		gpio = vreg->en_gpio;
-		flags = vreg->gpio_flags;
-		if (gpio_is_valid(gpio)) {
-			rc = devm_gpio_request(chip->dev, gpio, vreg->name);
-			if (rc < 0) {
-				pr_err("gpio %d request failed, rc = %d\n",
-								gpio, rc);
-				return rc;
-			}
-			state = gpio_get_value_cansleep(gpio);
-			if (state < 0) {
-				pr_err("gpio %d: get value failed, rc = %d\n",
-						gpio, state);
-				return state;
-			}
-			rc = gpio_direction_output(gpio, state);
-			if (rc < 0) {
-				pr_err("gpio %d set output failed, rc = %d\n",
-								gpio, rc);
-				return rc;
-			}
-			if (((flags & OF_GPIO_ACTIVE_LOW) && (state == 0)) ||
-				(!(flags & OF_GPIO_ACTIVE_LOW) && (state == 1)))
-				vreg->is_enabled = true;
-		} else {
-			pr_err("gpio %d is invalid for %s EN-pin\n",
-						gpio, vreg->name);
-			return -EINVAL;
-		}
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+		dev_err(&client->dev, "%s: I2C_FUNC_I2C not supported\n", __func__);
+		return -ENODEV;
 	}
-
-	return rc;
-}
-
-static int tps65132_regulator_apps_dischg_config(struct tps65132_chip *chip)
-{
-	struct tps65132_regulator *vreg;
-	u8 value = 0;
-	bool online = false;
-	int i, rc = 0;
-
-	if (chip->apps_cfg > 0)
-		value = BIT(chip->apps_cfg_bit_pos);
-
-	for (i = 0; i < chip->num_regulators; i++) {
-		vreg = &chip->vreg[i];
-		if (vreg->dischg_en)
-			value |= BIT(vreg->dischg_bit_pos);
-		if (vreg->is_enabled)
-			online = true;
-	}
-	if (online) {
-		rc = regmap_write(chip->regmap, chip->apps_dischg_reg, value);
-		if (rc)
-			pr_err("write reg %d failed, rc = %d\n",
-					chip->apps_dischg_reg, rc);
-	} else {
-		chip->apps_dischg_cfg_postpone = true;
-		chip->apps_dischg_val = value;
-	}
-
-	return 0;
-}
-
-static int tps65132_regulator_hw_init(struct tps65132_chip *chip)
-{
-	int rc;
-	struct regulator *i2c_pwr = chip->i2c_pwr;
-
-	rc = tps65132_regulator_gpio_init(chip);
-	if (rc) {
-		pr_err("gpios initialize failed, rc = %d\n", rc);
-		return rc;
-	}
-
-	if (i2c_pwr) {
-		if (regulator_count_voltages(i2c_pwr) > 0) {
-			rc = regulator_set_voltage(i2c_pwr,
-				I2C_VOLTAGE_LEVEL, I2C_VOLTAGE_LEVEL);
-			if (rc < 0) {
-				pr_err("set i2c-pwr voltage failed, rc = %d\n",
-									rc);
-				return rc;
-			}
-		}
-		rc = regulator_enable(i2c_pwr);
-		if (rc) {
-			pr_err("enable i2c-pwr voltage failed, rc = %d\n", rc);
-			return rc;
-		}
-	}
-
-	rc = tps65132_regulator_apps_dischg_config(chip);
-	if (rc)
-		pr_err("appscfg set failed, rc = %d\n", rc);
-
-	return rc;
-}
-
-static int tps65132_parse_dt(struct tps65132_chip *chip,
-				struct i2c_client *client)
-{
-	struct device_node *node;
-	struct of_regulator_match *match;
-	int type, i, rc;
-	u32 current_limit;
 
 	if (!client->dev.of_node) {
-		pr_err("device node missing\n");
+		/* Platform data not currently supported */
+		dev_err(&client->dev, "%s: of devtree data not found\n", __func__);
 		return -EINVAL;
 	}
 
-	node = of_find_node_by_name(client->dev.of_node, "regulators");
-	if (!node) {
-		pr_err("get regulators node failed\n");
-		return -EINVAL;
-	}
-
-	rc = of_regulator_match(&client->dev, node, tps65132_reg_matches,
-					ARRAY_SIZE(tps65132_reg_matches));
-	if (rc < 0) {
-		pr_err("regulator match failed, rc = %d\n", rc);
-		return rc;
-	}
-
-	chip->num_regulators = rc;
-
-	chip->vreg = devm_kzalloc(&client->dev, chip->num_regulators *
-					sizeof(struct tps65132_regulator),
-					GFP_KERNEL);
-	if (!chip->vreg) {
-		pr_err("memory allocation failed for vreg\n");
+	tps65132 = devm_kzalloc(&client->dev, sizeof(*tps65132), GFP_KERNEL);
+	if (tps65132 == NULL) {
+		dev_err(&client->dev, "%s: alloc failed\n", __func__);
 		return -ENOMEM;
 	}
-	if (of_find_property(client->dev.of_node, "i2c-pwr-supply", NULL)) {
-		chip->i2c_pwr = devm_regulator_get(&client->dev, "i2c-pwr");
-		if (IS_ERR_OR_NULL(chip->i2c_pwr)) {
-			rc = PTR_RET(chip->i2c_pwr);
-			if (rc != EPROBE_DEFER)
-				pr_err("get i2c_pwr failed, rc = %d\n", rc);
-			return rc;
+
+	/* Use OF devtree. */
+	of_property_read_u32(client->dev.of_node, "bias-delay-us",
+			&tps65132->bias_delay_us);
+
+	tps65132->enable_p_gpio = of_get_gpio(client->dev.of_node, 0);
+	if (!gpio_is_valid(tps65132->enable_p_gpio))
+		dev_warn(&client->dev, "%s: enable_p_gpio not found in of devtree\n",
+				__func__);
+
+	tps65132->enable_n_gpio = of_get_gpio(client->dev.of_node, 1);
+	if (!gpio_is_valid(tps65132->enable_n_gpio))
+		dev_warn(&client->dev, "%s: enable_n_gpio not found in of devtree\n",
+				__func__);
+
+	for_each_child_of_node(client->dev.of_node, regulator_node)
+		if (of_node_cmp(regulator_node->name, "regulator") == 0)
+			break;
+
+	if (regulator_node == NULL) {
+		dev_err(&client->dev,
+				"%s: unable to find regulator node within device node\n",
+				__func__);
+		error = -ENOMEM;
+		goto err_regulator;
+	}
+
+	init_data = of_get_regulator_init_data(&client->dev, regulator_node);
+	if (!init_data) {
+		dev_err(&client->dev, "%s: of_get_regulator_init_data failed\n",
+				__func__);
+		error = -EINVAL;
+		goto err_regulator;
+	}
+
+	tps65132->rdev = regulator_register(&tps65132_regulator_desc, &client->dev,
+		init_data, tps65132, regulator_node);
+
+	if (IS_ERR(tps65132->rdev)) {
+		dev_err(&client->dev, "failed to register regulator %s\n",
+			tps65132_regulator_desc.name);
+		error = PTR_ERR(tps65132->rdev);
+		goto err_regulator;
+	}
+
+	error = tps65132_init_registers_dt(client, client->dev.of_node);
+	if (error < 0) {
+		dev_err(&client->dev, "%s: register init failed: %d\n",
+			__func__, error);
+		error = -ENODEV;
+		goto err_regulator_register;
+	}
+
+	tps65132->enabled = tps65132->rdev->constraints->boot_on;
+
+	if (gpio_is_valid(tps65132->enable_p_gpio)) {
+		if (gpio_request(tps65132->enable_p_gpio, "tps56132-enable-p")) {
+			dev_err(&client->dev, "%s: gpio_request failed on gpio %d\n",
+					__func__, tps65132->enable_p_gpio);
+			error = -EINVAL;
+			goto err_regulator_register;
 		}
+		gpio_direction_output(tps65132->enable_p_gpio, tps65132->enabled);
 	}
-	chip->en_gpio_lpm = of_property_read_bool(client->dev.of_node,
-						"ti,en-gpio-lpm");
-	chip->nt50358 = of_property_read_bool(client->dev.of_node,
-						"ti,nt50358");
 
-	for (i = 0; i < chip->num_regulators; i++) {
-		match = &tps65132_reg_matches[i];
-		if (!match->init_data)
-			continue;
-		match->init_data->constraints.input_uV =
-				match->init_data->constraints.max_uV;
-		match->init_data->constraints.valid_ops_mask =
-					REGULATOR_CHANGE_VOLTAGE |
-					REGULATOR_CHANGE_STATUS;
-
-		chip->vreg[i].init_data = match->init_data;
-		chip->vreg[i].node = match->of_node;
-		chip->vreg[i].chip = chip;
-		chip->vreg[i].name = match->init_data->constraints.name;
-		chip->vreg[i].ctrl_reg = TPS65132_REG_CTRL;
-		chip->vreg[i].wrt_en_bit_pos = TPS65132_WRITE_EN_BIT;
-		chip->vreg[i].read_eeprom_bit_pos =
-						TPS65132_WRITE_EN_BIT;
-		chip->vreg[i].dischg_en = of_property_read_bool(
-					match->of_node, "ti,discharge-enable");
-		rc = of_property_read_u32(match->of_node, "ti,enable-time",
-					&chip->vreg[i].rdesc.enable_time);
-		if (rc < 0) {
-			pr_debug("ti,enable-time read failed, rc = %d\n", rc);
-			chip->vreg[i].rdesc.enable_time = 800;
+	if (gpio_is_valid(tps65132->enable_n_gpio)) {
+		if (gpio_request(tps65132->enable_n_gpio, "tps56132-enable-n")) {
+			dev_err(&client->dev, "%s: gpio_request failed on gpio %d\n",
+					__func__, tps65132->enable_n_gpio);
+			error = -EINVAL;
+			goto err_gpio_request;
 		}
-		rc = of_property_read_u32(match->of_node, "ti,current-limit",
-							&current_limit);
-		type = (uintptr_t)match->driver_data;
-		if (type == TPS65132_POSITIVE_BOOST) {
-			chip->vreg[i].vol_reg = TPS65132_REG_VPOS;
-			chip->vreg[i].dischg_bit_pos =
-					TPS65132_DISCHARGE_POS_BIT;
-			if (!rc && (current_limit !=
-					TPS65132_POS_CURR_LIMIT_UA)) {
-				pr_err("current limit %duA is invalid for postive boost\n",
-							current_limit);
-				return -EINVAL;
-			}
-		} else if (type == TPS65132_NEGATIVE_BOOST) {
-			chip->vreg[i].vol_reg = TPS65132_REG_VNEG;
-			chip->vreg[i].dischg_bit_pos =
-					TPS65132_DISCHARGE_NEG_BIT;
-			if (!rc && (current_limit !=
-				TPS65132_NEG_TABLET_CURR_LIMIT_UA) &&
-				(current_limit !=
-				 TPS65132_NEG_SMARTPHONE_CURR_LIMIT_UA)) {
-				pr_err("current limit %duA is invalid for negative boost\n",
-							current_limit);
-				return -EINVAL;
-			} else if (!rc && (current_limit ==
-					TPS65132_NEG_TABLET_CURR_LIMIT_UA)) {
-				chip->apps_cfg = 1;
-			}
-		} else {
-			pr_err("unknown regulator type: %d\n", type);
-			return -EINVAL;
-		}
-		rc = 0;
-		chip->vreg[i].en_gpio = of_get_named_gpio_flags(
-					match->of_node, "ti,en-gpio", 0,
-					&chip->vreg[i].gpio_flags);
-		if (chip->vreg[i].en_gpio < 0) {
-			pr_err("get ti,en-gpio failed, rc = %d\n",
-					chip->vreg[i].en_gpio);
-			return chip->vreg[i].en_gpio;
-		}
-	}
-	chip->apps_dischg_reg = TPS65132_REG_APPS_DISCHARGE;
-	chip->apps_cfg_bit_pos = TPS65132_APPSCFG_BIT;
-
-	return rc;
-}
-
-static struct regmap_config tps65132_regmap_config = {
-	.reg_bits = 8,
-	.val_bits = 8,
-};
-
-static int tps65132_regulator_probe(struct i2c_client *client,
-				const struct i2c_device_id *id)
-{
-	struct tps65132_chip *chip;
-	struct regulator_config config = {};
-	struct regulator_desc *rdesc;
-	int i, j, rc;
-
-	chip = devm_kzalloc(&client->dev, sizeof(struct tps65132_chip),
-							GFP_KERNEL);
-	if (!chip) {
-		pr_err("memory allocation failed for tps65132_chip\n");
-		return -ENOMEM;
-	}
-	rc = tps65132_parse_dt(chip, client);
-	if (rc) {
-		pr_err("parse device tree failed for tps65132, rc = %d\n",
-								rc);
-		return rc;
-	}
-	chip->regmap = devm_regmap_init_i2c(client, &tps65132_regmap_config);
-	if (IS_ERR(chip->regmap)) {
-		pr_err("init regmap failed for tps65132, rc = %ld\n",
-						PTR_ERR(chip->regmap));
-		return PTR_ERR(chip->regmap);
-	}
-	chip->dev = &client->dev;
-
-	rc = tps65132_regulator_hw_init(chip);
-	if (rc < 0) {
-		pr_err("hardware init failed for tps65132, rc = %d\n", rc);
-		return rc;
-	}
-	i2c_set_clientdata(client, chip);
-
-	for (i = 0; i < chip->num_regulators; i++) {
-		config.dev = &client->dev;
-		config.init_data = chip->vreg[i].init_data;
-		config.regmap = chip->regmap;
-		config.driver_data = &chip->vreg[i];
-		config.of_node = chip->vreg[i].node;
-
-		rdesc = &chip->vreg[i].rdesc;
-		rdesc->name = chip->vreg[i].name;
-		rdesc->type = REGULATOR_VOLTAGE;
-		rdesc->owner = THIS_MODULE;
-		rdesc->n_voltages = TPS65132_VOLTAGE_LEVELS;
-		if (of_get_property(client->dev.of_node, "vin-supply", NULL))
-			rdesc->supply_name = "vin";
-		rdesc->ops = &tps65132_ops;
-		chip->vreg[i].rdev = regulator_register(rdesc, &config);
-		if (IS_ERR(chip->vreg[i].rdev)) {
-			pr_err("regulator register failed, rc = %ld\n",
-					PTR_ERR(chip->vreg[i].rdev));
-			for (j = i - 1; j >= 0; j--)
-				regulator_unregister(chip->vreg[j].rdev);
-
-			return PTR_ERR(chip->vreg[i].rdev);
-		}
+		gpio_direction_output(tps65132->enable_n_gpio, tps65132->enabled);
 	}
 
 	return 0;
+
+err_gpio_request:
+	gpio_free(tps65132->enable_p_gpio);
+err_regulator_register:
+	regulator_unregister(tps65132->rdev);
+err_regulator:
+	i2c_set_clientdata(client, NULL);
+	return error;
 }
 
-static int tps65132_regulator_remove(struct i2c_client *client)
+static int tps65132_remove(struct i2c_client *client)
 {
-	struct tps65132_chip *chip = i2c_get_clientdata(client);
-	struct regulator *i2c_pwr = chip->i2c_pwr;
-	int i;
+	struct regulator_dev *rdev = dev_get_drvdata(&client->dev);
+	struct tps65132_data *tps65132 = rdev_get_drvdata(rdev);
 
-	if (i2c_pwr)
-		regulator_disable(i2c_pwr);
+	gpio_free(tps65132->enable_p_gpio);
+	gpio_free(tps65132->enable_n_gpio);
 
-	for (i = 0; i < chip->num_regulators; i++)
-		regulator_unregister(chip->vreg[i].rdev);
-
+	regulator_unregister(rdev);
 	return 0;
 }
-
-static struct of_device_id tps65132_match_table[] = {
-	{ .compatible = "ti,tps65132", },
-	{},
-};
-MODULE_DEVICE_TABLE(of, tps65132_match_table);
 
 static const struct i2c_device_id tps65132_id[] = {
-	{"tps65132", -1},
-	{ },
+	{TPS65132_NAME, 0},
+	{}
 };
 
-static int tps65132_suspend(struct device *dev)
-{
-	struct i2c_client *client = to_i2c_client(dev);
-	struct tps65132_chip *chip = i2c_get_clientdata(client);
-	int rc = 0;
 
-	if (chip->i2c_pwr)
-		rc = regulator_disable(chip->i2c_pwr);
-
-	return rc;
-}
-
-static int tps65132_resume(struct device *dev)
-{
-	struct i2c_client *client = to_i2c_client(dev);
-	struct tps65132_chip *chip = i2c_get_clientdata(client);
-	int rc = 0;
-
-	if (chip->i2c_pwr)
-		rc = regulator_enable(chip->i2c_pwr);
-
-	return rc;
-}
-
-static const struct dev_pm_ops tps65132_pm_ops = {
-	.resume = tps65132_resume,
-	.suspend = tps65132_suspend,
+static struct of_device_id regulator_tps65132_match_table[] = {
+	{ .compatible = "ti," TPS65132_NAME, },
+	{}
 };
 
-static struct i2c_driver tps65132_regulator_driver = {
-	.driver = {
-		.name		= "tps65132",
-		.owner		= THIS_MODULE,
-		.of_match_table	= tps65132_match_table,
-		.pm		= &tps65132_pm_ops,
-	},
-	.probe = tps65132_regulator_probe,
-	.remove = tps65132_regulator_remove,
+static struct i2c_driver tps65132_i2c_driver = {
+	.probe = tps65132_probe,
+	.remove = tps65132_remove,
 	.id_table = tps65132_id,
+	.driver = {
+		.name = TPS65132_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = regulator_tps65132_match_table,
+		},
 };
 
 static int __init tps65132_init(void)
 {
-	return i2c_add_driver(&tps65132_regulator_driver);
+	return i2c_add_driver(&tps65132_i2c_driver);
 }
-subsys_initcall(tps65132_init);
 
 static void __exit tps65132_exit(void)
 {
-	i2c_del_driver(&tps65132_regulator_driver);
+	i2c_del_driver(&tps65132_i2c_driver);
 }
+
+module_init(tps65132_init);
 module_exit(tps65132_exit);
 
-MODULE_DESCRIPTION("TI TPS65132 regulator driver");
-MODULE_LICENSE("GPL v2");
+MODULE_DESCRIPTION("Driver for TPS65132 dual output lcd bias");
+MODULE_AUTHOR("Motorola Mobility LLC");

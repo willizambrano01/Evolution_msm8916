@@ -11,6 +11,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
 #include <linux/kernel.h>
@@ -37,7 +41,6 @@
 #include <linux/of_gpio.h>
 #include <linux/nfc/bcm2079x.h>
 #include <linux/wakelock.h>
-#include <linux/clk.h>
 
 /* do not change below */
 #define MAX_BUFFER_SIZE		780
@@ -63,8 +66,6 @@ struct bcm2079x_dev {
 	unsigned int count_irq;
 	struct wake_lock wakelock;
 };
-
-static struct clk *clk_rf;
 
 static void bcm2079x_init_stat(struct bcm2079x_dev *bcm2079x_dev)
 {
@@ -124,7 +125,7 @@ static int change_client_addr(struct bcm2079x_dev *bcm2079x_dev, int addr)
 	addr_data[sizeof(addr_data) - 1] = (ret & 0xFF);
 	dev_info(&client->dev,
 		 "Change client device from (0x%04X) flag = "\
-		 "%04x, addr_data[%zu] = %02x\n",
+		 "%04x, addr_data[%d] = %02x\n",
 		 client->addr, client->flags, sizeof(addr_data) - 1,
 		 addr_data[sizeof(addr_data) - 1]);
 	ret = i2c_master_send(client, addr_data, sizeof(addr_data));
@@ -133,7 +134,7 @@ static int change_client_addr(struct bcm2079x_dev *bcm2079x_dev, int addr)
 		client->flags &= ~I2C_CLIENT_TEN;
 		dev_info(&client->dev,
 			 "Change client device from (0x%04X) flag = "\
-			 "%04x, addr_data[%zu] = %02x\n",
+			 "%04x, addr_data[%d] = %02x\n",
 			 client->addr, client->flags, sizeof(addr_data) - 1,
 			 addr_data[sizeof(addr_data) - 1]);
 		ret = i2c_master_send(client, addr_data, sizeof(addr_data));
@@ -170,7 +171,8 @@ static unsigned int bcm2079x_dev_poll(struct file *filp, poll_table *wait)
 	poll_wait(filp, &bcm2079x_dev->read_wq, wait);
 
 	spin_lock_irqsave(&bcm2079x_dev->irq_enabled_lock, flags);
-	if (bcm2079x_dev->count_irq > 0) {
+	if (bcm2079x_dev->count_irq > 0)
+	{
 		bcm2079x_dev->count_irq--;
 		mask |= POLLIN | POLLRDNORM;
 	}
@@ -201,22 +203,22 @@ static ssize_t bcm2079x_dev_read(struct file *filp, char __user *buf,
 		total = ret;
 		/** First byte is the packet type
 		**/
-		switch (tmp[0]) {
-		case PACKET_TYPE_NCI:
-			len = tmp[PACKET_HEADER_SIZE_NCI-1];
-			break;
+		switch(tmp[0]) {
+			case PACKET_TYPE_NCI:
+				len = tmp[PACKET_HEADER_SIZE_NCI-1];
+				break;
 
-		case PACKET_TYPE_HCIEV:
-			len = tmp[PACKET_HEADER_SIZE_HCI-1];
-			if (len == 0)
-				total--;/*Since payload is 0, decrement total size (from 4 to 3) */
-			else
-				len--;/*First byte of payload is in tmp[3] already */
-			break;
+			case PACKET_TYPE_HCIEV:
+				len = tmp[PACKET_HEADER_SIZE_HCI-1];
+				if (len == 0)
+					total--;/*Since payload is 0, decrement total size (from 4 to 3) */
+				else
+					len--;/*First byte of payload is in tmp[3] already */
+				break;
 
-		default:
-			len = 0;/*Unknown packet byte */
-			break;
+			default:
+				len = 0;/*Unknown packet byte */
+				break;
 		} /* switch*/
 
 		/** make sure full packet fits in the buffer
@@ -326,9 +328,6 @@ static const struct file_operations bcm2079x_dev_fops = {
 	.read = bcm2079x_dev_read,
 	.write = bcm2079x_dev_write,
 	.open = bcm2079x_dev_open,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = bcm2079x_dev_unlocked_ioctl,
-#endif
 	.unlocked_ioctl = bcm2079x_dev_unlocked_ioctl
 };
 
@@ -359,38 +358,6 @@ bcm2079x_of_init(struct i2c_client *client)
 }
 #endif
 
-static void  bcm2079x_clk_enable(struct device *dev)
-{
-	int ret = -1;
-
-	pr_err("nfc: dev-name=%s\n", dev_name(dev));
-	clk_rf = clk_get(dev, "ref_clk");
-	if (IS_ERR(clk_rf)) {
-		pr_err("nfc: failed to get nfc_clk\n");
-		return;
-	}
-	pr_info("nfc: succeed in obtaining nfc_clk from msm pmic\n");
-
-	ret = clk_prepare(clk_rf);
-	if (ret) {
-		pr_err("nfc: failed to call clk_prepare, ret = %d\n", ret);
-		return;
-	}
-
-	return;
-}
-
-static void bcm2079x_clk_disable(void)
-{
-	if (IS_ERR(clk_rf)) {
-		pr_err("nfc: disable clock skiped\n");
-		return;
-	}
-
-	clk_unprepare(clk_rf);
-	clk_put(clk_rf);
-	clk_rf = NULL;
-}
 static int bcm2079x_probe(struct i2c_client *client,
 			   const struct i2c_device_id *id)
 {
@@ -420,14 +387,12 @@ static int bcm2079x_probe(struct i2c_client *client,
 	ret = gpio_request_one(platform_data->en_gpio, GPIOF_OUT_INIT_LOW, "nfc_ven");
 	if (ret)
 		goto err_en;
-	ret = gpio_request_one(platform_data->wake_gpio, GPIOF_OUT_INIT_LOW, "nfc_firm");
+	ret = gpio_request_one(platform_data->wake_gpio, GPIOF_OUT_INIT_LOW,"nfc_firm");
 	if (ret)
 		goto err_firm;
 
 	gpio_set_value(platform_data->en_gpio, 0);
 	gpio_set_value(platform_data->wake_gpio, 0);
-
-	bcm2079x_clk_enable(&client->dev);
 
 	bcm2079x_dev = kzalloc(sizeof(*bcm2079x_dev), GFP_KERNEL);
 	if (bcm2079x_dev == NULL) {
@@ -512,7 +477,6 @@ err_exit:
 	gpio_free(platform_data->wake_gpio);
 err_firm:
 	gpio_free(platform_data->en_gpio);
-	bcm2079x_clk_disable();
 err_en:
 	gpio_free(platform_data->irq_gpio);
 	return ret;
@@ -535,7 +499,6 @@ static int bcm2079x_remove(struct i2c_client *client)
 	gpio_free(bcm2079x_dev->wake_gpio);
 	wake_unlock(&bcm2079x_dev->wakelock);
 	wake_lock_destroy(&bcm2079x_dev->wakelock);
-	bcm2079x_clk_disable();
 	kfree(bcm2079x_dev);
 
 	return 0;

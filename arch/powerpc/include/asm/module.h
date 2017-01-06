@@ -11,7 +11,6 @@
 
 #include <linux/list.h>
 #include <asm/bug.h>
-#include <asm-generic/module.h>
 
 
 #ifndef __powerpc64__
@@ -61,10 +60,16 @@ struct mod_arch_specific {
  */
 
 #ifdef __powerpc64__
+#    define Elf_Shdr	Elf64_Shdr
+#    define Elf_Sym	Elf64_Sym
+#    define Elf_Ehdr	Elf64_Ehdr
 #    ifdef MODULE
 	asm(".section .stubs,\"ax\",@nobits; .align 3; .previous");
 #    endif
 #else
+#    define Elf_Shdr	Elf32_Shdr
+#    define Elf_Sym	Elf32_Sym
+#    define Elf_Ehdr	Elf32_Ehdr
 #    ifdef MODULE
 	asm(".section .plt,\"ax\",@nobits; .align 3; .previous");
 	asm(".section .init.plt,\"ax\",@nobits; .align 3; .previous");
@@ -82,9 +87,10 @@ struct exception_table_entry;
 void sort_ex_table(struct exception_table_entry *start,
 		   struct exception_table_entry *finish);
 
-#if defined(CONFIG_MODVERSIONS) && defined(CONFIG_PPC64)
+#ifdef CONFIG_MODVERSIONS
 #define ARCH_RELOCATES_KCRCTAB
-#define reloc_start PHYSICAL_START
+
+extern const unsigned long reloc_start[];
 #endif
 #endif /* __KERNEL__ */
 #endif	/* _ASM_POWERPC_MODULE_H */

@@ -78,8 +78,7 @@ posix_acl_valid(const struct posix_acl *acl)
 {
 	const struct posix_acl_entry *pa, *pe;
 	int state = ACL_USER_OBJ;
-	kuid_t prev_uid = INVALID_UID;
-	kgid_t prev_gid = INVALID_GID;
+	unsigned int id = 0;  /* keep gcc happy */
 	int needs_mask = 0;
 
 	FOREACH_ACL_ENTRY(pa, acl, pe) {
@@ -88,6 +87,7 @@ posix_acl_valid(const struct posix_acl *acl)
 		switch (pa->e_tag) {
 			case ACL_USER_OBJ:
 				if (state == ACL_USER_OBJ) {
+					id = 0;
 					state = ACL_USER;
 					break;
 				}
@@ -96,17 +96,16 @@ posix_acl_valid(const struct posix_acl *acl)
 			case ACL_USER:
 				if (state != ACL_USER)
 					return -EINVAL;
-				if (!uid_valid(pa->e_uid))
+				if (pa->e_id == ACL_UNDEFINED_ID ||
+				    pa->e_id < id)
 					return -EINVAL;
-				if (uid_valid(prev_uid) &&
-				    uid_lte(pa->e_uid, prev_uid))
-					return -EINVAL;
-				prev_uid = pa->e_uid;
+				id = pa->e_id + 1;
 				needs_mask = 1;
 				break;
 
 			case ACL_GROUP_OBJ:
 				if (state == ACL_USER) {
+					id = 0;
 					state = ACL_GROUP;
 					break;
 				}
@@ -115,12 +114,10 @@ posix_acl_valid(const struct posix_acl *acl)
 			case ACL_GROUP:
 				if (state != ACL_GROUP)
 					return -EINVAL;
-				if (!gid_valid(pa->e_gid))
+				if (pa->e_id == ACL_UNDEFINED_ID ||
+				    pa->e_id < id)
 					return -EINVAL;
-				if (gid_valid(prev_gid) &&
-				    gid_lte(pa->e_gid, prev_gid))
-					return -EINVAL;
-				prev_gid = pa->e_gid;
+				id = pa->e_id + 1;
 				needs_mask = 1;
 				break;
 
@@ -157,12 +154,6 @@ posix_acl_equiv_mode(const struct posix_acl *acl, umode_t *mode_p)
 	const struct posix_acl_entry *pa, *pe;
 	umode_t mode = 0;
 	int not_equiv = 0;
-
-	/*
-	 * A null ACL can always be presented as mode bits.
-	 */
-	if (!acl)
-		return 0;
 
 	FOREACH_ACL_ENTRY(pa, acl, pe) {
 		switch (pa->e_tag) {
@@ -204,12 +195,15 @@ posix_acl_from_mode(umode_t mode, gfp_t flags)
 		return ERR_PTR(-ENOMEM);
 
 	acl->a_entries[0].e_tag  = ACL_USER_OBJ;
+	acl->a_entries[0].e_id   = ACL_UNDEFINED_ID;
 	acl->a_entries[0].e_perm = (mode & S_IRWXU) >> 6;
 
 	acl->a_entries[1].e_tag  = ACL_GROUP_OBJ;
+	acl->a_entries[1].e_id   = ACL_UNDEFINED_ID;
 	acl->a_entries[1].e_perm = (mode & S_IRWXG) >> 3;
 
 	acl->a_entries[2].e_tag  = ACL_OTHER;
+	acl->a_entries[2].e_id   = ACL_UNDEFINED_ID;
 	acl->a_entries[2].e_perm = (mode & S_IRWXO);
 	return acl;
 }
@@ -230,11 +224,11 @@ posix_acl_permission(struct inode *inode, const struct posix_acl *acl, int want)
                 switch(pa->e_tag) {
                         case ACL_USER_OBJ:
 				/* (May have been checked already) */
-				if (uid_eq(inode->i_uid, current_fsuid()))
+				if (inode->i_uid == current_fsuid())
                                         goto check_perm;
                                 break;
                         case ACL_USER:
-				if (uid_eq(pa->e_uid, current_fsuid()))
+				if (pa->e_id == current_fsuid())
                                         goto mask;
 				break;
                         case ACL_GROUP_OBJ:
@@ -245,7 +239,7 @@ posix_acl_permission(struct inode *inode, const struct posix_acl *acl, int want)
                                 }
 				break;
                         case ACL_GROUP:
-				if (in_group_p(pa->e_gid)) {
+                                if (in_group_p(pa->e_id)) {
 					found = 1;
 					if ((pa->e_perm & want) == want)
 						goto mask;

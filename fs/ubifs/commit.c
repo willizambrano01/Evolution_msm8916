@@ -229,7 +229,7 @@ out_cancel:
 out_up:
 	up_write(&c->commit_sem);
 out:
-	ubifs_err("commit failed, error %d", c->vi.ubi_num, err);
+	ubifs_err("commit failed, error %d", err);
 	spin_lock(&c->cs_lock);
 	c->cmt_state = COMMIT_BROKEN;
 	wake_up(&c->cmt_wq);
@@ -293,8 +293,8 @@ int ubifs_bg_thread(void *info)
 	int err;
 	struct ubifs_info *c = info;
 
-	ubifs_msg("background thread \"%s\" started, PID %d", c->vi.ubi_num,
-		  c->bgt_name, current->pid);
+	dbg_msg("background thread \"%s\" started, PID %d",
+		c->bgt_name, current->pid);
 	set_freezable();
 
 	while (1) {
@@ -328,8 +328,7 @@ int ubifs_bg_thread(void *info)
 		cond_resched();
 	}
 
-	ubifs_msg("background thread \"%s\" stops", c->vi.ubi_num,
-			c->bgt_name);
+	dbg_msg("background thread \"%s\" stops", c->bgt_name);
 	return 0;
 }
 
@@ -497,9 +496,7 @@ int ubifs_gc_should_commit(struct ubifs_info *c)
 	return ret;
 }
 
-/*
- * Everything below is related to debugging.
- */
+#ifdef CONFIG_UBIFS_FS_DEBUG
 
 /**
  * struct idx_node - hold index nodes during index tree traversal.
@@ -515,7 +512,7 @@ struct idx_node {
 	struct list_head list;
 	int iip;
 	union ubifs_key upper_key;
-	struct ubifs_idx_node idx __aligned(8);
+	struct ubifs_idx_node idx __attribute__((aligned(8)));
 };
 
 /**
@@ -717,14 +714,14 @@ out:
 	return 0;
 
 out_dump:
-	ubifs_err("dumping index node (iip=%d)", c->vi.ubi_num, i->iip);
-	ubifs_dump_node(c, idx);
+	dbg_err("dumping index node (iip=%d)", i->iip);
+	dbg_dump_node(c, idx);
 	list_del(&i->list);
 	kfree(i);
 	if (!list_empty(&list)) {
 		i = list_entry(list.prev, struct idx_node, list);
-		ubifs_err("dumping parent index node", c->vi.ubi_num);
-		ubifs_dump_node(c, &i->idx);
+		dbg_err("dumping parent index node");
+		dbg_dump_node(c, &i->idx);
 	}
 out_free:
 	while (!list_empty(&list)) {
@@ -732,8 +729,10 @@ out_free:
 		list_del(&i->list);
 		kfree(i);
 	}
-	ubifs_err("failed, error %d", c->vi.ubi_num, err);
+	ubifs_err("failed, error %d", err);
 	if (err > 0)
 		err = -EINVAL;
 	return err;
 }
+
+#endif /* CONFIG_UBIFS_FS_DEBUG */

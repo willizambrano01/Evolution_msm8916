@@ -369,6 +369,38 @@ static int trusted_tpm_send(const u32 chip_num, unsigned char *cmd,
 }
 
 /*
+ * get a random value from TPM
+ */
+static int tpm_get_random(struct tpm_buf *tb, unsigned char *buf, uint32_t len)
+{
+	int ret;
+
+	INIT_BUF(tb);
+	store16(tb, TPM_TAG_RQU_COMMAND);
+	store32(tb, TPM_GETRANDOM_SIZE);
+	store32(tb, TPM_ORD_GETRANDOM);
+	store32(tb, len);
+	ret = trusted_tpm_send(TPM_ANY_NUM, tb->data, sizeof tb->data);
+	if (!ret)
+		memcpy(buf, tb->data + TPM_GETRANDOM_SIZE, len);
+	return ret;
+}
+
+static int my_get_random(unsigned char *buf, int len)
+{
+	struct tpm_buf *tb;
+	int ret;
+
+	tb = kmalloc(sizeof *tb, GFP_KERNEL);
+	if (!tb)
+		return -ENOMEM;
+	ret = tpm_get_random(tb, buf, len);
+
+	kfree(tb);
+	return ret;
+}
+
+/*
  * Lock a trusted key, by extending a selected PCR.
  *
  * Prevents a trusted key that is sealed to PCRs from being accessed.
@@ -381,8 +413,8 @@ static int pcrlock(const int pcrnum)
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
-	ret = tpm_get_random(TPM_ANY_NUM, hash, SHA1_DIGEST_SIZE);
-	if (ret != SHA1_DIGEST_SIZE)
+	ret = my_get_random(hash, SHA1_DIGEST_SIZE);
+	if (ret < 0)
 		return ret;
 	return tpm_pcr_extend(TPM_ANY_NUM, pcrnum, hash) ? -EINVAL : 0;
 }
@@ -397,8 +429,8 @@ static int osap(struct tpm_buf *tb, struct osapsess *s,
 	unsigned char ononce[TPM_NONCE_SIZE];
 	int ret;
 
-	ret = tpm_get_random(TPM_ANY_NUM, ononce, TPM_NONCE_SIZE);
-	if (ret != TPM_NONCE_SIZE)
+	ret = tpm_get_random(tb, ononce, TPM_NONCE_SIZE);
+	if (ret < 0)
 		return ret;
 
 	INIT_BUF(tb);
@@ -492,8 +524,8 @@ static int tpm_seal(struct tpm_buf *tb, uint16_t keytype,
 	if (ret < 0)
 		goto out;
 
-	ret = tpm_get_random(TPM_ANY_NUM, td->nonceodd, TPM_NONCE_SIZE);
-	if (ret != TPM_NONCE_SIZE)
+	ret = tpm_get_random(tb, td->nonceodd, TPM_NONCE_SIZE);
+	if (ret < 0)
 		goto out;
 	ordinal = htonl(TPM_ORD_SEAL);
 	datsize = htonl(datalen);
@@ -602,8 +634,8 @@ static int tpm_unseal(struct tpm_buf *tb,
 
 	ordinal = htonl(TPM_ORD_UNSEAL);
 	keyhndl = htonl(SRKHANDLE);
-	ret = tpm_get_random(TPM_ANY_NUM, nonceodd, TPM_NONCE_SIZE);
-	if (ret != TPM_NONCE_SIZE) {
+	ret = tpm_get_random(tb, nonceodd, TPM_NONCE_SIZE);
+	if (ret < 0) {
 		pr_info("trusted_key: tpm_get_random failed (%d)\n", ret);
 		return ret;
 	}
@@ -895,24 +927,22 @@ static struct trusted_key_payload *trusted_payload_alloc(struct key *key)
  *
  * On success, return 0. Otherwise return errno.
  */
-static int trusted_instantiate(struct key *key,
-			       struct key_preparsed_payload *prep)
+static int trusted_instantiate(struct key *key, const void *data,
+			       size_t datalen)
 {
 	struct trusted_key_payload *payload = NULL;
 	struct trusted_key_options *options = NULL;
-	size_t datalen = prep->datalen;
 	char *datablob;
 	int ret = 0;
 	int key_cmd;
-	size_t key_len;
 
-	if (datalen <= 0 || datalen > 32767 || !prep->data)
+	if (datalen <= 0 || datalen > 32767 || !data)
 		return -EINVAL;
 
 	datablob = kmalloc(datalen + 1, GFP_KERNEL);
 	if (!datablob)
 		return -ENOMEM;
-	memcpy(datablob, prep->data, datalen);
+	memcpy(datablob, data, datalen);
 	datablob[datalen] = '\0';
 
 	options = trusted_options_alloc();
@@ -944,9 +974,8 @@ static int trusted_instantiate(struct key *key,
 			pr_info("trusted_key: key_unseal failed (%d)\n", ret);
 		break;
 	case Opt_new:
-		key_len = payload->key_len;
-		ret = tpm_get_random(TPM_ANY_NUM, payload->key, key_len);
-		if (ret != key_len) {
+		ret = my_get_random(payload->key, payload->key_len);
+		if (ret < 0) {
 			pr_info("trusted_key: key_create failed (%d)\n", ret);
 			goto out;
 		}
@@ -982,12 +1011,11 @@ static void trusted_rcu_free(struct rcu_head *rcu)
 /*
  * trusted_update - reseal an existing key with new PCR values
  */
-static int trusted_update(struct key *key, struct key_preparsed_payload *prep)
+static int trusted_update(struct key *key, const void *data, size_t datalen)
 {
 	struct trusted_key_payload *p;
 	struct trusted_key_payload *new_p;
 	struct trusted_key_options *new_o;
-	size_t datalen = prep->datalen;
 	char *datablob;
 	int ret = 0;
 
@@ -996,7 +1024,7 @@ static int trusted_update(struct key *key, struct key_preparsed_payload *prep)
 	p = key->payload.data;
 	if (!p->migratable)
 		return -EPERM;
-	if (datalen <= 0 || datalen > 32767 || !prep->data)
+	if (datalen <= 0 || datalen > 32767 || !data)
 		return -EINVAL;
 
 	datablob = kmalloc(datalen + 1, GFP_KERNEL);
@@ -1013,7 +1041,7 @@ static int trusted_update(struct key *key, struct key_preparsed_payload *prep)
 		goto out;
 	}
 
-	memcpy(datablob, prep->data, datalen);
+	memcpy(datablob, data, datalen);
 	datablob[datalen] = '\0';
 	ret = datablob_parse(datablob, new_p, new_o);
 	if (ret != Opt_update) {

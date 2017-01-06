@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1998-2014 Erez Zadok
+ * Copyright (c) 1998-2013 Erez Zadok
  * Copyright (c) 2009	   Shrikar Archak
- * Copyright (c) 2003-2014 Stony Brook University
- * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2003-2013 Stony Brook University
+ * Copyright (c) 2003-2013 The Research Foundation of SUNY
  * Copyright (C) 2013-2014 Motorola Mobility, LLC
  *
  * This program is free software; you can redistribute it and/or modify
@@ -53,34 +53,6 @@ int new_dentry_private_data(struct dentry *dentry)
 	dentry->d_fsdata = info;
 
 	return 0;
-}
-
-/*
- * Initialize a nameidata structure (the intent part) we can pass to a lower
- * file system.  Returns 0 on success or -error (only -ENOMEM possible).
- */
-int init_lower_nd(struct nameidata *nd, unsigned int flags)
-{
-	int err = 0;
-
-	memset(nd, 0, sizeof(struct nameidata));
-	if (!flags)
-		goto out;
-
-	switch (flags) {
-	case LOOKUP_CREATE:
-	case LOOKUP_OPEN:
-		nd->flags = flags;
-		break;
-	default:
-		/* We should never get here, for now */
-		pr_debug("wrapfs: unknown nameidata flag 0x%x\n", flags);
-		BUG();
-		break;
-	}
-
-out:
-	return err;
 }
 
 static int esdfs_inode_test(struct inode *inode, void *candidate_lower_inode)
@@ -227,9 +199,8 @@ out:
  * Returns: NULL (ok), ERR_PTR if an error occurred.
  * Fills in lower_parent_path with <dentry,mnt> on success.
  */
-static struct dentry *__esdfs_lookup(struct dentry *dentry,
-				     unsigned int flags,
-				     struct path *lower_parent_path)
+static struct dentry *__esdfs_lookup(struct dentry *dentry, int flags,
+				      struct path *lower_parent_path)
 {
 	int err = 0;
 	struct vfsmount *lower_dir_mnt;
@@ -304,7 +275,7 @@ out:
 }
 
 struct dentry *esdfs_lookup(struct inode *dir, struct dentry *dentry,
-			    unsigned int flags)
+			     struct nameidata *nd)
 {
 	struct dentry *ret, *real_parent, *parent;
 	struct path lower_parent_path, old_lower_parent_path;
@@ -314,6 +285,7 @@ struct dentry *esdfs_lookup(struct inode *dir, struct dentry *dentry,
 	if (!creds)
 		return NULL;
 
+	BUG_ON(!nd);
 	parent = real_parent = dget_parent(dentry);
 
 	/* allocate dentry private data.  We free it in ->d_release */
@@ -333,7 +305,7 @@ struct dentry *esdfs_lookup(struct inode *dir, struct dentry *dentry,
 
 	esdfs_get_lower_path(parent, &lower_parent_path);
 
-	ret = __esdfs_lookup(dentry, flags, &lower_parent_path);
+	ret = __esdfs_lookup(dentry, nd->flags, &lower_parent_path);
 	if (IS_ERR(ret))
 		goto out_put;
 	if (ret)

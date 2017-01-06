@@ -1036,7 +1036,8 @@ void security_compute_xperms_decision(u32 ssid,
 
 
 	if (unlikely(!tclass || tclass > policydb.p_classes.nprim)) {
-		pr_warn_ratelimited("SELinux:  Invalid class %hu\n", tclass);
+		if (printk_ratelimit())
+                	printk(KERN_WARNING "SELinux:  Invalid class %hu\n", tclass);
 		goto out;
 	}
 
@@ -1191,11 +1192,9 @@ static int context_struct_to_string(struct context *context, char **scontext, u3
 
 	if (context->len) {
 		*scontext_len = context->len;
-		if (scontext) {
-			*scontext = kstrdup(context->str, GFP_ATOMIC);
-			if (!(*scontext))
-				return -ENOMEM;
-		}
+		*scontext = kstrdup(context->str, GFP_ATOMIC);
+		if (!(*scontext))
+			return -ENOMEM;
 		return 0;
 	}
 
@@ -2617,7 +2616,7 @@ int security_set_bools(int len, int *values)
 				sym_name(&policydb, SYM_BOOLS, i),
 				!!values[i],
 				policydb.bool_val_to_struct[i]->state,
-				from_kuid(&init_user_ns, audit_get_loginuid(current)),
+				audit_get_loginuid(current),
 				audit_get_sessionid(current));
 		}
 		if (values[i])
@@ -3221,7 +3220,8 @@ out:
 
 static int (*aurule_callback)(void) = audit_update_lsm_rules;
 
-static int aurule_avc_callback(u32 event)
+static int aurule_avc_callback(u32 event, u32 ssid, u32 tsid,
+			       u16 class, u32 perms, u32 *retained)
 {
 	int err = 0;
 
@@ -3234,7 +3234,8 @@ static int __init aurule_init(void)
 {
 	int err;
 
-	err = avc_add_callback(aurule_avc_callback, AVC_CALLBACK_RESET);
+	err = avc_add_callback(aurule_avc_callback, AVC_CALLBACK_RESET,
+			       SECSID_NULL, SECSID_NULL, SECCLASS_NULL, 0);
 	if (err)
 		panic("avc_add_callback() failed, error %d\n", err);
 

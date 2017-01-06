@@ -86,4 +86,6 @@ typedef unsigned long elf_fpregset_t;
 
 #define ELF_PLATFORM  (NULL)
 
+#define SET_PERSONALITY(ex) set_personality(PER_LINUX)
+
 #endif

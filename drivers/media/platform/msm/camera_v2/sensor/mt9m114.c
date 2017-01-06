@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,8 +17,13 @@
 #define PLATFORM_DRIVER_NAME "msm_camera_mt9m114"
 #define mt9m114_obj mt9m114_##obj
 
+/*#define CONFIG_MSMB_CAMERA_DEBUG*/
 #undef CDBG
-#define CDBG(fmt, args...) pr_debug(fmt, ##args)
+#ifdef CONFIG_MSMB_CAMERA_DEBUG
+#define CDBG(fmt, args...) pr_err(fmt, ##args)
+#else
+#define CDBG(fmt, args...) do { } while (0)
+#endif
 
 /* Sysctl registers */
 #define MT9M114_COMMAND_REGISTER                0x0080
@@ -33,40 +38,40 @@ static struct msm_sensor_ctrl_t mt9m114_s_ctrl;
 
 static struct msm_sensor_power_setting mt9m114_power_setting[] = {
 	{
-		.seq_type = SENSOR_VREG,
-		.seq_val = CAM_VIO,
-		.config_val = 0,
+		.seq_type = SENSOR_GPIO,
+		.seq_val = SENSOR_GPIO_PWREN,
+		.config_val = GPIO_OUT_LOW,
+		.delay = 0,
+	},
+	{
+		.seq_type = SENSOR_GPIO,
+		.seq_val = SENSOR_GPIO_PWREN2,
+		.config_val = GPIO_OUT_LOW,
 		.delay = 0,
 	},
 	{
 		.seq_type = SENSOR_VREG,
 		.seq_val = CAM_VDIG,
 		.config_val = 0,
-		.delay = 0,
-	},
-	{
-		.seq_type = SENSOR_VREG,
-		.seq_val = CAM_VANA,
-		.config_val = 0,
-		.delay = 0,
-	},
-	{
-		.seq_type = SENSOR_GPIO,
-		.seq_val = SENSOR_GPIO_RESET,
-		.config_val = GPIO_OUT_LOW,
 		.delay = 1,
 	},
 	{
 		.seq_type = SENSOR_GPIO,
-		.seq_val = SENSOR_GPIO_RESET,
+		.seq_val = SENSOR_GPIO_PWREN,
 		.config_val = GPIO_OUT_HIGH,
-		.delay = 30,
+		.delay = 0,
+	},
+	{
+		.seq_type = SENSOR_GPIO,
+		.seq_val = SENSOR_GPIO_PWREN2,
+		.config_val = GPIO_OUT_HIGH,
+		.delay = 0,
 	},
 	{
 		.seq_type = SENSOR_CLK,
 		.seq_val = SENSOR_CAM_MCLK,
 		.config_val = 0,
-		.delay = 100,
+		.delay = 50,
 	},
 	{
 		.seq_type = SENSOR_I2C_MUX,
@@ -76,6 +81,7 @@ static struct msm_sensor_power_setting mt9m114_power_setting[] = {
 	},
 };
 
+#if 0
 static struct msm_camera_i2c_reg_conf mt9m114_720p_settings[] = {
 	{0xdc00, 0x50, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_WRITE},
 	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
@@ -123,6 +129,49 @@ static struct msm_camera_i2c_reg_conf mt9m114_720p_settings[] = {
 	{0xC922, 0x008F,},/*stat_ae_window_yend = 143*/
 };
 
+static struct msm_camera_i2c_reg_conf mt9m114_1280x960_settings[] = {
+	{0xdc00, 0x50, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+	{MT9M114_COMMAND_REGISTER, (MT9M114_COMMAND_REGISTER_OK |
+		MT9M114_COMMAND_REGISTER_SET_STATE), MSM_CAMERA_I2C_WORD_DATA,
+		MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+	{0xDC01, 0x52, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_POLL},
+
+	{0x098E, 0, MSM_CAMERA_I2C_BYTE_DATA},
+	{0xC800, 0x0004,},/*y_addr_start = 4*/
+	{0xC802, 0x0004,},/*x_addr_start = 4*/
+	{0xC804, 0x03CB,},/*y_addr_end = 971*/
+	{0xC806, 0x050B,},/*x_addr_end = 1291*/
+	{0xC808, 0x02DC,},/*pixclk = 48000000*/
+	{0xC80A, 0x6C00,},/*pixclk = 48000000*/
+	{0xC80C, 0x0001,},/*row_speed = 1*/
+	{0xC80E, 0x00DB,},/*fine_integ_time_min = 219*/
+	{0xC816, 0x0060,},/*fine_correction = 96*/
+	{0xC818, 0x03C3,},/*cpipe_last_row = 963*/
+	{0xC826, 0x0020,},/*reg_0_data = 32*/
+	{0xC834, 0x0000,},/*sensor_control_read_mode = 0*/
+	{0xC854, 0x0000,},/*crop_window_xoffset = 0*/
+	{0xC856, 0x0000,},/*crop_window_yoffset = 0*/
+	{0xC858, 0x0500,},/*crop_window_width = 1280*/
+	{0xC85A, 0x03C0,},/*crop_window_height = 960*/
+	{0xC85C, 0x03, MSM_CAMERA_I2C_BYTE_DATA},  /*crop_cropmode = 3*/
+	{0xC868, 0x0500,},/*output_width = 1280*/
+	{0xC86A, 0x03C0,},/*output_height = 960*/
+	{0xC878, 0x00, MSM_CAMERA_I2C_BYTE_DATA},  /*aet_aemode = 0*/
+	{0xC914, 0x0000,},/*stat_awb_window_xstart = 0*/
+	{0xC916, 0x0000,},/*stat_awb_window_ystart = 0*/
+	{0xC918, 0x04FF,},/*stat_awb_window_xend = 1279*/
+	{0xC91A, 0x03BF,},/*stat_awb_window_yend = 959*/
+	{0xC91C, 0x0000,},/*stat_ae_window_xstart = 0*/
+	{0xC91E, 0x0000,},/*stat_ae_window_ystart = 0*/
+	{0xC920, 0x00FF,},/*stat_ae_window_xend = 255*/
+	{0xC922, 0x00BF,},/*stat_ae_window_yend = 191*/
+};
+#endif
+
 static struct msm_camera_i2c_reg_conf mt9m114_recommend_settings[] = {
 	{0x301A, 0x0200, MSM_CAMERA_I2C_SET_WORD_MASK},
 	{0x098E, 0, MSM_CAMERA_I2C_BYTE_DATA},
@@ -138,47 +187,47 @@ static struct msm_camera_i2c_reg_conf mt9m114_recommend_settings[] = {
 	{0xC988, 0x0F00,},
 	/*mipi_timing_t_hs_exit_hs_trail = 2823*/
 	{0xC98A, 0x0B07,},
-	/*mipi_timing_t_clk_post_clk_pre = 3329*/
-	{0xC98C, 0x0D01,},
+	/*mipi_timing_t_clk_post_clk_pre = 3585*/
+	{0xC98C, 0x0E01,},
 	/*mipi_timing_t_clk_trail_clk_zero = 1821*/
 	{0xC98E, 0x071D,},
 	/*mipi_timing_t_lpx = 6*/
 	{0xC990, 0x0006,},
 	/*mipi_timing_init_timing = 2572*/
 	{0xC992, 0x0A0C,},
-	{0xC800, 0x007C,},/*y_addr_start = 124*/
+	{0xC800, 0x0004,},/*y_addr_start = 4*/
 	{0xC802, 0x0004,},/*x_addr_start = 4*/
-	{0xC804, 0x0353,},/*y_addr_end = 851*/
+	{0xC804, 0x03CB,},/*y_addr_end = 971*/
 	{0xC806, 0x050B,},/*x_addr_end = 1291*/
 	{0xC808, 0x02DC,},/*pixclk = 48000000*/
 	{0xC80A, 0x6C00,},/*pixclk = 48000000*/
 	{0xC80C, 0x0001,},/*row_speed = 1*/
 	{0xC80E, 0x00DB,},/*fine_integ_time_min = 219*/
-	{0xC810, 0x05BD,},/*fine_integ_time_max = 1469*/
-	{0xC812, 0x03E8,},/*frame_length_lines = 1000*/
-	{0xC814, 0x0640,},/*line_length_pck = 1600*/
+	{0xC810, 0x05B3,}, /*cam_sensor_cfg_fine_integ_time_max = 1459*/
+	{0xC812, 0x03EE,}, /*cam_sensor_cfg_frame_length_lines = 1006*/
+	{0xC814, 0x0636,}, /*cam_sensor_cfg_line_length_pclk = 1590*/
 	{0xC816, 0x0060,},/*fine_correction = 96*/
-	{0xC818, 0x02D3,},/*cpipe_last_row = 723*/
+	{0xC818, 0x03C3,},/*cpipe_last_row = 963*/
 	{0xC826, 0x0020,},/*reg_0_data = 32*/
 	{0xC834, 0x0000,},/*sensor_control_read_mode = 0*/
 	{0xC854, 0x0000,},/*crop_window_xoffset = 0*/
 	{0xC856, 0x0000,},/*crop_window_yoffset = 0*/
 	{0xC858, 0x0500,},/*crop_window_width = 1280*/
-	{0xC85A, 0x02D0,},/*crop_window_height = 720*/
+	{0xC85A, 0x03C0,},/*crop_window_height = 960*/
 	{0xC85C, 0x03, MSM_CAMERA_I2C_BYTE_DATA},  /*crop_cropmode = 3*/
 	{0xC868, 0x0500,},/*output_width = 1280*/
-	{0xC86A, 0x02D0,},/*output_height = 720*/
+	{0xC86A, 0x03C0,},/*output_height = 960*/
 	{0xC878, 0x00, MSM_CAMERA_I2C_BYTE_DATA},  /*aet_aemode = 0*/
-	{0xC88C, 0x1E00,},/*aet_max_frame_rate = 7680*/
-	{0xC88E, 0x1E00,},/*aet_min_frame_rate = 7680*/
+	{0xC88C, 0x1E02,}, /*cam_aet_max_frame_rate = 7682*/
+	{0xC88E, 0x0F00,}, /*cam_aet_min_frame_rate = 3840*/
 	{0xC914, 0x0000,},/*stat_awb_window_xstart = 0*/
 	{0xC916, 0x0000,},/*stat_awb_window_ystart = 0*/
 	{0xC918, 0x04FF,},/*stat_awb_window_xend = 1279*/
-	{0xC91A, 0x02CF,},/*stat_awb_window_yend = 719*/
+	{0xC91A, 0x03BF,},/*stat_awb_window_yend = 959*/
 	{0xC91C, 0x0000,},/*stat_ae_window_xstart = 0*/
 	{0xC91E, 0x0000,},/*stat_ae_window_ystart = 0*/
 	{0xC920, 0x00FF,},/*stat_ae_window_xend = 255*/
-	{0xC922, 0x008F,},/*stat_ae_window_yend = 143*/
+	{0xC922, 0x00BF,},/*stat_ae_window_yend = 191*/
 
 	/*Sensor optimization*/
 	{0x316A, 0x8270,},
@@ -947,7 +996,7 @@ static struct msm_camera_i2c_reg_conf mt9m114_recommend_settings[] = {
 	{0x098E, 0x0000,},
 
 	/*MIPI setting for SOC1040*/
-	{0x3C5A, 0x0009,},
+	{0x3C5A, 0x000A,},
 	{0x3C44, 0x0080,},/*MIPI_CUSTOM_SHORT_PKT*/
 
 	/*[Tuning_settings]*/
@@ -1027,8 +1076,8 @@ static struct msm_camera_i2c_reg_conf mt9m114_recommend_settings[] = {
 	{0xC92C, 0x00, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_START_DESATURATION*/
 	{0xC92D, 0xFF, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_END_DESATURATION*/
 	{0xC92E, 0x3C, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_START_DEMOSAIC*/
-	{0xC92F, 0x02, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_START_AP_GAIN*/
-	{0xC930, 0x06, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_START_AP_THRESH*/
+	{0xC92F, 0x04, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_START_AP_GAIN*/
+	{0xC930, 0x04, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_START_AP_THRESH*/
 	{0xC931, 0x64, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_STOP_DEMOSAIC*/
 	{0xC932, 0x01, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_STOP_AP_GAIN*/
 	{0xC933, 0x0C, MSM_CAMERA_I2C_BYTE_DATA},/*CAM_LL_STOP_AP_THRESH*/
@@ -1074,6 +1123,129 @@ static struct msm_camera_i2c_reg_conf mt9m114_recommend_settings[] = {
 	{0xAC16, 0x18, MSM_CAMERA_I2C_BYTE_DATA},
 	{0xC878, 0x08, MSM_CAMERA_I2C_SET_BYTE_MASK},
 	{0xBC02, 0x08, MSM_CAMERA_I2C_UNSET_BYTE_MASK},
+	{0x3640, 0x0190,}, /*P_G1_P0Q0*/
+	{0x3642, 0x370B,}, /*P_G1_P0Q1*/
+	{0x3644, 0x2051,}, /*P_G1_P0Q2*/
+	{0x3646, 0x84CD,}, /*P_G1_P0Q3*/
+	{0x3648, 0x90F1,}, /*P_G1_P0Q4*/
+	{0x364A, 0x00B0,}, /*P_R_P0Q0*/
+	{0x364C, 0x69AB,}, /*P_R_P0Q1*/
+	{0x364E, 0x5531,}, /*P_R_P0Q2*/
+	{0x3650, 0xB8AC,}, /*P_R_P0Q3*/
+	{0x3652, 0xA451,}, /*P_R_P0Q4*/
+	{0x3654, 0x01F0,}, /*P_B_P0Q0*/
+	{0x3656, 0x330C,}, /*P_B_P0Q1*/
+	{0x3658, 0x0431,}, /*P_B_P0Q2*/
+	{0x365A, 0xDB2B,}, /*P_B_P0Q3*/
+	{0x365C, 0xD710,}, /*P_B_P0Q4*/
+	{0x365E, 0x0190,}, /*P_G2_P0Q0*/
+	{0x3660, 0x032B,}, /*P_G2_P0Q1*/
+	{0x3662, 0x2291,}, /*P_G2_P0Q2*/
+	{0x3664, 0x92AD,}, /*P_G2_P0Q3*/
+	{0x3666, 0x9EB1,}, /*P_G2_P0Q4*/
+	{0x3680, 0xAD69,}, /*P_G1_P1Q0*/
+	{0x3682, 0x1D48,}, /*P_G1_P1Q1*/
+	{0x3684, 0x446F,}, /*P_G1_P1Q2*/
+	{0x3686, 0x010E,}, /*P_G1_P1Q3*/
+	{0x3688, 0x9A50,}, /*P_G1_P1Q4*/
+	{0x368A, 0x96AC,}, /*P_R_P1Q0*/
+	{0x368C, 0x970A,}, /*P_R_P1Q1*/
+	{0x368E, 0x596E,}, /*P_R_P1Q2*/
+	{0x3690, 0x398E,}, /*P_R_P1Q3*/
+	{0x3692, 0xAB2C,}, /*P_R_P1Q4*/
+	{0x3694, 0xD18A,}, /*P_B_P1Q0*/
+	{0x3696, 0xB82B,}, /*P_B_P1Q1*/
+	{0x3698, 0x646D,}, /*P_B_P1Q2*/
+	{0x369A, 0x4F0B,}, /*P_B_P1Q3*/
+	{0x369C, 0x826F,}, /*P_B_P1Q4*/
+	{0x369E, 0x1A4B,}, /*P_G2_P1Q0*/
+	{0x36A0, 0x660A,}, /*P_G2_P1Q1*/
+	{0x36A2, 0x2F8D,}, /*P_G2_P1Q2*/
+	{0x36A4, 0x188C,}, /*P_G2_P1Q3*/
+	{0x36A6, 0xB62F,}, /*P_G2_P1Q4*/
+	{0x36C0, 0x3551,}, /*P_G1_P2Q0*/
+	{0x36C2, 0x186D,}, /*P_G1_P2Q1*/
+	{0x36C4, 0xF691,}, /*P_G1_P2Q2*/
+	{0x36C6, 0x8AAF,}, /*P_G1_P2Q3*/
+	{0x36C8, 0xD5D1,}, /*P_G1_P2Q4*/
+	{0x36CA, 0x5B31,}, /*P_R_P2Q0*/
+	{0x36CC, 0x524C,}, /*P_R_P2Q1*/
+	{0x36CE, 0xA48D,}, /*P_R_P2Q2*/
+	{0x36D0, 0x3BA9,}, /*P_R_P2Q3*/
+	{0x36D2, 0x8594,}, /*P_R_P2Q4*/
+	{0x36D4, 0x2731,}, /*P_B_P2Q0*/
+	{0x36D6, 0x05CC,}, /*P_B_P2Q1*/
+	{0x36D8, 0x8432,}, /*P_B_P2Q2*/
+	{0x36DA, 0x3AEE,}, /*P_B_P2Q3*/
+	{0x36DC, 0xB270,}, /*P_B_P2Q4*/
+	{0x36DE, 0x3371,}, /*P_G2_P2Q0*/
+	{0x36E0, 0x49CC,}, /*P_G2_P2Q1*/
+	{0x36E2, 0x8252,}, /*P_G2_P2Q2*/
+	{0x36E4, 0xD80E,}, /*P_G2_P2Q3*/
+	{0x36E6, 0xAB91,}, /*P_G2_P2Q4*/
+	{0x3700, 0x7B4B,}, /*P_G1_P3Q0*/
+	{0x3702, 0xFE6C,}, /*P_G1_P3Q1*/
+	{0x3704, 0xDB2F,}, /*P_G1_P3Q2*/
+	{0x3706, 0xE28E,}, /*P_G1_P3Q3*/
+	{0x3708, 0xCFB1,}, /*P_G1_P3Q4*/
+	{0x370A, 0x018D,}, /*P_R_P3Q0*/
+	{0x370C, 0xBA0D,}, /*P_R_P3Q1*/
+	{0x370E, 0x7410,}, /*P_R_P3Q2*/
+	{0x3710, 0x910F,}, /*P_R_P3Q3*/
+	{0x3712, 0xBA73,}, /*P_R_P3Q4*/
+	{0x3714, 0x660E,}, /*P_B_P3Q0*/
+	{0x3716, 0xE6ED,}, /*P_B_P3Q1*/
+	{0x3718, 0x964F,}, /*P_B_P3Q2*/
+	{0x371A, 0x1290,}, /*P_B_P3Q3*/
+	{0x371C, 0xE251,}, /*P_B_P3Q4*/
+	{0x371E, 0x09CC,}, /*P_G2_P3Q0*/
+	{0x3720, 0x98AE,}, /*P_G2_P3Q1*/
+	{0x3722, 0xB0EF,}, /*P_G2_P3Q2*/
+	{0x3724, 0x060E,}, /*P_G2_P3Q3*/
+	{0x3726, 0xE06F,}, /*P_G2_P3Q4*/
+	{0x3740, 0x8A71,}, /*P_G1_P4Q0*/
+	{0x3742, 0x280E,}, /*P_G1_P4Q1*/
+	{0x3744, 0xAA94,}, /*P_G1_P4Q2*/
+	{0x3746, 0x7DAC,}, /*P_G1_P4Q3*/
+	{0x3748, 0x4C76,}, /*P_G1_P4Q4*/
+	{0x374A, 0xE7B0,}, /*P_R_P4Q0*/
+	{0x374C, 0x4ACF,}, /*P_R_P4Q1*/
+	{0x374E, 0xAD15,}, /*P_R_P4Q2*/
+	{0x3750, 0x8372,}, /*P_R_P4Q3*/
+	{0x3752, 0x1E57,}, /*P_R_P4Q4*/
+	{0x3754, 0xB111,}, /*P_B_P4Q0*/
+	{0x3756, 0x142F,}, /*P_B_P4Q1*/
+	{0x3758, 0x93D4,}, /*P_B_P4Q2*/
+	{0x375A, 0x9C72,}, /*P_B_P4Q3*/
+	{0x375C, 0x4616,}, /*P_B_P4Q4*/
+	{0x375E, 0x8111,}, /*P_G2_P4Q0*/
+	{0x3760, 0x2ECF,}, /*P_G2_P4Q1*/
+	{0x3762, 0xAA94,}, /*P_G2_P4Q2*/
+	{0x3764, 0x880F,}, /*P_G2_P4Q3*/
+	{0x3766, 0x48F6,}, /*P_G2_P4Q4*/
+	{0x3784, 0x0280,}, /*CENTER_COLUMN*/
+	{0x3782, 0x01E0,}, /*CENTER_ROW*/
+	{0x37C0, 0x7CC7,}, /*P_GR_Q5*/
+	{0x37C2, 0xDB27,}, /*P_RD_Q5*/
+	{0x37C4, 0xDF09,}, /*P_BL_Q5*/
+	{0x37C6, 0xE1E6,}, /*P_GB_Q5*/
+	{0x098E, 0x0000,}, /*LOGICAL addressing*/
+	{0xC960, 0x0AF0,}, /*CAM_PGA_L_CONFIG_COLOUR_TEMP*/
+	{0xC962, 0x7BCF,}, /*CAM_PGA_L_CONFIG_GREEN_RED_Q14*/
+	{0xC964, 0x6998,}, /*CAM_PGA_L_CONFIG_RED_Q14*/
+	{0xC966, 0x79DD,}, /*CAM_PGA_L_CONFIG_GREEN_BLUE_Q14*/
+	{0xC968, 0x7B68,}, /*CAM_PGA_L_CONFIG_BLUE_Q14*/
+	{0xC96A, 0x0FA0,}, /*CAM_PGA_M_CONFIG_COLOUR_TEMP*/
+	{0xC96C, 0x8201,}, /*CAM_PGA_M_CONFIG_GREEN_RED_Q14*/
+	{0xC96E, 0x888E,}, /*CAM_PGA_M_CONFIG_RED_Q14*/
+	{0xC970, 0x8086,}, /*CAM_PGA_M_CONFIG_GREEN_BLUE_Q14*/
+	{0xC972, 0x8478,}, /*CAM_PGA_M_CONFIG_BLUE_Q14*/
+	{0xC974, 0x1964,}, /*CAM_PGA_R_CONFIG_COLOUR_TEMP*/
+	{0xC976, 0x803F,}, /*CAM_PGA_R_CONFIG_GREEN_RED_Q14*/
+	{0xC978, 0x7FC9,}, /*CAM_PGA_R_CONFIG_RED_Q14*/
+	{0xC97A, 0x7FE4,}, /*CAM_PGA_R_CONFIG_GREEN_BLUE_Q14*/
+	{0xC97C, 0x7F21,}, /*CAM_PGA_R_CONFIG_BLUE_Q14*/
+	{0xC95E, 0x0003,}, /*CAM_PGA_PGA_CONTROL*/
 };
 
 static struct v4l2_subdev_info mt9m114_subdev_info[] = {
@@ -1094,7 +1266,49 @@ static struct msm_camera_i2c_reg_conf mt9m114_config_change_settings[] = {
 		MSM_CAMERA_I2C_CMD_WRITE},
 	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
 		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
-	{0xDC01, 0x31, MSM_CAMERA_I2C_BYTE_DATA},
+	{0xDC01, 0x31, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_POLL},
+	{0xE000, 0x1028, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{0xE002, 0x1003, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{0xE004, 0x4103, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{0xE006, 0x0202, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, (MT9M114_COMMAND_REGISTER_OK |
+		MT9M114_COMMAND_REGISTER_APPLY_PATCH), MSM_CAMERA_I2C_WORD_DATA,
+		MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_APPLY_PATCH,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+	{0xE000, 0x010C, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{0xE002, 0x0202, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{0xE004, 0x4103, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{0xE006, 0x0202, MSM_CAMERA_I2C_WORD_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, (MT9M114_COMMAND_REGISTER_OK |
+		MT9M114_COMMAND_REGISTER_APPLY_PATCH), MSM_CAMERA_I2C_WORD_DATA,
+		MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_APPLY_PATCH,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+};
+
+static struct msm_camera_i2c_reg_conf mt9m114_config_start_stream[] = {
+	{0xdc00, 0x54, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+	{MT9M114_COMMAND_REGISTER, (MT9M114_COMMAND_REGISTER_OK |
+		MT9M114_COMMAND_REGISTER_SET_STATE), MSM_CAMERA_I2C_WORD_DATA,
+		MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+	{0xDC01, 0x31, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_POLL},
+};
+
+static struct msm_camera_i2c_reg_conf mt9m114_config_stop_stream[] = {
+	{0xdc00, 0x50, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+	{MT9M114_COMMAND_REGISTER, (MT9M114_COMMAND_REGISTER_OK |
+		MT9M114_COMMAND_REGISTER_SET_STATE), MSM_CAMERA_I2C_WORD_DATA,
+		MSM_CAMERA_I2C_CMD_WRITE},
+	{MT9M114_COMMAND_REGISTER, MT9M114_COMMAND_REGISTER_SET_STATE,
+		MSM_CAMERA_I2C_UNSET_WORD_MASK, MSM_CAMERA_I2C_CMD_POLL},
+	{0xDC01, 0x52, MSM_CAMERA_I2C_BYTE_DATA, MSM_CAMERA_I2C_CMD_POLL},
 };
 
 static const struct i2c_device_id mt9m114_i2c_id[] = {
@@ -1140,12 +1354,7 @@ static int32_t mt9m114_platform_probe(struct platform_device *pdev)
 	int32_t rc;
 	const struct of_device_id *match;
 	match = of_match_device(mt9m114_dt_match, &pdev->dev);
-	if (match)
-		rc = msm_sensor_platform_probe(pdev, match->data);
-	else {
-		pr_err("%s:%d match is null\n", __func__, __LINE__);
-		rc = -EINVAL;
-	}
+	rc = msm_sensor_platform_probe(pdev, match->data);
 	return rc;
 }
 
@@ -1329,6 +1538,7 @@ static int32_t mt9m114_set_target_exposure(struct msm_sensor_ctrl_t *s_ctrl,
 
 	return rc;
 }
+
 static struct msm_camera_i2c_reg_conf mt9m114_15_15_fps_settings[] = {
 	{0xC810, 0x05BD,}, /*cam_sensor_cfg_fine_integ_time_max = 1469*/
 	{0xC812, 0x07D0,}, /*cam_sensor_cfg_frame_length_lines = 2000*/
@@ -1389,11 +1599,52 @@ static int32_t mt9m114_set_frame_rate_range(struct msm_sensor_ctrl_t *s_ctrl,
 	return rc;
 }
 
+static int32_t i2c_burst_write_conf_tbl(
+		struct msm_camera_i2c_client *client,
+		struct msm_camera_i2c_reg_conf *tbl,
+		uint16_t size)
+{
+#define MAX_I2C_LEN (64)
+	int rc = 0;
+	int i, j;
+	uint8_t buf[MAX_I2C_LEN];
+	bool burst;
+
+	for (i = 0; i < size;) {
+		uint16_t staddr = tbl->reg_addr;
+		burst = false;
+		for (j = 0; j < MAX_I2C_LEN && i < size; j += 2, i++) {
+			if (!(tbl->dt == 0 || tbl->dt ==
+				MSM_CAMERA_I2C_WORD_DATA))
+				break;
+			if (tbl->reg_addr != (staddr + j))
+				break;
+			burst = true;
+			buf[j+0] = tbl->reg_data >> 8;
+			buf[j+1] = tbl->reg_data & 0xff;
+			tbl++;
+		}
+		if (burst) {
+			rc = client->i2c_func_tbl->i2c_write_seq(client,
+					staddr, buf, j);
+		} else {
+			rc = client->i2c_func_tbl->i2c_write_conf_tbl(client,
+					tbl++, 1, MSM_CAMERA_I2C_WORD_DATA);
+			i++;
+		}
+		if (rc < 0) {
+			pr_err("%s: unable to write data (%d)\n", __func__, rc);
+			break;
+		}
+	}
+	return rc;
+}
+
 int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 	void __user *argp)
 {
 	struct sensorb_cfg_data *cdata = (struct sensorb_cfg_data *)argp;
-	int32_t rc = 0;
+	long rc = 0;
 	int32_t i = 0;
 	mutex_lock(s_ctrl->msm_sensor_mutex);
 	CDBG("%s:%d %s cfgtype = %d\n", __func__, __LINE__,
@@ -1405,16 +1656,9 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 			sizeof(cdata->cfg.sensor_info.sensor_name));
 		cdata->cfg.sensor_info.session_id =
 			s_ctrl->sensordata->sensor_info->session_id;
-		for (i = 0; i < SUB_MODULE_MAX; i++) {
+		for (i = 0; i < SUB_MODULE_MAX; i++)
 			cdata->cfg.sensor_info.subdev_id[i] =
 				s_ctrl->sensordata->sensor_info->subdev_id[i];
-			cdata->cfg.sensor_info.subdev_intf[i] =
-				s_ctrl->sensordata->sensor_info->subdev_intf[i];
-		}
-		cdata->cfg.sensor_info.is_mount_angle_valid =
-			s_ctrl->sensordata->sensor_info->is_mount_angle_valid;
-		cdata->cfg.sensor_info.sensor_mount_angle =
-			s_ctrl->sensordata->sensor_info->sensor_mount_angle;
 		CDBG("%s:%d sensor name %s\n", __func__, __LINE__,
 			cdata->cfg.sensor_info.sensor_name);
 		CDBG("%s:%d session id %d\n", __func__, __LINE__,
@@ -1422,19 +1666,16 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 		for (i = 0; i < SUB_MODULE_MAX; i++)
 			CDBG("%s:%d subdev_id[%d] %d\n", __func__, __LINE__, i,
 				cdata->cfg.sensor_info.subdev_id[i]);
-		CDBG("%s:%d mount angle valid %d value %d\n", __func__,
-			__LINE__, cdata->cfg.sensor_info.is_mount_angle_valid,
-			cdata->cfg.sensor_info.sensor_mount_angle);
 
 		break;
 	case CFG_SET_INIT_SETTING:
 		/* 1. Write Recommend settings */
 		/* 2. Write change settings */
-		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
-			i2c_write_conf_tbl(
-			s_ctrl->sensor_i2c_client, mt9m114_recommend_settings,
-			ARRAY_SIZE(mt9m114_recommend_settings),
-			MSM_CAMERA_I2C_WORD_DATA);
+		rc = i2c_burst_write_conf_tbl(
+			s_ctrl->sensor_i2c_client,
+			mt9m114_recommend_settings,
+			ARRAY_SIZE(mt9m114_recommend_settings));
+
 		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
 			i2c_write_conf_tbl(
 			s_ctrl->sensor_i2c_client,
@@ -1443,38 +1684,120 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 			MSM_CAMERA_I2C_WORD_DATA);
 		break;
 	case CFG_SET_RESOLUTION:
+/*
+we have made default resolution as 1280X960.so we dont use this code but
+we keep it for future use when we need to change different aspect ratio.
+*/
+#if 0
 		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
 			i2c_write_conf_tbl(
-			s_ctrl->sensor_i2c_client, mt9m114_720p_settings,
-			ARRAY_SIZE(mt9m114_720p_settings),
+			s_ctrl->sensor_i2c_client, mt9m114_1280x960_settings,
+			ARRAY_SIZE(mt9m114_1280x960_settings),
 			MSM_CAMERA_I2C_WORD_DATA);
+#endif
 		break;
 	case CFG_SET_STOP_STREAM:
+		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
+			i2c_write_conf_tbl(
+			s_ctrl->sensor_i2c_client,
+			mt9m114_config_stop_stream,
+			ARRAY_SIZE(mt9m114_config_stop_stream),
+			MSM_CAMERA_I2C_WORD_DATA);
 		break;
 	case CFG_SET_START_STREAM:
 		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
 			i2c_write_conf_tbl(
 			s_ctrl->sensor_i2c_client,
-			mt9m114_config_change_settings,
-			ARRAY_SIZE(mt9m114_config_change_settings),
+			mt9m114_config_start_stream,
+			ARRAY_SIZE(mt9m114_config_start_stream),
 			MSM_CAMERA_I2C_WORD_DATA);
 		break;
 	case CFG_GET_SENSOR_INIT_PARAMS:
-		cdata->cfg.sensor_init_params.modes_supported =
-			s_ctrl->sensordata->sensor_info->modes_supported;
-		cdata->cfg.sensor_init_params.position =
-			s_ctrl->sensordata->sensor_info->position;
-		cdata->cfg.sensor_init_params.sensor_mount_angle =
-			s_ctrl->sensordata->sensor_info->sensor_mount_angle;
+		cdata->cfg.sensor_init_params =
+			*s_ctrl->sensordata->sensor_init_params;
 		CDBG("%s:%d init params mode %d pos %d mount %d\n", __func__,
 			__LINE__,
 			cdata->cfg.sensor_init_params.modes_supported,
 			cdata->cfg.sensor_init_params.position,
 			cdata->cfg.sensor_init_params.sensor_mount_angle);
 		break;
+	case CFG_SET_SLAVE_INFO: {
+		struct msm_camera_sensor_slave_info sensor_slave_info;
+		struct msm_sensor_power_setting_array *power_setting_array;
+		int slave_index = 0;
+		if (copy_from_user(&sensor_slave_info,
+		    (void *)cdata->cfg.setting,
+		    sizeof(struct msm_camera_sensor_slave_info))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
+		}
+		/* Update sensor slave address */
+		if (sensor_slave_info.slave_addr) {
+			s_ctrl->sensor_i2c_client->cci_client->sid =
+				sensor_slave_info.slave_addr >> 1;
+		}
+
+		/* Update sensor address type */
+		s_ctrl->sensor_i2c_client->addr_type =
+			sensor_slave_info.addr_type;
+
+		/* Update power up / down sequence */
+		s_ctrl->power_setting_array =
+			sensor_slave_info.power_setting_array;
+		power_setting_array = &s_ctrl->power_setting_array;
+		power_setting_array->power_setting = kzalloc(
+			power_setting_array->size *
+			sizeof(struct msm_sensor_power_setting), GFP_KERNEL);
+		if (!power_setting_array->power_setting) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(power_setting_array->power_setting,
+		    (void *)sensor_slave_info.power_setting_array.power_setting,
+		    power_setting_array->size *
+		    sizeof(struct msm_sensor_power_setting))) {
+			kfree(power_setting_array->power_setting);
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
+		}
+		s_ctrl->free_power_setting = true;
+		CDBG("%s sensor id %x\n", __func__,
+			sensor_slave_info.slave_addr);
+		CDBG("%s sensor addr type %d\n", __func__,
+			sensor_slave_info.addr_type);
+		CDBG("%s sensor reg %x\n", __func__,
+			sensor_slave_info.sensor_id_info.sensor_id_reg_addr);
+		CDBG("%s sensor id %x\n", __func__,
+			sensor_slave_info.sensor_id_info.sensor_id);
+		for (slave_index = 0; slave_index <
+			power_setting_array->size; slave_index++) {
+			CDBG("%s i %d power setting %d %d %ld %d\n", __func__,
+				slave_index,
+				power_setting_array->power_setting[slave_index].
+				seq_type,
+				power_setting_array->power_setting[slave_index].
+				seq_val,
+				power_setting_array->power_setting[slave_index].
+				config_val,
+				power_setting_array->power_setting[slave_index].
+				delay);
+		}
+		kfree(power_setting_array->power_setting);
+		break;
+	}
 	case CFG_WRITE_I2C_ARRAY: {
 		struct msm_camera_i2c_reg_setting conf_array;
 		struct msm_camera_i2c_reg_array *reg_setting = NULL;
+
+		if (s_ctrl->sensor_state != MSM_SENSOR_POWER_UP) {
+			pr_err("%s:%d failed: invalid state %d\n", __func__,
+				__LINE__, s_ctrl->sensor_state);
+			rc = -EFAULT;
+			break;
+		}
 
 		if (copy_from_user(&conf_array,
 			(void *)cdata->cfg.setting,
@@ -1484,8 +1807,8 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 			break;
 		}
 
-		if (!conf_array.size ||
-			conf_array.size > I2C_REG_DATA_MAX) {
+		if ((!conf_array.size) ||
+			(conf_array.size > I2C_REG_DATA_MAX)) {
 			pr_err("%s:%d failed\n", __func__, __LINE__);
 			rc = -EFAULT;
 			break;
@@ -1513,16 +1836,85 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 		kfree(reg_setting);
 		break;
 	}
+	case CFG_SLAVE_READ_I2C: {
+		mutex_unlock(s_ctrl->msm_sensor_mutex);
+		rc = msm_sensor_config(s_ctrl, argp);
+		mutex_lock(s_ctrl->msm_sensor_mutex);
+		break;
+	}
+	case CFG_WRITE_I2C_SEQ_ARRAY: {
+		struct msm_camera_i2c_seq_reg_setting conf_array;
+		struct msm_camera_i2c_seq_reg_array *reg_setting = NULL;
+
+		if (copy_from_user(&conf_array,
+			(void *)cdata->cfg.setting,
+			sizeof(struct msm_camera_i2c_seq_reg_setting))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
+		}
+
+		if ((!conf_array.size) ||
+			(conf_array.size > I2C_REG_DATA_MAX)) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
+		}
+
+		reg_setting = kzalloc(conf_array.size *
+			(sizeof(struct msm_camera_i2c_seq_reg_array)),
+			GFP_KERNEL);
+		if (!reg_setting) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(reg_setting, (void *)conf_array.reg_setting,
+			conf_array.size *
+			sizeof(struct msm_camera_i2c_seq_reg_array))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			kfree(reg_setting);
+			rc = -EFAULT;
+			break;
+		}
+
+		conf_array.reg_setting = reg_setting;
+		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
+			i2c_write_seq_table(s_ctrl->sensor_i2c_client,
+			&conf_array);
+		kfree(reg_setting);
+		break;
+	}
+
 	case CFG_POWER_UP:
-		if (s_ctrl->func_tbl->sensor_power_up)
+		if (s_ctrl->func_tbl->sensor_power_up) {
 			rc = s_ctrl->func_tbl->sensor_power_up(s_ctrl);
+			if (rc < 0) {
+				pr_err("%s:%d failed rc %ld\n", __func__,
+					__LINE__, rc);
+				break;
+			}
+			s_ctrl->sensor_state = MSM_SENSOR_POWER_UP;
+			pr_debug("%s:%d sensor state %d\n", __func__, __LINE__,
+				s_ctrl->sensor_state);
+		}
 		else
 			rc = -EFAULT;
 		break;
 
 	case CFG_POWER_DOWN:
-		if (s_ctrl->func_tbl->sensor_power_down)
-			rc = s_ctrl->func_tbl->sensor_power_down(s_ctrl);
+		if (s_ctrl->func_tbl->sensor_power_down) {
+			rc = s_ctrl->func_tbl->sensor_power_down(
+				s_ctrl);
+			if (rc < 0) {
+				pr_err("%s:%d failed rc %ld\n", __func__,
+					__LINE__, rc);
+				break;
+			}
+			s_ctrl->sensor_state = MSM_SENSOR_POWER_DOWN;
+			pr_debug("%s:%d sensor state %d\n", __func__, __LINE__,
+				s_ctrl->sensor_state);
+		}
 		else
 			rc = -EFAULT;
 		break;
@@ -1580,6 +1972,16 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 		pr_debug("%s: Contrast Value is %d", __func__, con_lev);
 		break;
 		}
+		case CFG_SET_AUTOFOCUS: {
+		/* TO-DO: set the Auto Focus */
+		pr_debug("%s: Setting Auto Focus", __func__);
+		break;
+		}
+		case CFG_CANCEL_AUTOFOCUS: {
+		/* TO-DO: Cancel the Auto Focus */
+		pr_debug("%s: Cancelling Auto Focus", __func__);
+		break;
+		}
 	case CFG_SET_GAMMA: {
 		int gamma = 0;
 		if (copy_from_user(&gamma,
@@ -1593,69 +1995,49 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 				__LINE__, gamma);
 		rc = mt9m114_set_gamma(s_ctrl, (uint8_t)gamma);
 		break;
+	}
+	case CFG_SET_SHARPNESS: {
+		int sharp = 0;
+		if (copy_from_user(&sharp,
+			(void *)cdata->cfg.setting,
+			sizeof(sharp))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
 		}
-		case CFG_SET_SHARPNESS: {
-			int32_t shp_lev;
-			if (copy_from_user(&shp_lev, (void *)cdata->cfg.setting,
-				sizeof(int32_t))) {
-				pr_err("%s:%d failed\n", __func__, __LINE__);
-				rc = -EFAULT;
-				break;
-			}
-		pr_debug("%s: Sharpness Value is %d", __func__, shp_lev);
-		rc = mt9m114_set_sharpening(s_ctrl, (uint8_t)shp_lev);
+		CDBG("%s:%d CFG_SET_SHARPNESS %d\n", __func__,
+				__LINE__, sharp);
+		rc = mt9m114_set_sharpening(s_ctrl, (uint8_t)sharp);
 		break;
+	}
+	case CFG_SET_LENS_SHADING: {
+		int lens = 0;
+		if (copy_from_user(&lens,
+			(void *)cdata->cfg.setting,
+			sizeof(lens))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
 		}
-	        case CFG_SET_LENS_SHADING: {
-	                int lens = 0;
-	                if (copy_from_user(&lens,
-	                        (void *)cdata->cfg.setting,
-	                        sizeof(lens))) {
-	                        pr_err("%s:%d failed\n", __func__, __LINE__);
-	                        rc = -EFAULT;
-	                        break;
-	                }
-                CDBG("%s:%d CFG_SET_LENS_SHADING %d\n", __func__,
-                                __LINE__, lens);
-                rc = mt9m114_set_lens_shading(s_ctrl, (uint8_t)lens);
-                break;
-	        }
-	        case CFG_SET_TARGET_EXPOSURE: {
-	                int expo = 0;
-	                if (copy_from_user(&expo,
-	                        (void *)cdata->cfg.setting,
-	                        sizeof(expo))) {
-	                        pr_err("%s:%d failed\n", __func__, __LINE__);
-	                        rc = -EFAULT;
-				break;
-	                }
-	                CDBG("%s:%d CFG_SET_TARGET_EXPOSURE %d\n", __func__,
-	                                __LINE__, expo);
-	                rc = mt9m114_set_target_exposure(s_ctrl, (int8_t)expo);
-                break;
-	        }
-		case CFG_SET_AUTOFOCUS: {
-		/* TO-DO: set the Auto Focus */
-		pr_debug("%s: Setting Auto Focus", __func__);
+		CDBG("%s:%d CFG_SET_LENS_SHADING %d\n", __func__,
+				__LINE__, lens);
+		rc = mt9m114_set_lens_shading(s_ctrl, (uint8_t)lens);
 		break;
+	}
+	case CFG_SET_TARGET_EXPOSURE: {
+		int expo = 0;
+		if (copy_from_user(&expo,
+			(void *)cdata->cfg.setting,
+			sizeof(expo))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
 		}
-		case CFG_CANCEL_AUTOFOCUS: {
-		/* TO-DO: Cancel the Auto Focus */
-		pr_debug("%s: Cancelling Auto Focus", __func__);
+		CDBG("%s:%d CFG_SET_TARGET_EXPOSURE %d\n", __func__,
+				__LINE__, expo);
+		rc = mt9m114_set_target_exposure(s_ctrl, (int8_t)expo);
 		break;
-		}
-		case CFG_SET_WHITE_BALANCE:
-			break;
-		case CFG_SET_EXPOSURE_COMPENSATION:
-			break;
-		case CFG_SET_EFFECT:
-			break;
-		case CFG_SET_ANTIBANDING:
-			break;
-		case CFG_SET_BESTSHOT_MODE:
-			break;
-		case CFG_SET_ISO:
-			break;
+	}
 	case CFG_SET_FPS_RANGE: {
 		struct var_fps_range_t data;
 		if (copy_from_user(&data,
@@ -1670,7 +2052,7 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 		rc = mt9m114_set_frame_rate_range(s_ctrl, &data);
 		break;
 	}
-		default:
+	default:
 		rc = -EFAULT;
 		break;
 	}
@@ -1680,228 +2062,8 @@ int32_t mt9m114_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 	return rc;
 }
 
-#ifdef CONFIG_COMPAT
-int32_t mt9m114_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
-	void __user *argp)
-{
-	struct sensorb_cfg_data32 *cdata = (struct sensorb_cfg_data32 *)argp;
-	int32_t rc = 0;
-	int32_t i = 0;
-	mutex_lock(s_ctrl->msm_sensor_mutex);
-	CDBG("%s:%d %s cfgtype = %d\n", __func__, __LINE__,
-		s_ctrl->sensordata->sensor_name, cdata->cfgtype);
-	switch (cdata->cfgtype) {
-	case CFG_GET_SENSOR_INFO:
-		memcpy(cdata->cfg.sensor_info.sensor_name,
-			s_ctrl->sensordata->sensor_name,
-			sizeof(cdata->cfg.sensor_info.sensor_name));
-		cdata->cfg.sensor_info.session_id =
-			s_ctrl->sensordata->sensor_info->session_id;
-		for (i = 0; i < SUB_MODULE_MAX; i++) {
-			cdata->cfg.sensor_info.subdev_id[i] =
-				s_ctrl->sensordata->sensor_info->subdev_id[i];
-			cdata->cfg.sensor_info.subdev_intf[i] =
-				s_ctrl->sensordata->sensor_info->subdev_intf[i];
-		}
-		cdata->cfg.sensor_info.is_mount_angle_valid =
-			s_ctrl->sensordata->sensor_info->is_mount_angle_valid;
-		cdata->cfg.sensor_info.sensor_mount_angle =
-			s_ctrl->sensordata->sensor_info->sensor_mount_angle;
-		CDBG("%s:%d sensor name %s\n", __func__, __LINE__,
-			cdata->cfg.sensor_info.sensor_name);
-		CDBG("%s:%d session id %d\n", __func__, __LINE__,
-			cdata->cfg.sensor_info.session_id);
-		for (i = 0; i < SUB_MODULE_MAX; i++)
-			CDBG("%s:%d subdev_id[%d] %d\n", __func__, __LINE__, i,
-				cdata->cfg.sensor_info.subdev_id[i]);
-		CDBG("%s:%d mount angle valid %d value %d\n", __func__,
-			__LINE__, cdata->cfg.sensor_info.is_mount_angle_valid,
-			cdata->cfg.sensor_info.sensor_mount_angle);
-
-		break;
-	case CFG_SET_INIT_SETTING:
-		/* 1. Write Recommend settings */
-		/* 2. Write change settings */
-		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
-			i2c_write_conf_tbl(
-			s_ctrl->sensor_i2c_client, mt9m114_recommend_settings,
-			ARRAY_SIZE(mt9m114_recommend_settings),
-			MSM_CAMERA_I2C_WORD_DATA);
-		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
-			i2c_write_conf_tbl(
-			s_ctrl->sensor_i2c_client,
-			mt9m114_config_change_settings,
-			ARRAY_SIZE(mt9m114_config_change_settings),
-			MSM_CAMERA_I2C_WORD_DATA);
-		break;
-	case CFG_SET_RESOLUTION:
-		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
-			i2c_write_conf_tbl(
-			s_ctrl->sensor_i2c_client, mt9m114_720p_settings,
-			ARRAY_SIZE(mt9m114_720p_settings),
-			MSM_CAMERA_I2C_WORD_DATA);
-		break;
-	case CFG_SET_STOP_STREAM:
-		break;
-	case CFG_SET_START_STREAM:
-		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
-			i2c_write_conf_tbl(
-			s_ctrl->sensor_i2c_client,
-			mt9m114_config_change_settings,
-			ARRAY_SIZE(mt9m114_config_change_settings),
-			MSM_CAMERA_I2C_WORD_DATA);
-		break;
-	case CFG_GET_SENSOR_INIT_PARAMS:
-		cdata->cfg.sensor_init_params.modes_supported =
-			s_ctrl->sensordata->sensor_info->modes_supported;
-		cdata->cfg.sensor_init_params.position =
-			s_ctrl->sensordata->sensor_info->position;
-		cdata->cfg.sensor_init_params.sensor_mount_angle =
-			s_ctrl->sensordata->sensor_info->sensor_mount_angle;
-		CDBG("%s:%d init params mode %d pos %d mount %d\n", __func__,
-			__LINE__,
-			cdata->cfg.sensor_init_params.modes_supported,
-			cdata->cfg.sensor_init_params.position,
-			cdata->cfg.sensor_init_params.sensor_mount_angle);
-		break;
-	case CFG_WRITE_I2C_ARRAY: {
-		struct msm_camera_i2c_reg_setting32 conf_array32;
-		struct msm_camera_i2c_reg_setting conf_array;
-		struct msm_camera_i2c_reg_array *reg_setting = NULL;
-
-		if (copy_from_user(&conf_array32,
-			(void *)compat_ptr(cdata->cfg.setting),
-			sizeof(struct msm_camera_i2c_reg_setting32))) {
-			pr_err("%s:%d failed\n", __func__, __LINE__);
-			rc = -EFAULT;
-			break;
-		}
-
-		conf_array.addr_type = conf_array32.addr_type;
-		conf_array.data_type = conf_array32.data_type;
-		conf_array.delay = conf_array32.delay;
-		conf_array.size = conf_array32.size;
-		conf_array.reg_setting = compat_ptr(conf_array32.reg_setting);
-
-		if (!conf_array.size ||
-			conf_array.size > I2C_REG_DATA_MAX) {
-			pr_err("%s:%d failed\n", __func__, __LINE__);
-			rc = -EFAULT;
-			break;
-		}
-
-		reg_setting = kzalloc(conf_array.size *
-			(sizeof(struct msm_camera_i2c_reg_array)), GFP_KERNEL);
-		if (!reg_setting) {
-			pr_err("%s:%d failed\n", __func__, __LINE__);
-			rc = -ENOMEM;
-			break;
-		}
-		if (copy_from_user(reg_setting, (void *)conf_array.reg_setting,
-			conf_array.size *
-			sizeof(struct msm_camera_i2c_reg_array))) {
-			pr_err("%s:%d failed\n", __func__, __LINE__);
-			kfree(reg_setting);
-			rc = -EFAULT;
-			break;
-		}
-
-		conf_array.reg_setting = reg_setting;
-		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write_table(
-			s_ctrl->sensor_i2c_client, &conf_array);
-		kfree(reg_setting);
-		break;
-	}
-	case CFG_POWER_UP:
-		if (s_ctrl->func_tbl->sensor_power_up)
-			rc = s_ctrl->func_tbl->sensor_power_up(s_ctrl);
-		else
-			rc = -EFAULT;
-		break;
-
-	case CFG_POWER_DOWN:
-		if (s_ctrl->func_tbl->sensor_power_down)
-			rc = s_ctrl->func_tbl->sensor_power_down(s_ctrl);
-		else
-			rc = -EFAULT;
-		break;
-
-	case CFG_SET_SATURATION: {
-			int32_t sat_lev;
-			if (copy_from_user(&sat_lev,
-				(void *)compat_ptr(cdata->cfg.setting),
-				sizeof(int32_t))) {
-				pr_err("%s:%d failed\n", __func__, __LINE__);
-				rc = -EFAULT;
-				break;
-			}
-		pr_debug("%s: Saturation Value is %d", __func__, sat_lev);
-		break;
-		}
-	case CFG_SET_CONTRAST: {
-		int32_t con_lev;
-		if (copy_from_user(&con_lev,
-			(void *)compat_ptr(cdata->cfg.setting),
-			sizeof(int32_t))) {
-			pr_err("%s:%d failed\n", __func__, __LINE__);
-			rc = -EFAULT;
-			break;
-		}
-	pr_debug("%s: Contrast Value is %d", __func__, con_lev);
-	break;
-	}
-	case CFG_SET_SHARPNESS: {
-		int32_t shp_lev;
-		if (copy_from_user(&shp_lev,
-			(void *)compat_ptr(cdata->cfg.setting),
-			sizeof(int32_t))) {
-			pr_err("%s:%d failed\n", __func__, __LINE__);
-			rc = -EFAULT;
-			break;
-		}
-	pr_debug("%s: Sharpness Value is %d", __func__, shp_lev);
-	break;
-	}
-	case CFG_SET_AUTOFOCUS: {
-	/* TO-DO: set the Auto Focus */
-	pr_debug("%s: Setting Auto Focus", __func__);
-	break;
-	}
-	case CFG_CANCEL_AUTOFOCUS: {
-	/* TO-DO: Cancel the Auto Focus */
-	pr_debug("%s: Cancelling Auto Focus", __func__);
-	break;
-	}
-	case CFG_SET_WHITE_BALANCE:
-		break;
-	case CFG_SET_EXPOSURE_COMPENSATION:
-		break;
-	case CFG_SET_EFFECT:
-		break;
-	case CFG_SET_ANTIBANDING:
-		break;
-	case CFG_SET_BESTSHOT_MODE:
-		break;
-	case CFG_SET_ISO:
-		break;
-	default:
-	pr_err("Invalid cfgtype func %s line %d cfgtype = %d\n",
-		__func__, __LINE__, (int32_t)cdata->cfgtype);
-	rc = -EFAULT;
-	break;
-	}
-
-	mutex_unlock(s_ctrl->msm_sensor_mutex);
-
-	return rc;
-}
-#endif
-
 static struct msm_sensor_fn_t mt9m114_sensor_func_tbl = {
 	.sensor_config = mt9m114_sensor_config,
-#ifdef CONFIG_COMPAT
-	.sensor_config32 = mt9m114_sensor_config32,
-#endif
 	.sensor_power_up = msm_sensor_power_up,
 	.sensor_power_down = msm_sensor_power_down,
 	.sensor_match_id = msm_sensor_match_id,

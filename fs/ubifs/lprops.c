@@ -453,7 +453,7 @@ static void change_category(struct ubifs_info *c, struct ubifs_lprops *lprops)
 	int new_cat = ubifs_categorize_lprops(c, lprops);
 
 	if (old_cat == new_cat) {
-		struct ubifs_lpt_heap *heap;
+		struct ubifs_lpt_heap *heap = &c->lpt_heap[new_cat - 1];
 
 		/* lprops on a heap now must be moved up or down */
 		if (new_cat < 1 || new_cat > LPROPS_HEAP_CNT)
@@ -683,7 +683,7 @@ out:
 	ubifs_release_lprops(c);
 	if (err)
 		ubifs_err("cannot change properties of LEB %d, error %d",
-			  c->vi.ubi_num, lnum, err);
+			  lnum, err);
 	return err;
 }
 
@@ -722,7 +722,7 @@ out:
 	ubifs_release_lprops(c);
 	if (err)
 		ubifs_err("cannot update properties of LEB %d, error %d",
-			  c->vi.ubi_num, lnum, err);
+			  lnum, err);
 	return err;
 }
 
@@ -747,7 +747,7 @@ int ubifs_read_one_lp(struct ubifs_info *c, int lnum, struct ubifs_lprops *lp)
 	if (IS_ERR(lpp)) {
 		err = PTR_ERR(lpp);
 		ubifs_err("cannot read properties of LEB %d, error %d",
-			  c->vi.ubi_num, lnum, err);
+			  lnum, err);
 		goto out;
 	}
 
@@ -852,9 +852,7 @@ const struct ubifs_lprops *ubifs_fast_find_frdi_idx(struct ubifs_info *c)
 	return lprops;
 }
 
-/*
- * Everything below is related to debugging.
- */
+#ifdef CONFIG_UBIFS_FS_DEBUG
 
 /**
  * dbg_check_cats - check category heaps and lists.
@@ -873,15 +871,15 @@ int dbg_check_cats(struct ubifs_info *c)
 
 	list_for_each_entry(lprops, &c->empty_list, list) {
 		if (lprops->free != c->leb_size) {
-			ubifs_err("non-empty LEB %d on empty list (free %d dirty %d flags %d)",
-				  c->vi.ubi_num, lprops->lnum, lprops->free,
-				  lprops->dirty, lprops->flags);
+			ubifs_err("non-empty LEB %d on empty list "
+				  "(free %d dirty %d flags %d)", lprops->lnum,
+				  lprops->free, lprops->dirty, lprops->flags);
 			return -EINVAL;
 		}
 		if (lprops->flags & LPROPS_TAKEN) {
-			ubifs_err("taken LEB %d on empty list (free %d dirty %d flags %d)",
-				  c->vi.ubi_num, lprops->lnum, lprops->free,
-				  lprops->dirty, lprops->flags);
+			ubifs_err("taken LEB %d on empty list "
+				  "(free %d dirty %d flags %d)", lprops->lnum,
+				  lprops->free, lprops->dirty, lprops->flags);
 			return -EINVAL;
 		}
 	}
@@ -889,22 +887,22 @@ int dbg_check_cats(struct ubifs_info *c)
 	i = 0;
 	list_for_each_entry(lprops, &c->freeable_list, list) {
 		if (lprops->free + lprops->dirty != c->leb_size) {
-			ubifs_err("non-freeable LEB %d on freeable list (free %d dirty %d flags %d)",
-				  c->vi.ubi_num, lprops->lnum, lprops->free,
-				  lprops->dirty, lprops->flags);
+			ubifs_err("non-freeable LEB %d on freeable list "
+				  "(free %d dirty %d flags %d)", lprops->lnum,
+				  lprops->free, lprops->dirty, lprops->flags);
 			return -EINVAL;
 		}
 		if (lprops->flags & LPROPS_TAKEN) {
-			ubifs_err("taken LEB %d on freeable list (free %d dirty %d flags %d)",
-				  c->vi.ubi_num, lprops->lnum, lprops->free,
-				  lprops->dirty, lprops->flags);
+			ubifs_err("taken LEB %d on freeable list "
+				  "(free %d dirty %d flags %d)", lprops->lnum,
+				  lprops->free, lprops->dirty, lprops->flags);
 			return -EINVAL;
 		}
 		i += 1;
 	}
 	if (i != c->freeable_cnt) {
-		ubifs_err("freeable list count %d expected %d", c->vi.ubi_num,
-			  i, c->freeable_cnt);
+		ubifs_err("freeable list count %d expected %d", i,
+			  c->freeable_cnt);
 		return -EINVAL;
 	}
 
@@ -912,28 +910,28 @@ int dbg_check_cats(struct ubifs_info *c)
 	list_for_each(pos, &c->idx_gc)
 		i += 1;
 	if (i != c->idx_gc_cnt) {
-		ubifs_err("idx_gc list count %d expected %d", c->vi.ubi_num, i,
+		ubifs_err("idx_gc list count %d expected %d", i,
 			  c->idx_gc_cnt);
 		return -EINVAL;
 	}
 
 	list_for_each_entry(lprops, &c->frdi_idx_list, list) {
 		if (lprops->free + lprops->dirty != c->leb_size) {
-			ubifs_err("non-freeable LEB %d on frdi_idx list (free %d dirty %d flags %d)",
-				  c->vi.ubi_num, lprops->lnum, lprops->free,
-				  lprops->dirty, lprops->flags);
+			ubifs_err("non-freeable LEB %d on frdi_idx list "
+				  "(free %d dirty %d flags %d)", lprops->lnum,
+				  lprops->free, lprops->dirty, lprops->flags);
 			return -EINVAL;
 		}
 		if (lprops->flags & LPROPS_TAKEN) {
-			ubifs_err("taken LEB %d on frdi_idx list (free %d dirty %d flags %d)",
-				  c->vi.ubi_num, lprops->lnum, lprops->free,
-				  lprops->dirty, lprops->flags);
+			ubifs_err("taken LEB %d on frdi_idx list "
+				  "(free %d dirty %d flags %d)", lprops->lnum,
+				  lprops->free, lprops->dirty, lprops->flags);
 			return -EINVAL;
 		}
 		if (!(lprops->flags & LPROPS_INDEX)) {
-			ubifs_err("non-index LEB %d on frdi_idx list (free %d dirty %d flags %d)",
-				  c->vi.ubi_num, lprops->lnum, lprops->free,
-				  lprops->dirty, lprops->flags);
+			ubifs_err("non-index LEB %d on frdi_idx list "
+				  "(free %d dirty %d flags %d)", lprops->lnum,
+				  lprops->free, lprops->dirty, lprops->flags);
 			return -EINVAL;
 		}
 	}
@@ -944,18 +942,15 @@ int dbg_check_cats(struct ubifs_info *c)
 		for (i = 0; i < heap->cnt; i++) {
 			lprops = heap->arr[i];
 			if (!lprops) {
-				ubifs_err("null ptr in LPT heap cat %d",
-						c->vi.ubi_num, cat);
+				ubifs_err("null ptr in LPT heap cat %d", cat);
 				return -EINVAL;
 			}
 			if (lprops->hpos != i) {
-				ubifs_err("bad ptr in LPT heap cat %d",
-						c->vi.ubi_num, cat);
+				ubifs_err("bad ptr in LPT heap cat %d", cat);
 				return -EINVAL;
 			}
 			if (lprops->flags & LPROPS_TAKEN) {
-				ubifs_err("taken LEB in LPT heap cat %d",
-						c->vi.ubi_num, cat);
+				ubifs_err("taken LEB in LPT heap cat %d", cat);
 				return -EINVAL;
 			}
 		}
@@ -991,9 +986,9 @@ void dbg_check_heap(struct ubifs_info *c, struct ubifs_lpt_heap *heap, int cat,
 			goto out;
 		}
 		if (lprops != lp) {
-			ubifs_err("lprops %zx lp %zx lprops->lnum %d lp->lnum %d",
-				  c->vi.ubi_num, (size_t)lprops, (size_t)lp,
-				  lprops->lnum, lp->lnum);
+			dbg_msg("lprops %zx lp %zx lprops->lnum %d lp->lnum %d",
+				(size_t)lprops, (size_t)lp, lprops->lnum,
+				lp->lnum);
 			err = 4;
 			goto out;
 		}
@@ -1011,10 +1006,9 @@ void dbg_check_heap(struct ubifs_info *c, struct ubifs_lpt_heap *heap, int cat,
 	}
 out:
 	if (err) {
-		ubifs_err("failed cat %d hpos %d err %d", c->vi.ubi_num, cat,
-				i, err);
-		dump_stack();
-		ubifs_dump_heap(c, heap, cat);
+		dbg_msg("failed cat %d hpos %d err %d", cat, i, err);
+		dbg_dump_stack();
+		dbg_dump_heap(c, heap, cat);
 	}
 }
 
@@ -1044,8 +1038,7 @@ static int scan_check_cb(struct ubifs_info *c,
 		cat = ubifs_categorize_lprops(c, lp);
 		if (cat != (lp->flags & LPROPS_CAT_MASK)) {
 			ubifs_err("bad LEB category %d expected %d",
-				  c->vi.ubi_num, (lp->flags & LPROPS_CAT_MASK),
-				  cat);
+				  (lp->flags & LPROPS_CAT_MASK), cat);
 			return -EINVAL;
 		}
 	}
@@ -1079,8 +1072,7 @@ static int scan_check_cb(struct ubifs_info *c,
 				}
 			}
 			if (!found) {
-				ubifs_err("bad LPT list (category %d)",
-						c->vi.ubi_num, cat);
+				ubifs_err("bad LPT list (category %d)", cat);
 				return -EINVAL;
 			}
 		}
@@ -1092,8 +1084,7 @@ static int scan_check_cb(struct ubifs_info *c,
 
 		if ((lp->hpos != -1 && heap->arr[lp->hpos]->lnum != lnum) ||
 		    lp != heap->arr[lp->hpos]) {
-			ubifs_err("bad LPT heap (category %d)", c->vi.ubi_num,
-					cat);
+			ubifs_err("bad LPT heap (category %d)", cat);
 			return -EINVAL;
 		}
 	}
@@ -1124,8 +1115,8 @@ static int scan_check_cb(struct ubifs_info *c,
 	if (IS_ERR(sleb)) {
 		ret = PTR_ERR(sleb);
 		if (ret == -EUCLEAN) {
-			ubifs_dump_lprops(c);
-			ubifs_dump_budg(c, &c->bi);
+			dbg_dump_lprops(c);
+			dbg_dump_budg(c, &c->bi);
 		}
 		goto out;
 	}
@@ -1141,7 +1132,7 @@ static int scan_check_cb(struct ubifs_info *c,
 
 		if (is_idx && snod->type != UBIFS_IDX_NODE) {
 			ubifs_err("indexing node in data LEB %d:%d",
-					c->vi.ubi_num, lnum, snod->offs);
+				  lnum, snod->offs);
 			goto out_destroy;
 		}
 
@@ -1166,8 +1157,8 @@ static int scan_check_cb(struct ubifs_info *c,
 
 	if (free > c->leb_size || free < 0 || dirty > c->leb_size ||
 	    dirty < 0) {
-		ubifs_err("bad calculated accounting for LEB %d: free %d, dirty %d",
-				c->vi.ubi_num, lnum, free, dirty);
+		ubifs_err("bad calculated accounting for LEB %d: "
+			  "free %d, dirty %d", lnum, free, dirty);
 		goto out_destroy;
 	}
 
@@ -1213,14 +1204,14 @@ static int scan_check_cb(struct ubifs_info *c,
 			/* Free but not unmapped LEB, it's fine */
 			is_idx = 0;
 		else {
-			ubifs_err("indexing node without indexing flag",
-					c->vi.ubi_num);
+			ubifs_err("indexing node without indexing "
+				  "flag");
 			goto out_print;
 		}
 	}
 
 	if (!is_idx && (lp->flags & LPROPS_INDEX)) {
-		ubifs_err("data node with indexing flag", c->vi.ubi_num);
+		ubifs_err("data node with indexing flag");
 		goto out_print;
 	}
 
@@ -1249,10 +1240,10 @@ static int scan_check_cb(struct ubifs_info *c,
 	return LPT_SCAN_CONTINUE;
 
 out_print:
-	ubifs_err("bad accounting of LEB %d: free %d, dirty %d flags %#x, should be free %d, dirty %d",
-			c->vi.ubi_num, lnum, lp->free, lp->dirty, lp->flags,
-			free, dirty);
-	ubifs_dump_leb(c, lnum);
+	ubifs_err("bad accounting of LEB %d: free %d, dirty %d flags %#x, "
+		  "should be free %d, dirty %d",
+		  lnum, lp->free, lp->dirty, lp->flags, free, dirty);
+	dbg_dump_leb(c, lnum);
 out_destroy:
 	ubifs_scan_destroy(sleb);
 	ret = -EINVAL;
@@ -1302,25 +1293,26 @@ int dbg_check_lprops(struct ubifs_info *c)
 	    lst.total_free != c->lst.total_free ||
 	    lst.total_dirty != c->lst.total_dirty ||
 	    lst.total_used != c->lst.total_used) {
-		ubifs_err("bad overall accounting", c->vi.ubi_num);
-		ubifs_err("calculated: empty_lebs %d, idx_lebs %d, total_free %lld, total_dirty %lld, total_used %lld",
-			  c->vi.ubi_num, lst.empty_lebs, lst.idx_lebs,
-			  lst.total_free, lst.total_dirty, lst.total_used);
-		ubifs_err("read from lprops: empty_lebs %d, idx_lebs %d, total_free %lld, total_dirty %lld, total_used %lld",
-			  c->vi.ubi_num, c->lst.empty_lebs, c->lst.idx_lebs,
-			  c->lst.total_free, c->lst.total_dirty,
-			  c->lst.total_used);
+		ubifs_err("bad overall accounting");
+		ubifs_err("calculated: empty_lebs %d, idx_lebs %d, "
+			  "total_free %lld, total_dirty %lld, total_used %lld",
+			  lst.empty_lebs, lst.idx_lebs, lst.total_free,
+			  lst.total_dirty, lst.total_used);
+		ubifs_err("read from lprops: empty_lebs %d, idx_lebs %d, "
+			  "total_free %lld, total_dirty %lld, total_used %lld",
+			  c->lst.empty_lebs, c->lst.idx_lebs, c->lst.total_free,
+			  c->lst.total_dirty, c->lst.total_used);
 		err = -EINVAL;
 		goto out;
 	}
 
 	if (lst.total_dead != c->lst.total_dead ||
 	    lst.total_dark != c->lst.total_dark) {
-		ubifs_err("bad dead/dark space accounting", c->vi.ubi_num);
+		ubifs_err("bad dead/dark space accounting");
 		ubifs_err("calculated: total_dead %lld, total_dark %lld",
-			  c->vi.ubi_num, lst.total_dead, lst.total_dark);
+			  lst.total_dead, lst.total_dark);
 		ubifs_err("read from lprops: total_dead %lld, total_dark %lld",
-			  c->vi.ubi_num, c->lst.total_dead, c->lst.total_dark);
+			  c->lst.total_dead, c->lst.total_dark);
 		err = -EINVAL;
 		goto out;
 	}
@@ -1329,3 +1321,5 @@ int dbg_check_lprops(struct ubifs_info *c)
 out:
 	return err;
 }
+
+#endif /* CONFIG_UBIFS_FS_DEBUG */

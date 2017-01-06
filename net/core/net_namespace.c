@@ -1,5 +1,3 @@
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/workqueue.h>
 #include <linux/rtnetlink.h>
 #include <linux/cache.h>
@@ -10,11 +8,9 @@
 #include <linux/idr.h>
 #include <linux/rculist.h>
 #include <linux/nsproxy.h>
-#include <linux/fs.h>
-#include <linux/proc_ns.h>
+#include <linux/proc_fs.h>
 #include <linux/file.h>
 #include <linux/export.h>
-#include <linux/user_namespace.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 
@@ -147,7 +143,7 @@ static void ops_free_list(const struct pernet_operations *ops,
 /*
  * setup_net runs the initializers for the network namespace object.
  */
-static __net_init int setup_net(struct net *net, struct user_namespace *user_ns)
+static __net_init int setup_net(struct net *net)
 {
 	/* Must be called with net_mutex held */
 	const struct pernet_operations *ops, *saved_ops;
@@ -157,7 +153,6 @@ static __net_init int setup_net(struct net *net, struct user_namespace *user_ns)
 	atomic_set(&net->count, 1);
 	atomic_set(&net->passive, 1);
 	net->dev_base_seq = 1;
-	net->user_ns = user_ns;
 
 #ifdef NETNS_REFCNT_DEBUG
 	atomic_set(&net->use_count, 0);
@@ -219,8 +214,8 @@ static void net_free(struct net *net)
 {
 #ifdef NETNS_REFCNT_DEBUG
 	if (unlikely(atomic_read(&net->use_count) != 0)) {
-		pr_emerg("network namespace not free! Usage: %d\n",
-			 atomic_read(&net->use_count));
+		printk(KERN_EMERG "network namespace not free! Usage: %d\n",
+			atomic_read(&net->use_count));
 		return;
 	}
 #endif
@@ -235,8 +230,7 @@ void net_drop_ns(void *p)
 		net_free(ns);
 }
 
-struct net *copy_net_ns(unsigned long flags,
-			struct user_namespace *user_ns, struct net *old_net)
+struct net *copy_net_ns(unsigned long flags, struct net *old_net)
 {
 	struct net *net;
 	int rv;
@@ -247,11 +241,8 @@ struct net *copy_net_ns(unsigned long flags,
 	net = net_alloc();
 	if (!net)
 		return ERR_PTR(-ENOMEM);
-
-	get_user_ns(user_ns);
-
 	mutex_lock(&net_mutex);
-	rv = setup_net(net, user_ns);
+	rv = setup_net(net);
 	if (rv == 0) {
 		rtnl_lock();
 		list_add_tail_rcu(&net->list, &net_namespace_list);
@@ -259,7 +250,6 @@ struct net *copy_net_ns(unsigned long flags,
 	}
 	mutex_unlock(&net_mutex);
 	if (rv < 0) {
-		put_user_ns(user_ns);
 		net_drop_ns(net);
 		return ERR_PTR(rv);
 	}
@@ -316,7 +306,6 @@ static void cleanup_net(struct work_struct *work)
 	/* Finally it is safe to free my network namespace structure */
 	list_for_each_entry_safe(net, tmp, &net_exit_list, exit_list) {
 		list_del_init(&net->exit_list);
-		put_user_ns(net->user_ns);
 		net_drop_ns(net);
 	}
 }
@@ -337,7 +326,7 @@ EXPORT_SYMBOL_GPL(__put_net);
 
 struct net *get_net_ns_by_fd(int fd)
 {
-	struct proc_ns *ei;
+	struct proc_inode *ei;
 	struct file *file;
 	struct net *net;
 
@@ -345,7 +334,7 @@ struct net *get_net_ns_by_fd(int fd)
 	if (IS_ERR(file))
 		return ERR_CAST(file);
 
-	ei = get_proc_ns(file_inode(file));
+	ei = PROC_I(file->f_dentry->d_inode);
 	if (ei->ns_ops == &netns_operations)
 		net = get_net(ei->ns);
 	else
@@ -356,6 +345,13 @@ struct net *get_net_ns_by_fd(int fd)
 }
 
 #else
+struct net *copy_net_ns(unsigned long flags, struct net *old_net)
+{
+	if (flags & CLONE_NEWNET)
+		return ERR_PTR(-EINVAL);
+	return old_net;
+}
+
 struct net *get_net_ns_by_fd(int fd)
 {
 	return ERR_PTR(-EINVAL);
@@ -419,7 +415,7 @@ static int __init net_ns_init(void)
 	rcu_assign_pointer(init_net.gen, ng);
 
 	mutex_lock(&net_mutex);
-	if (setup_net(&init_net, &init_user_ns))
+	if (setup_net(&init_net))
 		panic("Could not setup the initial network namespace");
 
 	rtnl_lock();
@@ -648,14 +644,8 @@ static void netns_put(void *ns)
 
 static int netns_install(struct nsproxy *nsproxy, void *ns)
 {
-	struct net *net = ns;
-
-	if (!ns_capable(net->user_ns, CAP_SYS_ADMIN) ||
-	    !nsown_capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	put_net(nsproxy->net_ns);
-	nsproxy->net_ns = get_net(net);
+	nsproxy->net_ns = get_net(ns);
 	return 0;
 }
 

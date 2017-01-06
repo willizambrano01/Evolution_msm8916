@@ -17,8 +17,8 @@ struct vsyscall_gtod_data {
 
 	/* open coded 'struct timespec' */
 	time_t		wall_time_sec;
-	u64		wall_time_snsec;
-	u64		monotonic_time_snsec;
+	u32		wall_time_nsec;
+	u32		monotonic_time_nsec;
 	time_t		monotonic_time_sec;
 
 	struct timezone sys_tz;

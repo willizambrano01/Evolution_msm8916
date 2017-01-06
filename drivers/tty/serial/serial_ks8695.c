@@ -153,6 +153,7 @@ static void ks8695uart_disable_ms(struct uart_port *port)
 static irqreturn_t ks8695uart_rx_chars(int irq, void *dev_id)
 {
 	struct uart_port *port = dev_id;
+	struct tty_struct *tty = port->state->port.tty;
 	unsigned int status, ch, lsr, flg, max_count = 256;
 
 	status = UART_GET_LSR(port);		/* clears pending LSR interrupts */
@@ -199,7 +200,7 @@ static irqreturn_t ks8695uart_rx_chars(int irq, void *dev_id)
 ignore_char:
 		status = UART_GET_LSR(port);
 	}
-	tty_flip_buffer_push(&port->state->port);
+	tty_flip_buffer_push(tty);
 
 	return IRQ_HANDLED;
 }
@@ -547,8 +548,8 @@ static struct uart_ops ks8695uart_pops = {
 
 static struct uart_port ks8695uart_ports[SERIAL_KS8695_NR] = {
 	{
-		.membase	= KS8695_UART_VA,
-		.mapbase	= KS8695_UART_PA,
+		.membase	= (void *) KS8695_UART_VA,
+		.mapbase	= KS8695_UART_VA,
 		.iotype		= SERIAL_IO_MEM,
 		.irq		= KS8695_IRQ_UART_TX,
 		.uartclk	= KS8695_CLOCK_RATE * 16,

@@ -25,14 +25,15 @@ static atomic_t __cpuinitdata count_count_start = ATOMIC_INIT(0);
 static atomic_t __cpuinitdata count_count_stop = ATOMIC_INIT(0);
 static atomic_t __cpuinitdata count_reference = ATOMIC_INIT(0);
 
-#define COUNTON 100
+#define COUNTON	100
 #define NR_LOOPS 5
 
-void __cpuinit synchronise_count_master(int cpu)
+void __cpuinit synchronise_count_master(void)
 {
 	int i;
 	unsigned long flags;
 	unsigned int initcount;
+	int nslaves;
 
 #ifdef CONFIG_MIPS_MT_SMTC
 	/*
@@ -42,7 +43,8 @@ void __cpuinit synchronise_count_master(int cpu)
 	return;
 #endif
 
-	printk(KERN_INFO "Synchronize counters for CPU %u: ", cpu);
+	printk(KERN_INFO "Synchronize counters across %u CPUs: ",
+	       num_online_cpus());
 
 	local_irq_save(flags);
 
@@ -50,7 +52,7 @@ void __cpuinit synchronise_count_master(int cpu)
 	 * Notify the slaves that it's time to start
 	 */
 	atomic_set(&count_reference, read_c0_count());
-	atomic_set(&count_start_flag, cpu);
+	atomic_set(&count_start_flag, 1);
 	smp_wmb();
 
 	/* Count will be initialised to current timer for all CPU's */
@@ -67,9 +69,10 @@ void __cpuinit synchronise_count_master(int cpu)
 	 * two CPUs.
 	 */
 
+	nslaves = num_online_cpus()-1;
 	for (i = 0; i < NR_LOOPS; i++) {
-		/* slaves loop on '!= 2' */
-		while (atomic_read(&count_count_start) != 1)
+		/* slaves loop on '!= ncpus' */
+		while (atomic_read(&count_count_start) != nslaves)
 			mb();
 		atomic_set(&count_count_stop, 0);
 		smp_wmb();
@@ -86,7 +89,7 @@ void __cpuinit synchronise_count_master(int cpu)
 		/*
 		 * Wait for all slaves to leave the synchronization point:
 		 */
-		while (atomic_read(&count_count_stop) != 1)
+		while (atomic_read(&count_count_stop) != nslaves)
 			mb();
 		atomic_set(&count_count_start, 0);
 		smp_wmb();
@@ -94,7 +97,6 @@ void __cpuinit synchronise_count_master(int cpu)
 	}
 	/* Arrange for an interrupt in a short while */
 	write_c0_compare(read_c0_count() + COUNTON);
-	atomic_set(&count_start_flag, 0);
 
 	local_irq_restore(flags);
 
@@ -106,10 +108,12 @@ void __cpuinit synchronise_count_master(int cpu)
 	printk("done.\n");
 }
 
-void __cpuinit synchronise_count_slave(int cpu)
+void __cpuinit synchronise_count_slave(void)
 {
 	int i;
+	unsigned long flags;
 	unsigned int initcount;
+	int ncpus;
 
 #ifdef CONFIG_MIPS_MT_SMTC
 	/*
@@ -119,20 +123,23 @@ void __cpuinit synchronise_count_slave(int cpu)
 	return;
 #endif
 
+	local_irq_save(flags);
+
 	/*
 	 * Not every cpu is online at the time this gets called,
 	 * so we first wait for the master to say everyone is ready
 	 */
 
-	while (atomic_read(&count_start_flag) != cpu)
+	while (!atomic_read(&count_start_flag))
 		mb();
 
 	/* Count will be initialised to next expire for all CPU's */
 	initcount = atomic_read(&count_reference);
 
+	ncpus = num_online_cpus();
 	for (i = 0; i < NR_LOOPS; i++) {
 		atomic_inc(&count_count_start);
-		while (atomic_read(&count_count_start) != 2)
+		while (atomic_read(&count_count_start) != ncpus)
 			mb();
 
 		/*
@@ -142,10 +149,12 @@ void __cpuinit synchronise_count_slave(int cpu)
 			write_c0_count(initcount);
 
 		atomic_inc(&count_count_stop);
-		while (atomic_read(&count_count_stop) != 2)
+		while (atomic_read(&count_count_stop) != ncpus)
 			mb();
 	}
 	/* Arrange for an interrupt in a short while */
 	write_c0_compare(read_c0_count() + COUNTON);
+
+	local_irq_restore(flags);
 }
 #undef NR_LOOPS

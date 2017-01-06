@@ -1,10 +1,11 @@
 /*
  * CAIF Interface registration.
  * Copyright (C) ST-Ericsson AB 2010
- * Author:	Sjur Brendeland
+ * Author:	Sjur Brendeland/sjur.brandeland@stericsson.com
  * License terms: GNU General Public License (GPL) version 2
  *
- * Borrowed heavily from file: pn_dev.c. Thanks to Remi Denis-Courmont
+ * Borrowed heavily from file: pn_dev.c. Thanks to
+ *  Remi Denis-Courmont <remi.denis-courmont@nokia.com>
  *  and Sakari Ailus <sakari.ailus@nokia.com>
  */
 
@@ -90,7 +91,10 @@ static int caifd_refcnt_read(struct caif_device_entry *e)
 /* Allocate new CAIF device. */
 static struct caif_device_entry *caif_device_alloc(struct net_device *dev)
 {
+	struct caif_device_entry_list *caifdevs;
 	struct caif_device_entry *caifd;
+
+	caifdevs = caif_device_list(dev_net(dev));
 
 	caifd = kzalloc(sizeof(*caifd), GFP_KERNEL);
 	if (!caifd)
@@ -118,7 +122,7 @@ static struct caif_device_entry *caif_get(struct net_device *dev)
 	return NULL;
 }
 
-static void caif_flow_cb(struct sk_buff *skb)
+void caif_flow_cb(struct sk_buff *skb)
 {
 	struct caif_device_entry *caifd;
 	void (*dtor)(struct sk_buff *skb) = NULL;
@@ -128,11 +132,6 @@ static void caif_flow_cb(struct sk_buff *skb)
 
 	rcu_read_lock();
 	caifd = caif_get(skb->dev);
-
-	WARN_ON(caifd == NULL);
-	if (caifd == NULL)
-		return;
-
 	caifd_hold(caifd);
 	rcu_read_unlock();
 
@@ -301,11 +300,10 @@ static void dev_flowctrl(struct net_device *dev, int on)
 }
 
 void caif_enroll_dev(struct net_device *dev, struct caif_dev_common *caifdev,
-		     struct cflayer *link_support, int head_room,
-		     struct cflayer **layer,
-		     int (**rcv_func)(struct sk_buff *, struct net_device *,
-				      struct packet_type *,
-				      struct net_device *))
+			struct cflayer *link_support, int head_room,
+			struct cflayer **layer, int (**rcv_func)(
+				struct sk_buff *, struct net_device *,
+				struct packet_type *, struct net_device *))
 {
 	struct caif_device_entry *caifd;
 	enum cfcnfg_phy_preference pref;

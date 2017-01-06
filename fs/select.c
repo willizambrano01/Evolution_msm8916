@@ -26,8 +26,6 @@
 #include <linux/fs.h>
 #include <linux/rcupdate.h>
 #include <linux/hrtimer.h>
-#include <linux/sched/rt.h>
-#include <linux/freezer.h>
 
 #include <asm/uaccess.h>
 
@@ -222,7 +220,8 @@ static void __pollwait(struct file *filp, wait_queue_head_t *wait_address,
 	struct poll_table_entry *entry = poll_get_entry(pwq);
 	if (!entry)
 		return;
-	entry->filp = get_file(filp);
+	get_file(filp);
+	entry->filp = filp;
 	entry->wait_address = wait_address;
 	entry->key = p->_key;
 	init_waitqueue_func_entry(&entry->wait, pollwake);
@@ -237,8 +236,7 @@ int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
 
 	set_current_state(state);
 	if (!pwq->triggered)
-		rc = freezable_schedule_hrtimeout_range(expires, slack,
-							HRTIMER_MODE_ABS);
+		rc = schedule_hrtimeout_range(expires, slack, HRTIMER_MODE_ABS);
 	__set_current_state(TASK_RUNNING);
 
 	/*
@@ -431,6 +429,8 @@ int do_select(int n, fd_set_bits *fds, struct timespec *end_time)
 		for (i = 0; i < n; ++rinp, ++routp, ++rexp) {
 			unsigned long in, out, ex, all_bits, bit = 1, mask, j;
 			unsigned long res_in = 0, res_out = 0, res_ex = 0;
+			const struct file_operations *f_op = NULL;
+			struct file *file = NULL;
 
 			in = *inp++; out = *outp++; ex = *exp++;
 			all_bits = in | out | ex;
@@ -440,21 +440,20 @@ int do_select(int n, fd_set_bits *fds, struct timespec *end_time)
 			}
 
 			for (j = 0; j < BITS_PER_LONG; ++j, ++i, bit <<= 1) {
-				struct fd f;
+				int fput_needed;
 				if (i >= n)
 					break;
 				if (!(bit & all_bits))
 					continue;
-				f = fdget(i);
-				if (f.file) {
-					const struct file_operations *f_op;
-					f_op = f.file->f_op;
+				file = fget_light(i, &fput_needed);
+				if (file) {
+					f_op = file->f_op;
 					mask = DEFAULT_POLLMASK;
 					if (f_op && f_op->poll) {
 						wait_key_set(wait, in, out, bit);
-						mask = (*f_op->poll)(f.file, wait);
+						mask = (*f_op->poll)(file, wait);
 					}
-					fdput(f);
+					fput_light(file, fput_needed);
 					if ((mask & POLLIN_SET) && (in & bit)) {
 						res_in |= bit;
 						retval++;
@@ -615,6 +614,7 @@ SYSCALL_DEFINE5(select, int, n, fd_set __user *, inp, fd_set __user *, outp,
 	return ret;
 }
 
+#ifdef HAVE_SET_RESTORE_SIGMASK
 static long do_pselect(int n, fd_set __user *inp, fd_set __user *outp,
 		       fd_set __user *exp, struct timespec __user *tsp,
 		       const sigset_t __user *sigmask, size_t sigsetsize)
@@ -686,6 +686,7 @@ SYSCALL_DEFINE6(pselect6, int, n, fd_set __user *, inp, fd_set __user *, outp,
 
 	return do_pselect(n, inp, outp, exp, tsp, up, sigsetsize);
 }
+#endif /* HAVE_SET_RESTORE_SIGMASK */
 
 #ifdef __ARCH_WANT_SYS_OLD_SELECT
 struct sel_arg_struct {
@@ -727,17 +728,20 @@ static inline unsigned int do_pollfd(struct pollfd *pollfd, poll_table *pwait)
 	mask = 0;
 	fd = pollfd->fd;
 	if (fd >= 0) {
-		struct fd f = fdget(fd);
+		int fput_needed;
+		struct file * file;
+
+		file = fget_light(fd, &fput_needed);
 		mask = POLLNVAL;
-		if (f.file) {
+		if (file != NULL) {
 			mask = DEFAULT_POLLMASK;
-			if (f.file->f_op && f.file->f_op->poll) {
+			if (file->f_op && file->f_op->poll) {
 				pwait->_key = pollfd->events|POLLERR|POLLHUP;
-				mask = f.file->f_op->poll(f.file, pwait);
+				mask = file->f_op->poll(file, pwait);
 			}
 			/* Mask out unneeded events. */
 			mask &= pollfd->events | POLLERR | POLLHUP;
-			fdput(f);
+			fput_light(file, fput_needed);
 		}
 	}
 	pollfd->revents = mask;
@@ -937,6 +941,7 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 	return ret;
 }
 
+#ifdef HAVE_SET_RESTORE_SIGMASK
 SYSCALL_DEFINE5(ppoll, struct pollfd __user *, ufds, unsigned int, nfds,
 		struct timespec __user *, tsp, const sigset_t __user *, sigmask,
 		size_t, sigsetsize)
@@ -987,3 +992,4 @@ SYSCALL_DEFINE5(ppoll, struct pollfd __user *, ufds, unsigned int, nfds,
 
 	return ret;
 }
+#endif /* HAVE_SET_RESTORE_SIGMASK */

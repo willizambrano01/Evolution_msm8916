@@ -35,7 +35,7 @@ static int ir_lirc_decode(struct rc_dev *dev, struct ir_raw_event ev)
 	struct lirc_codec *lirc = &dev->raw->lirc;
 	int sample;
 
-	if (!(dev->enabled_protocols & RC_BIT_LIRC))
+	if (!(dev->raw->enabled_protocols & RC_TYPE_LIRC))
 		return 0;
 
 	if (!dev->raw->lirc.drv || !dev->raw->lirc.drv->rbuf)
@@ -105,14 +105,8 @@ static ssize_t ir_lirc_transmit_ir(struct file *file, const char __user *buf,
 	struct lirc_codec *lirc;
 	struct rc_dev *dev;
 	unsigned int *txbuf; /* buffer with values to transmit */
-	ssize_t ret = -EINVAL;
+	ssize_t ret = 0;
 	size_t count;
-	ktime_t start;
-	s64 towait;
-	unsigned int duration = 0; /* signal duration in us */
-	int i;
-
-	start = ktime_get();
 
 	lirc = lirc_get_pdata(file);
 	if (!lirc)
@@ -135,30 +129,11 @@ static ssize_t ir_lirc_transmit_ir(struct file *file, const char __user *buf,
 		goto out;
 	}
 
-	if (!dev->tx_ir) {
-		ret = -ENOSYS;
-		goto out;
-	}
+	if (dev->tx_ir)
+		ret = dev->tx_ir(dev, txbuf, count);
 
-	ret = dev->tx_ir(dev, txbuf, count);
-	if (ret < 0)
-		goto out;
-
-	for (i = 0; i < ret; i++)
-		duration += txbuf[i];
-
-	ret *= sizeof(unsigned int);
-
-	/*
-	 * The lircd gap calculation expects the write function to
-	 * wait for the actual IR signal to be transmitted before
-	 * returning.
-	 */
-	towait = ktime_us_delta(ktime_add_us(start, duration), ktime_get());
-	if (towait > 0) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(usecs_to_jiffies(towait));
-	}
+	if (ret > 0)
+		ret *= sizeof(unsigned);
 
 out:
 	kfree(txbuf);
@@ -203,13 +178,13 @@ static long ir_lirc_ioctl(struct file *filep, unsigned int cmd,
 	/* TX settings */
 	case LIRC_SET_TRANSMITTER_MASK:
 		if (!dev->s_tx_mask)
-			return -ENOSYS;
+			return -EINVAL;
 
 		return dev->s_tx_mask(dev, val);
 
 	case LIRC_SET_SEND_CARRIER:
 		if (!dev->s_tx_carrier)
-			return -ENOSYS;
+			return -EINVAL;
 
 		return dev->s_tx_carrier(dev, val);
 
@@ -307,7 +282,7 @@ static void ir_lirc_close(void *data)
 	return;
 }
 
-static const struct file_operations lirc_fops = {
+static struct file_operations lirc_fops = {
 	.owner		= THIS_MODULE,
 	.write		= ir_lirc_transmit_ir,
 	.unlocked_ioctl	= ir_lirc_ioctl,
@@ -408,7 +383,7 @@ static int ir_lirc_unregister(struct rc_dev *dev)
 }
 
 static struct ir_raw_handler lirc_handler = {
-	.protocols	= RC_BIT_LIRC,
+	.protocols	= RC_TYPE_LIRC,
 	.decode		= ir_lirc_decode,
 	.raw_register	= ir_lirc_register,
 	.raw_unregister	= ir_lirc_unregister,

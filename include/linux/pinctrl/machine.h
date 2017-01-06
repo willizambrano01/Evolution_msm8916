@@ -14,7 +14,7 @@
 
 #include <linux/bug.h>
 
-#include <linux/pinctrl/pinctrl-state.h>
+#include "pinctrl-state.h"
 
 enum pinctrl_map_type {
 	PIN_MAP_TYPE_INVALID,

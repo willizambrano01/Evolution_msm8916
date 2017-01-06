@@ -506,7 +506,7 @@ static void s3c24xx_spi_initialsetup(struct s3c24xx_spi *hw)
 	}
 }
 
-static int s3c24xx_spi_probe(struct platform_device *pdev)
+static int __devinit s3c24xx_spi_probe(struct platform_device *pdev)
 {
 	struct s3c2410_spi_info *pdata;
 	struct s3c24xx_spi *hw;
@@ -611,7 +611,6 @@ static int s3c24xx_spi_probe(struct platform_device *pdev)
 	if (!pdata->set_cs) {
 		if (pdata->pin_cs < 0) {
 			dev_err(&pdev->dev, "No chipselect pin\n");
-			err = -EINVAL;
 			goto err_register;
 		}
 
@@ -663,7 +662,7 @@ static int s3c24xx_spi_probe(struct platform_device *pdev)
 	return err;
 }
 
-static int s3c24xx_spi_remove(struct platform_device *dev)
+static int __devexit s3c24xx_spi_remove(struct platform_device *dev)
 {
 	struct s3c24xx_spi *hw = platform_get_drvdata(dev);
 
@@ -722,7 +721,7 @@ static const struct dev_pm_ops s3c24xx_spi_pmops = {
 MODULE_ALIAS("platform:s3c2410-spi");
 static struct platform_driver s3c24xx_spi_driver = {
 	.probe		= s3c24xx_spi_probe,
-	.remove		= s3c24xx_spi_remove,
+	.remove		= __devexit_p(s3c24xx_spi_remove),
 	.driver		= {
 		.name	= "s3c2410-spi",
 		.owner	= THIS_MODULE,

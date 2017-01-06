@@ -35,40 +35,20 @@
 
 /**
  * qib_alloc_lkey - allocate an lkey
+ * @rkt: lkey table in which to allocate the lkey
  * @mr: memory region that this lkey protects
- * @dma_region: 0->normal key, 1->restricted DMA key
  *
- * Returns 0 if successful, otherwise returns -errno.
- *
- * Increments mr reference count as required.
- *
- * Sets the lkey field mr for non-dma regions.
- *
+ * Returns 1 if successful, otherwise returns 0.
  */
 
-int qib_alloc_lkey(struct qib_mregion *mr, int dma_region)
+int qib_alloc_lkey(struct qib_lkey_table *rkt, struct qib_mregion *mr)
 {
 	unsigned long flags;
 	u32 r;
 	u32 n;
-	int ret = 0;
-	struct qib_ibdev *dev = to_idev(mr->pd->device);
-	struct qib_lkey_table *rkt = &dev->lk_table;
+	int ret;
 
 	spin_lock_irqsave(&rkt->lock, flags);
-
-	/* special case for dma_mr lkey == 0 */
-	if (dma_region) {
-		struct qib_mregion *tmr;
-
-		tmr = rcu_access_pointer(dev->dma_mr);
-		if (!tmr) {
-			qib_get_mr(mr);
-			rcu_assign_pointer(dev->dma_mr, mr);
-			mr->lkey_published = 1;
-		}
-		goto success;
-	}
 
 	/* Find the next available LKEY */
 	r = rkt->next;
@@ -77,8 +57,11 @@ int qib_alloc_lkey(struct qib_mregion *mr, int dma_region)
 		if (rkt->table[r] == NULL)
 			break;
 		r = (r + 1) & (rkt->max - 1);
-		if (r == n)
+		if (r == n) {
+			spin_unlock_irqrestore(&rkt->lock, flags);
+			ret = 0;
 			goto bail;
+		}
 	}
 	rkt->next = (r + 1) & (rkt->max - 1);
 	/*
@@ -93,57 +76,56 @@ int qib_alloc_lkey(struct qib_mregion *mr, int dma_region)
 		mr->lkey |= 1 << 8;
 		rkt->gen++;
 	}
-	qib_get_mr(mr);
-	rcu_assign_pointer(rkt->table[r], mr);
-	mr->lkey_published = 1;
-success:
+	rkt->table[r] = mr;
 	spin_unlock_irqrestore(&rkt->lock, flags);
-out:
-	return ret;
+
+	ret = 1;
+
 bail:
-	spin_unlock_irqrestore(&rkt->lock, flags);
-	ret = -ENOMEM;
-	goto out;
+	return ret;
 }
 
 /**
  * qib_free_lkey - free an lkey
- * @mr: mr to free from tables
+ * @rkt: table from which to free the lkey
+ * @lkey: lkey id to free
  */
-void qib_free_lkey(struct qib_mregion *mr)
+int qib_free_lkey(struct qib_ibdev *dev, struct qib_mregion *mr)
 {
 	unsigned long flags;
 	u32 lkey = mr->lkey;
 	u32 r;
-	struct qib_ibdev *dev = to_idev(mr->pd->device);
-	struct qib_lkey_table *rkt = &dev->lk_table;
+	int ret;
 
-	spin_lock_irqsave(&rkt->lock, flags);
-	if (!mr->lkey_published)
-		goto out;
-	if (lkey == 0)
-		rcu_assign_pointer(dev->dma_mr, NULL);
-	else {
+	spin_lock_irqsave(&dev->lk_table.lock, flags);
+	if (lkey == 0) {
+		if (dev->dma_mr && dev->dma_mr == mr) {
+			ret = atomic_read(&dev->dma_mr->refcount);
+			if (!ret)
+				dev->dma_mr = NULL;
+		} else
+			ret = 0;
+	} else {
 		r = lkey >> (32 - ib_qib_lkey_table_size);
-		rcu_assign_pointer(rkt->table[r], NULL);
+		ret = atomic_read(&dev->lk_table.table[r]->refcount);
+		if (!ret)
+			dev->lk_table.table[r] = NULL;
 	}
-	qib_put_mr(mr);
-	mr->lkey_published = 0;
-out:
-	spin_unlock_irqrestore(&rkt->lock, flags);
+	spin_unlock_irqrestore(&dev->lk_table.lock, flags);
+
+	if (ret)
+		ret = -EBUSY;
+	return ret;
 }
 
 /**
  * qib_lkey_ok - check IB SGE for validity and initialize
  * @rkt: table containing lkey to check SGE against
- * @pd: protection domain
  * @isge: outgoing internal SGE
  * @sge: SGE to check
  * @acc: access flags
  *
  * Return 1 if valid and successful, otherwise returns 0.
- *
- * increments the reference count upon success
  *
  * Check the IB SGE for validity and initialize our internal version
  * of it.
@@ -154,25 +136,24 @@ int qib_lkey_ok(struct qib_lkey_table *rkt, struct qib_pd *pd,
 	struct qib_mregion *mr;
 	unsigned n, m;
 	size_t off;
+	unsigned long flags;
 
 	/*
 	 * We use LKEY == zero for kernel virtual addresses
 	 * (see qib_get_dma_mr and qib_dma.c).
 	 */
-	rcu_read_lock();
+	spin_lock_irqsave(&rkt->lock, flags);
 	if (sge->lkey == 0) {
 		struct qib_ibdev *dev = to_idev(pd->ibpd.device);
 
 		if (pd->user)
 			goto bail;
-		mr = rcu_dereference(dev->dma_mr);
-		if (!mr)
+		if (!dev->dma_mr)
 			goto bail;
-		if (unlikely(!atomic_inc_not_zero(&mr->refcount)))
-			goto bail;
-		rcu_read_unlock();
+		atomic_inc(&dev->dma_mr->refcount);
+		spin_unlock_irqrestore(&rkt->lock, flags);
 
-		isge->mr = mr;
+		isge->mr = dev->dma_mr;
 		isge->vaddr = (void *) sge->addr;
 		isge->length = sge->length;
 		isge->sge_length = sge->length;
@@ -180,9 +161,9 @@ int qib_lkey_ok(struct qib_lkey_table *rkt, struct qib_pd *pd,
 		isge->n = 0;
 		goto ok;
 	}
-	mr = rcu_dereference(
-		rkt->table[(sge->lkey >> (32 - ib_qib_lkey_table_size))]);
-	if (unlikely(!mr || mr->lkey != sge->lkey || mr->pd != &pd->ibpd))
+	mr = rkt->table[(sge->lkey >> (32 - ib_qib_lkey_table_size))];
+	if (unlikely(mr == NULL || mr->lkey != sge->lkey ||
+		     mr->pd != &pd->ibpd))
 		goto bail;
 
 	off = sge->addr - mr->user_base;
@@ -190,9 +171,8 @@ int qib_lkey_ok(struct qib_lkey_table *rkt, struct qib_pd *pd,
 		     off + sge->length > mr->length ||
 		     (mr->access_flags & acc) != acc))
 		goto bail;
-	if (unlikely(!atomic_inc_not_zero(&mr->refcount)))
-		goto bail;
-	rcu_read_unlock();
+	atomic_inc(&mr->refcount);
+	spin_unlock_irqrestore(&rkt->lock, flags);
 
 	off += mr->offset;
 	if (mr->page_shift) {
@@ -228,22 +208,20 @@ int qib_lkey_ok(struct qib_lkey_table *rkt, struct qib_pd *pd,
 ok:
 	return 1;
 bail:
-	rcu_read_unlock();
+	spin_unlock_irqrestore(&rkt->lock, flags);
 	return 0;
 }
 
 /**
  * qib_rkey_ok - check the IB virtual address, length, and RKEY
- * @qp: qp for validation
- * @sge: SGE state
+ * @dev: infiniband device
+ * @ss: SGE state
  * @len: length of data
  * @vaddr: virtual address to place data
  * @rkey: rkey to check
  * @acc: access flags
  *
  * Return 1 if successful, otherwise 0.
- *
- * increments the reference count upon success
  */
 int qib_rkey_ok(struct qib_qp *qp, struct qib_sge *sge,
 		u32 len, u64 vaddr, u32 rkey, int acc)
@@ -252,26 +230,25 @@ int qib_rkey_ok(struct qib_qp *qp, struct qib_sge *sge,
 	struct qib_mregion *mr;
 	unsigned n, m;
 	size_t off;
+	unsigned long flags;
 
 	/*
 	 * We use RKEY == zero for kernel virtual addresses
 	 * (see qib_get_dma_mr and qib_dma.c).
 	 */
-	rcu_read_lock();
+	spin_lock_irqsave(&rkt->lock, flags);
 	if (rkey == 0) {
 		struct qib_pd *pd = to_ipd(qp->ibqp.pd);
 		struct qib_ibdev *dev = to_idev(pd->ibpd.device);
 
 		if (pd->user)
 			goto bail;
-		mr = rcu_dereference(dev->dma_mr);
-		if (!mr)
+		if (!dev->dma_mr)
 			goto bail;
-		if (unlikely(!atomic_inc_not_zero(&mr->refcount)))
-			goto bail;
-		rcu_read_unlock();
+		atomic_inc(&dev->dma_mr->refcount);
+		spin_unlock_irqrestore(&rkt->lock, flags);
 
-		sge->mr = mr;
+		sge->mr = dev->dma_mr;
 		sge->vaddr = (void *) vaddr;
 		sge->length = len;
 		sge->sge_length = len;
@@ -280,18 +257,16 @@ int qib_rkey_ok(struct qib_qp *qp, struct qib_sge *sge,
 		goto ok;
 	}
 
-	mr = rcu_dereference(
-		rkt->table[(rkey >> (32 - ib_qib_lkey_table_size))]);
-	if (unlikely(!mr || mr->lkey != rkey || qp->ibqp.pd != mr->pd))
+	mr = rkt->table[(rkey >> (32 - ib_qib_lkey_table_size))];
+	if (unlikely(mr == NULL || mr->lkey != rkey || qp->ibqp.pd != mr->pd))
 		goto bail;
 
 	off = vaddr - mr->iova;
 	if (unlikely(vaddr < mr->iova || off + len > mr->length ||
 		     (mr->access_flags & acc) == 0))
 		goto bail;
-	if (unlikely(!atomic_inc_not_zero(&mr->refcount)))
-		goto bail;
-	rcu_read_unlock();
+	atomic_inc(&mr->refcount);
+	spin_unlock_irqrestore(&rkt->lock, flags);
 
 	off += mr->offset;
 	if (mr->page_shift) {
@@ -327,7 +302,7 @@ int qib_rkey_ok(struct qib_qp *qp, struct qib_sge *sge,
 ok:
 	return 1;
 bail:
-	rcu_read_unlock();
+	spin_unlock_irqrestore(&rkt->lock, flags);
 	return 0;
 }
 
@@ -350,9 +325,7 @@ int qib_fast_reg_mr(struct qib_qp *qp, struct ib_send_wr *wr)
 	if (pd->user || rkey == 0)
 		goto bail;
 
-	mr = rcu_dereference_protected(
-		rkt->table[(rkey >> (32 - ib_qib_lkey_table_size))],
-		lockdep_is_held(&rkt->lock));
+	mr = rkt->table[(rkey >> (32 - ib_qib_lkey_table_size))];
 	if (unlikely(mr == NULL || qp->ibqp.pd != mr->pd))
 		goto bail;
 

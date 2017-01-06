@@ -40,26 +40,11 @@
 #include <xen/page.h>
 #include <xen/xen-ops.h>
 #include <xen/hvc-console.h>
-#include <asm/dma-mapping.h>
 /*
  * Used to do a quick range check in swiotlb_tbl_unmap_single and
  * swiotlb_tbl_sync_single_*, to see if the memory was in fact allocated by this
  * API.
  */
-
-#ifndef CONFIG_X86
-static unsigned long dma_alloc_coherent_mask(struct device *dev,
-					    gfp_t gfp)
-{
-	unsigned long dma_mask = 0;
-
-	dma_mask = dev->coherent_dma_mask;
-	if (!dma_mask)
-		dma_mask = (gfp & GFP_DMA) ? DMA_BIT_MASK(24) : DMA_BIT_MASK(32);
-
-	return dma_mask;
-}
-#endif
 
 static char *xen_io_tlb_start, *xen_io_tlb_end;
 static unsigned long xen_io_tlb_nslabs;
@@ -67,7 +52,7 @@ static unsigned long xen_io_tlb_nslabs;
  * Quick lookup value of the bus address of the IOTLB.
  */
 
-static u64 start_dma_addr;
+u64 start_dma_addr;
 
 static dma_addr_t xen_phys_to_bus(phys_addr_t paddr)
 {
@@ -159,72 +144,31 @@ xen_swiotlb_fixup(void *buf, size_t size, unsigned long nslabs)
 	} while (i < nslabs);
 	return 0;
 }
-static unsigned long xen_set_nslabs(unsigned long nr_tbl)
-{
-	if (!nr_tbl) {
-		xen_io_tlb_nslabs = (64 * 1024 * 1024 >> IO_TLB_SHIFT);
-		xen_io_tlb_nslabs = ALIGN(xen_io_tlb_nslabs, IO_TLB_SEGSIZE);
-	} else
-		xen_io_tlb_nslabs = nr_tbl;
 
-	return xen_io_tlb_nslabs << IO_TLB_SHIFT;
-}
-
-enum xen_swiotlb_err {
-	XEN_SWIOTLB_UNKNOWN = 0,
-	XEN_SWIOTLB_ENOMEM,
-	XEN_SWIOTLB_EFIXUP
-};
-
-static const char *xen_swiotlb_error(enum xen_swiotlb_err err)
+void __init xen_swiotlb_init(int verbose)
 {
-	switch (err) {
-	case XEN_SWIOTLB_ENOMEM:
-		return "Cannot allocate Xen-SWIOTLB buffer\n";
-	case XEN_SWIOTLB_EFIXUP:
-		return "Failed to get contiguous memory for DMA from Xen!\n"\
-		    "You either: don't have the permissions, do not have"\
-		    " enough free memory under 4GB, or the hypervisor memory"\
-		    " is too fragmented!";
-	default:
-		break;
-	}
-	return "";
-}
-int __ref xen_swiotlb_init(int verbose, bool early)
-{
-	unsigned long bytes, order;
+	unsigned long bytes;
 	int rc = -ENOMEM;
-	enum xen_swiotlb_err m_ret = XEN_SWIOTLB_UNKNOWN;
+	unsigned long nr_tbl;
+	char *m = NULL;
 	unsigned int repeat = 3;
 
-	xen_io_tlb_nslabs = swiotlb_nr_tbl();
+	nr_tbl = swiotlb_nr_tbl();
+	if (nr_tbl)
+		xen_io_tlb_nslabs = nr_tbl;
+	else {
+		xen_io_tlb_nslabs = (64 * 1024 * 1024 >> IO_TLB_SHIFT);
+		xen_io_tlb_nslabs = ALIGN(xen_io_tlb_nslabs, IO_TLB_SEGSIZE);
+	}
 retry:
-	bytes = xen_set_nslabs(xen_io_tlb_nslabs);
-	order = get_order(xen_io_tlb_nslabs << IO_TLB_SHIFT);
+	bytes = xen_io_tlb_nslabs << IO_TLB_SHIFT;
+
 	/*
 	 * Get IO TLB memory from any location.
 	 */
-	if (early)
-		xen_io_tlb_start = alloc_bootmem_pages(PAGE_ALIGN(bytes));
-	else {
-#define SLABS_PER_PAGE (1 << (PAGE_SHIFT - IO_TLB_SHIFT))
-#define IO_TLB_MIN_SLABS ((1<<20) >> IO_TLB_SHIFT)
-		while ((SLABS_PER_PAGE << order) > IO_TLB_MIN_SLABS) {
-			xen_io_tlb_start = (void *)__get_free_pages(__GFP_NOWARN, order);
-			if (xen_io_tlb_start)
-				break;
-			order--;
-		}
-		if (order != get_order(bytes)) {
-			pr_warn("Warning: only able to allocate %ld MB "
-				"for software IO TLB\n", (PAGE_SIZE << order) >> 20);
-			xen_io_tlb_nslabs = SLABS_PER_PAGE << order;
-			bytes = xen_io_tlb_nslabs << IO_TLB_SHIFT;
-		}
-	}
+	xen_io_tlb_start = alloc_bootmem_pages(PAGE_ALIGN(bytes));
 	if (!xen_io_tlb_start) {
-		m_ret = XEN_SWIOTLB_ENOMEM;
+		m = "Cannot allocate Xen-SWIOTLB buffer!\n";
 		goto error;
 	}
 	xen_io_tlb_end = xen_io_tlb_start + bytes;
@@ -235,24 +179,17 @@ retry:
 			       bytes,
 			       xen_io_tlb_nslabs);
 	if (rc) {
-		if (early)
-			free_bootmem(__pa(xen_io_tlb_start), PAGE_ALIGN(bytes));
-		else {
-			free_pages((unsigned long)xen_io_tlb_start, order);
-			xen_io_tlb_start = NULL;
-		}
-		m_ret = XEN_SWIOTLB_EFIXUP;
+		free_bootmem(__pa(xen_io_tlb_start), PAGE_ALIGN(bytes));
+		m = "Failed to get contiguous memory for DMA from Xen!\n"\
+		    "You either: don't have the permissions, do not have"\
+		    " enough free memory under 4GB, or the hypervisor memory"\
+		    "is too fragmented!";
 		goto error;
 	}
 	start_dma_addr = xen_virt_to_bus(xen_io_tlb_start);
-	if (early) {
-		if (swiotlb_init_with_tbl(xen_io_tlb_start, xen_io_tlb_nslabs,
-			 verbose))
-			panic("Cannot allocate SWIOTLB buffer");
-		rc = 0;
-	} else
-		rc = swiotlb_late_init_with_tbl(xen_io_tlb_start, xen_io_tlb_nslabs);
-	return rc;
+	swiotlb_init_with_tbl(xen_io_tlb_start, xen_io_tlb_nslabs, verbose);
+
+	return;
 error:
 	if (repeat--) {
 		xen_io_tlb_nslabs = max(1024UL, /* Min is 2MB */
@@ -261,13 +198,10 @@ error:
 		      (xen_io_tlb_nslabs << IO_TLB_SHIFT) >> 20);
 		goto retry;
 	}
-	pr_err("%s (rc:%d)", xen_swiotlb_error(m_ret), rc);
-	if (early)
-		panic("%s (rc:%d)", xen_swiotlb_error(m_ret), rc);
-	else
-		free_pages((unsigned long)xen_io_tlb_start, order);
-	return rc;
+	xen_raw_printk("%s (rc:%d)", m, rc);
+	panic("%s (rc:%d)", m, rc);
 }
+
 void *
 xen_swiotlb_alloc_coherent(struct device *hwdev, size_t size,
 			   dma_addr_t *dma_handle, gfp_t flags,
@@ -355,8 +289,9 @@ dma_addr_t xen_swiotlb_map_page(struct device *dev, struct page *page,
 				enum dma_data_direction dir,
 				struct dma_attrs *attrs)
 {
-	phys_addr_t map, phys = page_to_phys(page) + offset;
+	phys_addr_t phys = page_to_phys(page) + offset;
 	dma_addr_t dev_addr = xen_phys_to_bus(phys);
+	void *map;
 
 	BUG_ON(dir == DMA_NONE);
 	/*
@@ -372,10 +307,10 @@ dma_addr_t xen_swiotlb_map_page(struct device *dev, struct page *page,
 	 * Oh well, have to allocate and map a bounce buffer.
 	 */
 	map = swiotlb_tbl_map_single(dev, start_dma_addr, phys, size, dir);
-	if (map == SWIOTLB_MAP_ERROR)
+	if (!map)
 		return DMA_ERROR_CODE;
 
-	dev_addr = xen_phys_to_bus(map);
+	dev_addr = xen_virt_to_bus(map);
 
 	/*
 	 * Ensure that the address returned is DMA'ble
@@ -405,7 +340,7 @@ static void xen_unmap_single(struct device *hwdev, dma_addr_t dev_addr,
 
 	/* NOTE: We use dev_addr here, not paddr! */
 	if (is_xen_swiotlb_buffer(dev_addr)) {
-		swiotlb_tbl_unmap_single(hwdev, paddr, size, dir);
+		swiotlb_tbl_unmap_single(hwdev, phys_to_virt(paddr), size, dir);
 		return;
 	}
 
@@ -450,7 +385,8 @@ xen_swiotlb_sync_single(struct device *hwdev, dma_addr_t dev_addr,
 
 	/* NOTE: We use dev_addr here, not paddr! */
 	if (is_xen_swiotlb_buffer(dev_addr)) {
-		swiotlb_tbl_sync_single(hwdev, paddr, size, dir, target);
+		swiotlb_tbl_sync_single(hwdev, phys_to_virt(paddr), size, dir,
+				       target);
 		return;
 	}
 
@@ -509,12 +445,11 @@ xen_swiotlb_map_sg_attrs(struct device *hwdev, struct scatterlist *sgl,
 		if (swiotlb_force ||
 		    !dma_capable(hwdev, dev_addr, sg->length) ||
 		    range_straddles_page_boundary(paddr, sg->length)) {
-			phys_addr_t map = swiotlb_tbl_map_single(hwdev,
-								 start_dma_addr,
-								 sg_phys(sg),
-								 sg->length,
-								 dir);
-			if (map == SWIOTLB_MAP_ERROR) {
+			void *map = swiotlb_tbl_map_single(hwdev,
+							   start_dma_addr,
+							   sg_phys(sg),
+							   sg->length, dir);
+			if (!map) {
 				/* Don't panic here, we expect map_sg users
 				   to do proper error handling. */
 				xen_swiotlb_unmap_sg_attrs(hwdev, sgl, i, dir,
@@ -522,7 +457,7 @@ xen_swiotlb_map_sg_attrs(struct device *hwdev, struct scatterlist *sgl,
 				sgl[0].dma_length = 0;
 				return DMA_ERROR_CODE;
 			}
-			sg->dma_address = xen_phys_to_bus(map);
+			sg->dma_address = xen_virt_to_bus(map);
 		} else
 			sg->dma_address = dev_addr;
 		sg->dma_length = sg->length;
@@ -530,6 +465,14 @@ xen_swiotlb_map_sg_attrs(struct device *hwdev, struct scatterlist *sgl,
 	return nelems;
 }
 EXPORT_SYMBOL_GPL(xen_swiotlb_map_sg_attrs);
+
+int
+xen_swiotlb_map_sg(struct device *hwdev, struct scatterlist *sgl, int nelems,
+		   enum dma_data_direction dir)
+{
+	return xen_swiotlb_map_sg_attrs(hwdev, sgl, nelems, dir, NULL);
+}
+EXPORT_SYMBOL_GPL(xen_swiotlb_map_sg);
 
 /*
  * Unmap a set of streaming mode DMA translations.  Again, cpu read rules
@@ -550,6 +493,14 @@ xen_swiotlb_unmap_sg_attrs(struct device *hwdev, struct scatterlist *sgl,
 
 }
 EXPORT_SYMBOL_GPL(xen_swiotlb_unmap_sg_attrs);
+
+void
+xen_swiotlb_unmap_sg(struct device *hwdev, struct scatterlist *sgl, int nelems,
+		     enum dma_data_direction dir)
+{
+	return xen_swiotlb_unmap_sg_attrs(hwdev, sgl, nelems, dir, NULL);
+}
+EXPORT_SYMBOL_GPL(xen_swiotlb_unmap_sg);
 
 /*
  * Make physical memory consistent for a set of streaming mode DMA translations

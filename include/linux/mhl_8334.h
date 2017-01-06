@@ -16,6 +16,7 @@
 
 #include <linux/types.h>
 #include <linux/platform_device.h>
+#include <mach/board.h>
 #include <linux/mhl_devcap.h>
 #include <linux/power_supply.h>
 #include <linux/mhl_defs.h>
@@ -164,8 +165,8 @@ struct mhl_tx_ctrl {
 	struct completion req_write_done;
 	spinlock_t lock;
 	/*
-	 * Lock between mhl_sii_config and
-	 * mhl_sii_device_discovery functions
+	* Lock between mhl_sii_config and
+	* mhl_sii_device_discovery functions
 	*/
 	struct mutex sii_config_lock;
 	bool tx_powered_off;

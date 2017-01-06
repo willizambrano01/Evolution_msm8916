@@ -10,6 +10,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+ * 02111-1307, USA
  */
 #include <linux/init.h>
 #include <linux/module.h>
@@ -19,14 +23,15 @@
 #include <linux/uaccess.h>
 #include <linux/wakelock.h>
 #include <linux/diagchar.h>
+#ifdef CONFIG_DIAG_OVER_USB
+#include <mach/usbdiag.h>
+#endif
 #include "diagchar.h"
 #include "diagfwd.h"
-#include "diag_masks.h"
-#include "diag_usb.h"
 #include "diagaddon_slate.h"
 
 #ifdef SLATE_DEBUG
-#define slatedbg(fmt, ...) pr_info(fmt, ##__VA_ARGS__)
+#define slatedbg(fmt, ...) printk(KERN_INFO fmt, ##__VA_ARGS__)
 #define slatedbg_hex_dump(level, prefix_str, prefix_type, rowsize, groupsize,\
 		buf, len, ascii) \
 		print_hex_dump(level, prefix_str, prefix_type, rowsize,\
@@ -34,14 +39,14 @@
 #define slatedbg_saved_log_masks(saved_log_masks) \
 	do { \
 		int i;\
-		pr_info("SAVED LOG MASK\n");\
+		printk(KERN_INFO "SAVED LOG MASK\n");\
 		for (i = 0; i < 16; i++) {\
-			pr_info(" %02X",\
+			printk(KERN_INFO " %02X",\
 				 ((char *)(saved_log_masks))[i]);\
 			if (((i+1) % 20) == 0)\
-				pr_info("\n");\
+				printk(KERN_INFO "\n");\
 		} \
-		pr_info("\n");\
+		printk(KERN_INFO "\n");\
 	} while (0)
 #else
 #define slatedbg(fmt, ...)
@@ -52,7 +57,7 @@
 
 #define SLATE_PROGRAM_NAME    "SLATE_DIAG"
 #define SLATE_EVENT_MASK_BIT_SET(id)\
-	(event_mask.ptr[(id)/8] & (1 << ((id) & 0x07)))
+	(driver->event_masks[(id)/8] & (1 << ((id) & 0x07)))
 
 struct slate_ctx {
 	uint8_t *saved_log_masks;
@@ -144,14 +149,12 @@ static int slate_channel_diag_write(struct diag_request *write_ptr,
 	int err = 0;
 
 	if (ctx->slate_enable == false) {
-		err = slate_addon.channel_diag_write(DIAG_USB_LOCAL,
-			write_ptr->buf, write_ptr->length,
-			(int)(uintptr_t)write_ptr->context);
+		err = slate_addon.channel_diag_write(driver->legacy_ch,
+								write_ptr);
 	} else if (slate_diag_process_modem_pkt(write_ptr->buf,
 							write_ptr->length)) {
-		err = slate_addon.channel_diag_write(DIAG_USB_LOCAL,
-			write_ptr->buf, write_ptr->length,
-			(int)(uintptr_t)write_ptr->context);
+		err = slate_addon.channel_diag_write(driver->legacy_ch,
+								write_ptr);
 	} else {
 		err = 0;
 		__clear_in_busy(write_ptr);
@@ -168,8 +171,6 @@ static void slate_cfg_log_mask(unsigned char cmd_type)
 	struct slate_ctx *ctx = slate_addon.private;
 	unsigned len = 0;
 	unsigned char *ptr = driver->hdlc_buf;
-	struct diag_log_mask_t *log_cfg_mask =
-		(struct diag_log_mask_t *)log_mask.ptr;
 
 	slatedbg(KERN_INFO "slate_cfg_log_mask cmd_type=%d\n", cmd_type);
 	switch (cmd_type) {
@@ -185,8 +186,7 @@ static void slate_cfg_log_mask(unsigned char cmd_type)
 			ptr += 4;
 			*(int *)ptr = 0x04F5;
 			ptr += 4;
-			log_cfg_mask++;
-			memcpy(ptr, log_cfg_mask->ptr, len);
+			memcpy(ptr, driver->log_masks, len);
 			ptr += 13;
 			*ptr |= 0x02; /* Enable 0x1069 EVDO POWER log bit */
 			/* len param not used for 0x73 */
@@ -205,8 +205,7 @@ static void slate_cfg_log_mask(unsigned char cmd_type)
 			ptr += 4;
 			*(int *)ptr = 0x04F5;
 			ptr += 4;
-			log_cfg_mask++;
-			memcpy(ptr, log_cfg_mask->ptr, len);
+			memcpy(ptr, driver->log_masks, len);
 			ptr += 13;
 			/* Enable 0x106E EVDO CONN ATTEMPTS log bit */
 			*ptr |= 0x40;
@@ -229,8 +228,7 @@ static void slate_cfg_log_mask(unsigned char cmd_type)
 			ptr += 4;
 			*(int *)ptr = 0x04F5;
 			ptr += 4;
-			log_cfg_mask++;
-			memcpy(ptr, log_cfg_mask->ptr, len);
+			memcpy(ptr, driver->log_masks, len);
 			ptr += 5;
 			*ptr |= 0x20; /* 1020 (Searcher and Finger) */
 			ptr += 38;
@@ -244,11 +242,7 @@ static void slate_cfg_log_mask(unsigned char cmd_type)
 		}
 		break;
 	case DIAG_MASK_CMD_SAVE:
-		log_cfg_mask++;
-		if (ctx->saved_log_masks) {
-			memcpy(ctx->saved_log_masks, log_cfg_mask->ptr,
-				LOG_MASK_SIZE);
-		}
+		memcpy(ctx->saved_log_masks, driver->log_masks, LOG_MASK_SIZE);
 		break;
 	case DIAG_MASK_CMD_RESTORE:
 	default:
@@ -282,7 +276,7 @@ void diag_init_log_cmd(unsigned char log_cmd)
 		slate_cfg_log_mask(DIAG_MASK_CMD_ADD_GET_SEARCHER_DUMP);
 		break;
 	default:
-		pr_err("Invalid log_cmd=%d\n", log_cmd);
+		printk(KERN_ERR "Invalid log_cmd=%d\n", log_cmd);
 		break;
 	}
 	ctx->log_count = 0;
@@ -302,7 +296,7 @@ static void slate_diag_init_log_cmd(unsigned char cmd_type)
 		slate_cfg_log_mask(DIAG_MASK_CMD_ADD_GET_STATE_AND_CONN_ATT);
 		break;
 	default:
-		pr_err("Invalid SLATE log cmd_type %d\n", cmd_type);
+		printk(KERN_ERR "Invalid SLATE log cmd_type %d\n", cmd_type);
 		break;
 	}
 	ctx->slate_log_count = 0;

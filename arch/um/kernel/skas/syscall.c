@@ -3,11 +3,11 @@
  * Licensed under the GPL
  */
 
-#include <linux/kernel.h>
-#include <linux/ptrace.h>
-#include <kern_util.h>
-#include <sysdep/ptrace.h>
-#include <sysdep/syscalls.h>
+#include "linux/kernel.h"
+#include "linux/ptrace.h"
+#include "kern_util.h"
+#include "sysdep/ptrace.h"
+#include "sysdep/syscalls.h"
 
 extern int syscall_table_size;
 #define NR_SYSCALLS (syscall_table_size / sizeof(void *))
@@ -18,7 +18,7 @@ void handle_syscall(struct uml_pt_regs *r)
 	long result;
 	int syscall;
 
-	syscall_trace_enter(regs);
+	syscall_trace(r, 0);
 
 	/*
 	 * This should go in the declaration of syscall, but when I do that,
@@ -34,7 +34,7 @@ void handle_syscall(struct uml_pt_regs *r)
 		result = -ENOSYS;
 	else result = EXECUTE_SYSCALL(syscall, regs);
 
-	PT_REGS_SET_SYSCALL_RETURN(regs, result);
+	REGS_SET_SYSCALL_RETURN(r->gp, result);
 
-	syscall_trace_leave(regs);
+	syscall_trace(r, 1);
 }

@@ -2,7 +2,7 @@
  * Diag Function Device - Route ARM9 and ARM11 DIAG messages
  * between HOST and DEVICE.
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -20,19 +20,12 @@
 #include <linux/platform_device.h>
 #include <linux/ratelimit.h>
 
-#include <linux/usb/usbdiag.h>
+#include <mach/usbdiag.h>
+
 #include <linux/usb/composite.h>
 #include <linux/usb/gadget.h>
 #include <linux/workqueue.h>
 #include <linux/debugfs.h>
-#include <linux/kmemleak.h>
-#ifdef CONFIG_DIAG_OVER_TTY
-#include <linux/usb/tty_diag.h>
-#include <linux/of.h>
-
-static bool tty_mode;
-module_param(tty_mode, bool, S_IRUGO);
-#endif
 
 static DEFINE_SPINLOCK(ch_lock);
 static LIST_HEAD(usb_diag_ch_list);
@@ -174,24 +167,28 @@ struct diag_context {
 
 static struct list_head diag_dev_list;
 
+#define STRING_INTERFACE        0
+
+/* static strings, in UTF-8 */
+static struct usb_string diag_string_defs[] = {
+	[STRING_INTERFACE].s = "Motorola QC Diag Interface",
+	{  /* ZEROES END LIST */ },
+};
+
+static struct usb_gadget_strings diag_string_table = {
+	.language =             0x0409, /* en-us */
+	.strings =              diag_string_defs,
+};
+
+static struct usb_gadget_strings *diag_strings[] = {
+	&diag_string_table,
+	NULL,
+};
+
 static inline struct diag_context *func_to_diag(struct usb_function *f)
 {
 	return container_of(f, struct diag_context, function);
 }
-
-#ifdef CONFIG_DIAG_OVER_TTY
-static bool factory_cable_present(void)
-{
-	struct device_node *np = of_find_node_by_path("/chosen");
-	u32 fact_cable = 0;
-
-	if (np)
-		of_property_read_u32(np, "mmi,factory-cable", &fact_cable);
-
-	of_node_put(np);
-	return !!fact_cable ? true : false;
-}
-#endif
 
 static void diag_update_pid_and_serial_num(struct diag_context *ctxt)
 {
@@ -247,8 +244,8 @@ static void diag_write_complete(struct usb_ep *ep,
 			d_req->actual = req->actual;
 			d_req->status = req->status;
 			/* Queue zero length packet */
-			if (!usb_ep_queue(ctxt->in, req, GFP_ATOMIC))
-				return;
+			usb_ep_queue(ctxt->in, req, GFP_ATOMIC);
+			return;
 		}
 	}
 
@@ -302,17 +299,6 @@ struct usb_diag_ch *usb_diag_open(const char *name, void *priv,
 	unsigned long flags;
 	int found = 0;
 
-#ifdef CONFIG_DIAG_OVER_TTY
-	static bool init;
-
-	if (!init) {
-		init = true;
-		tty_mode = factory_cable_present();
-	}
-
-	if (tty_mode)
-		return tty_diag_channel_open(name, priv, notify);
-#endif
 	spin_lock_irqsave(&ch_lock, flags);
 	/* Check if we already have a channel with this name */
 	list_for_each_entry(ch, &usb_diag_ch_list, list) {
@@ -353,10 +339,6 @@ void usb_diag_close(struct usb_diag_ch *ch)
 	struct diag_context *dev = NULL;
 	unsigned long flags;
 
-#ifdef CONFIG_DIAG_OVER_TTY
-	if (tty_mode)
-		return tty_diag_channel_close(ch);
-#endif
 	spin_lock_irqsave(&ch_lock, flags);
 	ch->priv = NULL;
 	ch->notify = NULL;
@@ -390,6 +372,28 @@ static void free_reqs(struct diag_context *ctxt)
 }
 
 /**
+ * usb_diag_free_req() - Free USB requests
+ * @ch: Channel handler
+ *
+ * This function free read and write USB requests for the interface
+ * associated with this channel.
+ *
+ */
+void usb_diag_free_req(struct usb_diag_ch *ch)
+{
+	struct diag_context *ctxt = ch->priv_usb;
+	unsigned long flags;
+
+	if (ctxt) {
+		spin_lock_irqsave(&ctxt->lock, flags);
+		free_reqs(ctxt);
+		spin_unlock_irqrestore(&ctxt->lock, flags);
+	}
+
+}
+EXPORT_SYMBOL(usb_diag_free_req);
+
+/**
  * usb_diag_alloc_req() - Allocate USB requests
  * @ch: Channel handler
  * @n_write: Number of requests for Tx
@@ -407,10 +411,6 @@ int usb_diag_alloc_req(struct usb_diag_ch *ch, int n_write, int n_read)
 	int i;
 	unsigned long flags;
 
-#ifdef CONFIG_DIAG_OVER_TTY
-	if (tty_mode)
-		return 0;
-#endif
 	if (!ctxt)
 		return -ENODEV;
 
@@ -421,7 +421,6 @@ int usb_diag_alloc_req(struct usb_diag_ch *ch, int n_write, int n_read)
 		req = usb_ep_alloc_request(ctxt->in, GFP_ATOMIC);
 		if (!req)
 			goto fail;
-		kmemleak_not_leak(req);
 		req->complete = diag_write_complete;
 		list_add_tail(&req->list, &ctxt->write_pool);
 	}
@@ -430,7 +429,6 @@ int usb_diag_alloc_req(struct usb_diag_ch *ch, int n_write, int n_read)
 		req = usb_ep_alloc_request(ctxt->out, GFP_ATOMIC);
 		if (!req)
 			goto fail;
-		kmemleak_not_leak(req);
 		req->complete = diag_read_complete;
 		list_add_tail(&req->list, &ctxt->read_pool);
 	}
@@ -462,24 +460,17 @@ int usb_diag_read(struct usb_diag_ch *ch, struct diag_request *d_req)
 	struct diag_context *ctxt = ch->priv_usb;
 	unsigned long flags;
 	struct usb_request *req;
-	struct usb_ep *out;
 	static DEFINE_RATELIMIT_STATE(rl, 10*HZ, 1);
 
-#ifdef CONFIG_DIAG_OVER_TTY
-	if (tty_mode)
-		return tty_diag_channel_read(ch, d_req);
-#endif
 	if (!ctxt)
 		return -ENODEV;
 
 	spin_lock_irqsave(&ctxt->lock, flags);
 
-	if (!ctxt->configured || !ctxt->out) {
+	if (!ctxt->configured) {
 		spin_unlock_irqrestore(&ctxt->lock, flags);
 		return -EIO;
 	}
-
-	out = ctxt->out;
 
 	if (list_empty(&ctxt->read_pool)) {
 		spin_unlock_irqrestore(&ctxt->lock, flags);
@@ -494,14 +485,7 @@ int usb_diag_read(struct usb_diag_ch *ch, struct diag_request *d_req)
 	req->buf = d_req->buf;
 	req->length = d_req->length;
 	req->context = d_req;
-
-	/* make sure context is still valid after releasing lock */
-	if (ctxt != ch->priv_usb) {
-		usb_ep_free_request(out, req);
-		return -EIO;
-	}
-
-	if (usb_ep_queue(out, req, GFP_ATOMIC)) {
+	if (usb_ep_queue(ctxt->out, req, GFP_ATOMIC)) {
 		/* If error add the link to linked list again*/
 		spin_lock_irqsave(&ctxt->lock, flags);
 		list_add_tail(&req->list, &ctxt->read_pool);
@@ -535,25 +519,17 @@ int usb_diag_write(struct usb_diag_ch *ch, struct diag_request *d_req)
 	struct diag_context *ctxt = ch->priv_usb;
 	unsigned long flags;
 	struct usb_request *req = NULL;
-	struct usb_ep *in;
 	static DEFINE_RATELIMIT_STATE(rl, 10*HZ, 1);
-
-#ifdef CONFIG_DIAG_OVER_TTY
-	if (tty_mode)
-		return tty_diag_channel_write(ch, d_req);
-#endif
 
 	if (!ctxt)
 		return -ENODEV;
 
 	spin_lock_irqsave(&ctxt->lock, flags);
 
-	if (!ctxt->configured || !ctxt->in) {
+	if (!ctxt->configured) {
 		spin_unlock_irqrestore(&ctxt->lock, flags);
 		return -EIO;
 	}
-
-	in = ctxt->in;
 
 	if (list_empty(&ctxt->write_pool)) {
 		spin_unlock_irqrestore(&ctxt->lock, flags);
@@ -568,22 +544,15 @@ int usb_diag_write(struct usb_diag_ch *ch, struct diag_request *d_req)
 	req->buf = d_req->buf;
 	req->length = d_req->length;
 	req->context = d_req;
-
-	/* make sure context is still valid after releasing lock */
-	if (ctxt != ch->priv_usb) {
-		usb_ep_free_request(in, req);
-		return -EIO;
-	}
-
-	if (usb_ep_queue(in, req, GFP_ATOMIC)) {
+	if (usb_ep_queue(ctxt->in, req, GFP_ATOMIC)) {
 		/* If error add the link to linked list again*/
 		spin_lock_irqsave(&ctxt->lock, flags);
 		list_add_tail(&req->list, &ctxt->write_pool);
+		spin_unlock_irqrestore(&ctxt->lock, flags);
 		/* 1 error message for every 10 sec */
 		if (__ratelimit(&rl))
 			ERROR(ctxt->cdev, "%s: cannot queue"
 				" read request\n", __func__);
-		spin_unlock_irqrestore(&ctxt->lock, flags);
 		return -EIO;
 	}
 
@@ -682,7 +651,7 @@ static void diag_function_unbind(struct usb_configuration *c,
 	if (gadget_is_dualspeed(c->cdev->gadget))
 		usb_free_descriptors(f->hs_descriptors);
 
-	usb_free_descriptors(f->fs_descriptors);
+	usb_free_descriptors(f->descriptors);
 
 	/*
 	 * Channel priv_usb may point to other diag function.
@@ -723,8 +692,8 @@ static int diag_function_bind(struct usb_configuration *c,
 
 	status = -ENOMEM;
 	/* copy descriptors, and track endpoint copies */
-	f->fs_descriptors = usb_copy_descriptors(fs_diag_desc);
-	if (!f->fs_descriptors)
+	f->descriptors = usb_copy_descriptors(fs_diag_desc);
+	if (!f->descriptors)
 		goto fail;
 
 	if (gadget_is_dualspeed(c->cdev->gadget)) {
@@ -757,8 +726,8 @@ fail:
 		usb_free_descriptors(f->ss_descriptors);
 	if (f->hs_descriptors)
 		usb_free_descriptors(f->hs_descriptors);
-	if (f->fs_descriptors)
-		usb_free_descriptors(f->fs_descriptors);
+	if (f->descriptors)
+		usb_free_descriptors(f->descriptors);
 	if (ctxt->out)
 		ctxt->out->driver_data = NULL;
 	if (ctxt->in)
@@ -773,8 +742,19 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 	struct diag_context *dev;
 	struct usb_diag_ch *_ch;
 	int found = 0, ret;
+	int status;
 
 	DBG(c->cdev, "diag_function_add\n");
+	if (diag_string_defs[STRING_INTERFACE].id == 0) {
+		status = usb_string_id(c->cdev);
+		if (status < 0) {
+			pr_err("%s: failed to get string id, err:%d\n",
+					__func__, status);
+			return status;
+		}
+		diag_string_defs[STRING_INTERFACE].id = status;
+		intf_desc.iInterface = status;
+	}
 
 	list_for_each_entry(_ch, &usb_diag_ch_list, list) {
 		if (!strcmp(name, _ch->name)) {
@@ -804,12 +784,13 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 	dev->update_pid_and_serial_num = update_pid;
 	dev->cdev = c->cdev;
 	dev->function.name = _ch->name;
-	dev->function.fs_descriptors = fs_diag_desc;
+	dev->function.descriptors = fs_diag_desc;
 	dev->function.hs_descriptors = hs_diag_desc;
 	dev->function.bind = diag_function_bind;
 	dev->function.unbind = diag_function_unbind;
 	dev->function.set_alt = diag_function_set_alt;
 	dev->function.disable = diag_function_disable;
+        dev->function.strings = diag_strings;
 	spin_lock_init(&dev->lock);
 	INIT_LIST_HEAD(&dev->read_pool);
 	INIT_LIST_HEAD(&dev->write_pool);

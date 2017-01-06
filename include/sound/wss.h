@@ -22,11 +22,11 @@
  *
  */
 
-#include <sound/control.h>
-#include <sound/pcm.h>
-#include <sound/timer.h>
+#include "control.h"
+#include "pcm.h"
+#include "timer.h"
 
-#include <sound/cs4231-regs.h>
+#include "cs4231-regs.h"
 
 /* defines for codec.mode */
 

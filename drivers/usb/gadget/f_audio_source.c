@@ -44,6 +44,7 @@ static struct usb_interface_descriptor audio_source_ac_interface_desc = {
 	.bInterfaceSubClass =	USB_SUBCLASS_AUDIOCONTROL,
 };
 
+
 #define UAC_DT_AC_HEADER_LENGTH	UAC_DT_AC_HEADER_SIZE(AUDIO_NUM_INTERFACES)
 /* 1 input terminal, 1 output terminal and 1 feature unit */
 #define UAC_DT_TOTAL_LENGTH (UAC_DT_AC_HEADER_LENGTH \
@@ -259,9 +260,10 @@ struct audio_dev {
 	s64				frames_sent;
 
 	bool				audio_ep_enabled;
+	atomic_t			audio_deferred;
 };
 
-static inline struct audio_dev *audio_source_func_to_audio(struct usb_function *f)
+static inline struct audio_dev *func_to_audio_source(struct usb_function *f)
 {
 	return container_of(f, struct audio_dev, func);
 }
@@ -326,22 +328,15 @@ static void audio_send(struct audio_dev *audio)
 	s64 msecs;
 	s64 frames;
 	ktime_t now;
-	unsigned long flags;
 
-	spin_lock_irqsave(&audio->lock, flags);
 	/* audio->substream will be null if we have been closed */
-	if (!audio->substream) {
-		spin_unlock_irqrestore(&audio->lock, flags);
+	if (!audio->substream)
 		return;
-	}
 	/* audio->buffer_pos will be null if we have been stopped */
-	if (!audio->buffer_pos) {
-		spin_unlock_irqrestore(&audio->lock, flags);
+	if (!audio->buffer_pos)
 		return;
-	}
 
 	runtime = audio->substream->runtime;
-	spin_unlock_irqrestore(&audio->lock, flags);
 
 	/* compute number of frames to send */
 	now = ktime_get();
@@ -365,21 +360,8 @@ static void audio_send(struct audio_dev *audio)
 
 	while (frames > 0) {
 		req = audio_req_get(audio);
-		spin_lock_irqsave(&audio->lock, flags);
-		/* audio->substream will be null if we have been closed */
-		if (!audio->substream) {
-			spin_unlock_irqrestore(&audio->lock, flags);
-			return;
-		}
-		/* audio->buffer_pos will be null if we have been stopped */
-		if (!audio->buffer_pos) {
-			spin_unlock_irqrestore(&audio->lock, flags);
-			return;
-		}
-		if (!req) {
-			spin_unlock_irqrestore(&audio->lock, flags);
+		if (!req)
 			break;
-		}
 
 		length = frames_to_bytes(runtime, frames);
 		if (length > IN_EP_MAX_PACKET_SIZE)
@@ -405,7 +387,6 @@ static void audio_send(struct audio_dev *audio)
 		}
 
 		req->length = length;
-		spin_unlock_irqrestore(&audio->lock, flags);
 		ret = usb_ep_queue(audio->in_ep, req, GFP_ATOMIC);
 		if (ret < 0) {
 			pr_err("usb_ep_queue failed ret: %d\n", ret);
@@ -543,23 +524,32 @@ audio_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 
 static int audio_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 {
-	struct audio_dev *audio = audio_source_func_to_audio(f);
+	struct audio_dev *audio = func_to_audio_source(f);
 	struct usb_composite_dev *cdev = f->config->cdev;
 	int ret;
 
 	pr_debug("audio_set_alt intf %d, alt %d\n", intf, alt);
 
 	if (intf == as_interface_alt_1_desc.bInterfaceNumber) {
-		if (alt && !audio->audio_ep_enabled) {
+		if (!audio->audio_ep_enabled) {
 			ret = config_ep_by_speed(cdev->gadget, f, audio->in_ep);
-			if (ret)
+			if (ret) {
+				audio->in_ep->desc = NULL;
+				ERROR(cdev, "config_ep fail ep %s, result %d\n",
+						audio->in_ep->name, ret);
 				return ret;
-
-			usb_ep_enable(audio->in_ep);
+			}
+			ret = usb_ep_enable(audio->in_ep);
+			if (ret) {
+				ERROR(cdev, "failed to enable ep%s,result %d\n",
+					audio->in_ep->name, ret);
+				return ret;
+			}
 			audio->audio_ep_enabled = true;
-		} else if (!alt && audio->audio_ep_enabled) {
-			usb_ep_disable(audio->in_ep);
-			audio->audio_ep_enabled = false;
+			if (atomic_read(&audio->audio_deferred)) {
+				atomic_set(&audio->audio_deferred, 0);
+				audio_send(audio);
+			}
 		}
 	}
 	return 0;
@@ -567,13 +557,14 @@ static int audio_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 
 static void audio_disable(struct usb_function *f)
 {
-	struct audio_dev	*audio = audio_source_func_to_audio(f);
+	struct audio_dev *audio = func_to_audio_source(f);
 
 	pr_debug("audio_disable\n");
 	if (audio->audio_ep_enabled) {
 		usb_ep_disable(audio->in_ep);
 		audio->audio_ep_enabled = false;
 	}
+	atomic_set(&audio->audio_deferred, 0);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -598,7 +589,7 @@ static int
 audio_bind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct usb_composite_dev *cdev = c->cdev;
-	struct audio_dev *audio = audio_source_func_to_audio(f);
+	struct audio_dev *audio = func_to_audio_source(f);
 	int status;
 	struct usb_ep *ep;
 	struct usb_request *req;
@@ -612,17 +603,11 @@ audio_bind(struct usb_configuration *c, struct usb_function *f)
 		goto fail;
 	audio_source_ac_interface_desc.bInterfaceNumber = status;
 
-	/* AUDIO_AC_INTERFACE */
-	audio_source_ac_header_desc.baInterfaceNr[0] = status;
-
 	status = usb_interface_id(c, f);
 	if (status < 0)
 		goto fail;
 	as_interface_alt_0_desc.bInterfaceNumber = status;
 	as_interface_alt_1_desc.bInterfaceNumber = status;
-
-	/* AUDIO_AS_INTERFACE */
-	audio_source_ac_header_desc.baInterfaceNr[1] = status;
 
 	status = -ENODEV;
 
@@ -636,9 +621,6 @@ audio_bind(struct usb_configuration *c, struct usb_function *f)
 	if (gadget_is_dualspeed(c->cdev->gadget))
 		hs_as_in_ep_desc.bEndpointAddress =
 			fs_as_in_ep_desc.bEndpointAddress;
-
-	f->fs_descriptors = fs_audio_desc;
-	f->hs_descriptors = hs_audio_desc;
 
 	for (i = 0, status = 0; i < IN_EP_REQ_COUNT && status == 0; i++) {
 		req = audio_request_new(ep, IN_EP_MAX_PACKET_SIZE);
@@ -657,7 +639,7 @@ fail:
 static void
 audio_unbind(struct usb_configuration *c, struct usb_function *f)
 {
-	struct audio_dev *audio = audio_source_func_to_audio(f);
+	struct audio_dev *audio = func_to_audio_source(f);
 	struct usb_request *req;
 
 	while ((req = audio_req_get(audio)))
@@ -674,7 +656,10 @@ static void audio_pcm_playback_start(struct audio_dev *audio)
 {
 	audio->start_time = ktime_get();
 	audio->frames_sent = 0;
-	audio_send(audio);
+	if (audio->audio_ep_enabled)
+		audio_send(audio);
+	else
+		atomic_set(&audio->audio_deferred, 1);
 }
 
 static void audio_pcm_playback_stop(struct audio_dev *audio)
@@ -685,6 +670,7 @@ static void audio_pcm_playback_stop(struct audio_dev *audio)
 	audio->buffer_start = 0;
 	audio->buffer_end = 0;
 	audio->buffer_pos = 0;
+	atomic_set(&audio->audio_deferred, 0);
 	spin_unlock_irqrestore(&audio->lock, flags);
 }
 
@@ -826,6 +812,8 @@ static struct audio_dev _audio_dev = {
 		.set_alt = audio_set_alt,
 		.setup = audio_setup,
 		.disable = audio_disable,
+		.descriptors = fs_audio_desc,
+		.hs_descriptors = hs_audio_desc,
 	},
 	.lock = __SPIN_LOCK_UNLOCKED(_audio_dev.lock),
 	.idle_reqs = LIST_HEAD_INIT(_audio_dev.idle_reqs),

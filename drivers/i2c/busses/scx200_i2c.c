@@ -21,8 +21,6 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.		     
 */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -32,6 +30,8 @@
 #include <linux/io.h>
 
 #include <linux/scx200_gpio.h>
+
+#define NAME "scx200_i2c"
 
 MODULE_AUTHOR("Christer Weinigel <wingel@nano-system.com>");
 MODULE_DESCRIPTION("NatSemi SCx200 I2C Driver");
@@ -88,17 +88,17 @@ static struct i2c_adapter scx200_i2c_ops = {
 
 static int scx200_i2c_init(void)
 {
-	pr_debug("NatSemi SCx200 I2C Driver\n");
+	pr_debug(NAME ": NatSemi SCx200 I2C Driver\n");
 
 	if (!scx200_gpio_present()) {
-		pr_err("no SCx200 gpio pins available\n");
+		printk(KERN_ERR NAME ": no SCx200 gpio pins available\n");
 		return -ENODEV;
 	}
 
-	pr_debug("SCL=GPIO%02u, SDA=GPIO%02u\n", scl, sda);
+	pr_debug(NAME ": SCL=GPIO%02u, SDA=GPIO%02u\n", scl, sda);
 
 	if (scl == -1 || sda == -1 || scl == sda) {
-		pr_err("scl and sda must be specified\n");
+		printk(KERN_ERR NAME ": scl and sda must be specified\n");
 		return -EINVAL;
 	}
 
@@ -107,7 +107,8 @@ static int scx200_i2c_init(void)
 	scx200_gpio_configure(sda, ~2, 5);
 
 	if (i2c_bit_add_bus(&scx200_i2c_ops) < 0) {
-		pr_err("adapter %s registration failed\n", scx200_i2c_ops.name);
+		printk(KERN_ERR NAME ": adapter %s registration failed\n", 
+		       scx200_i2c_ops.name);
 		return -ENODEV;
 	}
 	

@@ -226,7 +226,7 @@ void __mlx4_cq_free_icm(struct mlx4_dev *dev, int cqn)
 
 static void mlx4_cq_free_icm(struct mlx4_dev *dev, int cqn)
 {
-	u64 in_param = 0;
+	u64 in_param;
 	int err;
 
 	if (mlx4_is_mfunc(dev)) {
@@ -240,10 +240,9 @@ static void mlx4_cq_free_icm(struct mlx4_dev *dev, int cqn)
 		__mlx4_cq_free_icm(dev, cqn);
 }
 
-int mlx4_cq_alloc(struct mlx4_dev *dev, int nent,
-		  struct mlx4_mtt *mtt, struct mlx4_uar *uar, u64 db_rec,
-		  struct mlx4_cq *cq, unsigned vector, int collapsed,
-		  int timestamp_en)
+int mlx4_cq_alloc(struct mlx4_dev *dev, int nent, struct mlx4_mtt *mtt,
+		  struct mlx4_uar *uar, u64 db_rec, struct mlx4_cq *cq,
+		  unsigned vector, int collapsed)
 {
 	struct mlx4_priv *priv = mlx4_priv(dev);
 	struct mlx4_cq_table *cq_table = &priv->cq_table;
@@ -277,9 +276,6 @@ int mlx4_cq_alloc(struct mlx4_dev *dev, int nent,
 	memset(cq_context, 0, sizeof *cq_context);
 
 	cq_context->flags	    = cpu_to_be32(!!collapsed << 18);
-	if (timestamp_en)
-		cq_context->flags  |= cpu_to_be32(1 << 19);
-
 	cq_context->logsize_usrpage = cpu_to_be32((ilog2(nent) << 24) | uar->index);
 	cq_context->comp_eqn	    = priv->eq_table.eq[vector].eqn;
 	cq_context->log_page_size   = mtt->page_shift - MLX4_ICM_PAGE_SHIFT;

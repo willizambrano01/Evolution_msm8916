@@ -12,11 +12,12 @@ Required properties:
 Optional properties:
 - linux,default-trigger	: string trigger the led from external modules such as display
 - rohm,ovp-val		: integer over voltage protection threshold, follows enum bd65b60_ovp
+- rohm,default-on	: boolean default state of the led, should be "on" or "off"
+- rohm,init-level	: integer default level applied if default state is "on"
+- rohm,pwm-on		: boolean to enable pwm input for cabc
 - rohm,default-on	: boolean default on for the led
 - rohm,init-level	: integer default level applied if default-on is true
 - rohm,no-reset		: boolean do not issue SW reset for IC during driver probe
-- rohm,pwm-on		: boolean to enable pwm input for cabc or our own pwm device
-- rohm,pwm-period	: integer pwm period in nanoseconds if we want to control pwm device
 
 Example:
 

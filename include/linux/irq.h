@@ -10,6 +10,9 @@
  */
 
 #include <linux/smp.h>
+
+#ifndef CONFIG_S390
+
 #include <linux/linkage.h>
 #include <linux/cache.h>
 #include <linux/spinlock.h>
@@ -147,7 +150,9 @@ struct irq_data {
 	void			*handler_data;
 	void			*chip_data;
 	struct msi_desc		*msi_desc;
+#ifdef CONFIG_SMP
 	cpumask_var_t		affinity;
+#endif
 };
 
 /*
@@ -297,6 +302,8 @@ static inline irq_hw_number_t irqd_to_hwirq(struct irq_data *d)
  * @irq_pm_shutdown:	function called from core code on shutdown once per chip
  * @irq_print_chip:	optional to print special chip info in show_interrupts
  * @flags:		chip specific flags
+ *
+ * @release:		release function solely used by UML
  */
 struct irq_chip {
 	const char	*name;
@@ -330,6 +337,11 @@ struct irq_chip {
 	void		(*irq_print_chip)(struct irq_data *data, struct seq_file *p);
 
 	unsigned long	flags;
+
+	/* Currently used only by UML, might disappear one day.*/
+#ifdef CONFIG_IRQ_RELEASE_METHOD
+	void		(*release)(unsigned int irq, void *dev_id);
+#endif
 };
 
 /*
@@ -348,7 +360,6 @@ enum {
 	IRQCHIP_MASK_ON_SUSPEND		= (1 <<  2),
 	IRQCHIP_ONOFFLINE_ENABLED	= (1 <<  3),
 	IRQCHIP_SKIP_SET_WAKE		= (1 <<  4),
-	IRQCHIP_ONESHOT_SAFE		= (1 <<  5),
 };
 
 /* This include will go away once we isolated irq_desc usage to core code */
@@ -377,8 +388,9 @@ extern void remove_percpu_irq(unsigned int irq, struct irqaction *act);
 
 extern void irq_cpu_online(void);
 extern void irq_cpu_offline(void);
-extern int irq_set_affinity_locked(struct irq_data *data,
-				   const struct cpumask *cpumask, bool force);
+extern int __irq_set_affinity_locked(struct irq_data *data,  const struct cpumask *cpumask);
+
+#ifdef CONFIG_GENERIC_HARDIRQS
 
 #if defined(CONFIG_SMP) && defined(CONFIG_GENERIC_PENDING_IRQ)
 void irq_move_irq(struct irq_data *data);
@@ -389,15 +401,6 @@ static inline void irq_move_masked_irq(struct irq_data *data) { }
 #endif
 
 extern int no_irq_affinity;
-
-#ifdef CONFIG_HARDIRQS_SW_RESEND
-int irq_set_parent(int irq, int parent_irq);
-#else
-static inline int irq_set_parent(int irq, int parent_irq)
-{
-	return 0;
-}
-#endif
 
 /*
  * Built-in IRQ handlers for various IRQ types,
@@ -512,11 +515,8 @@ static inline void irq_set_percpu_devid_flags(unsigned int irq)
 
 /* Handle dynamic irq creation and destruction */
 extern unsigned int create_irq_nr(unsigned int irq_want, int node);
-extern unsigned int __create_irqs(unsigned int from, unsigned int count,
-				  int node);
 extern int create_irq(void);
 extern void destroy_irq(unsigned int irq);
-extern void destroy_irqs(unsigned int irq, unsigned int count);
 
 /*
  * Dynamic irq helper functions. Obsolete. Use irq_alloc_desc* and
@@ -534,8 +534,6 @@ extern int irq_set_handler_data(unsigned int irq, void *data);
 extern int irq_set_chip_data(unsigned int irq, void *data);
 extern int irq_set_irq_type(unsigned int irq, unsigned int type);
 extern int irq_set_msi_desc(unsigned int irq, struct msi_desc *entry);
-extern int irq_set_msi_desc_off(unsigned int irq_base, unsigned int irq_offset,
-				struct msi_desc *entry);
 extern struct irq_data *irq_get_irq_data(unsigned int irq);
 
 static inline struct irq_chip *irq_get_chip(unsigned int irq)
@@ -597,9 +595,6 @@ int __irq_alloc_descs(int irq, unsigned int from, unsigned int cnt, int node,
 
 #define irq_alloc_desc_from(from, node)		\
 	irq_alloc_descs(-1, from, 1, node)
-
-#define irq_alloc_descs_from(from, cnt, node)	\
-	irq_alloc_descs(-1, from, cnt, node)
 
 void irq_free_descs(unsigned int irq, unsigned int cnt);
 int irq_reserve_irqs(unsigned int from, unsigned int cnt);
@@ -753,5 +748,9 @@ static inline void irq_gc_unlock(struct irq_chip_generic *gc)
 static inline void irq_gc_lock(struct irq_chip_generic *gc) { }
 static inline void irq_gc_unlock(struct irq_chip_generic *gc) { }
 #endif
+
+#endif /* CONFIG_GENERIC_HARDIRQS */
+
+#endif /* !CONFIG_S390 */
 
 #endif /* _LINUX_IRQ_H */

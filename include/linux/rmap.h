@@ -7,7 +7,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
-#include <linux/rwsem.h>
+#include <linux/mutex.h>
 #include <linux/memcontrol.h>
 
 /*
@@ -25,8 +25,8 @@
  * pointing to this anon_vma once its vma list is empty.
  */
 struct anon_vma {
-	struct anon_vma *root;		/* Root of this anon_vma tree */
-	struct rw_semaphore rwsem;	/* W: modification, R: walking the list */
+	struct anon_vma *root;	/* Root of this anon_vma tree */
+	struct mutex mutex;	/* Serialize access to vma list */
 	/*
 	 * The refcount is taken on an anon_vma when there is no
 	 * guarantee that the vma of page tables will exist for
@@ -37,14 +37,14 @@ struct anon_vma {
 	atomic_t refcount;
 
 	/*
-	 * NOTE: the LSB of the rb_root.rb_node is set by
+	 * NOTE: the LSB of the head.next is set by
 	 * mm_take_all_locks() _after_ taking the above lock. So the
-	 * rb_root must only be read/written after taking the above lock
+	 * head must only be read/written after taking the above lock
 	 * to be sure to see a valid next pointer. The LSB bit itself
 	 * is serialized by a system wide lock only visible to
 	 * mm_take_all_locks() (mm_all_locks_mutex).
 	 */
-	struct rb_root rb_root;	/* Interval tree of private "related" vmas */
+	struct list_head head;	/* Chain of private "related" vmas */
 };
 
 /*
@@ -57,18 +57,14 @@ struct anon_vma {
  * with a VMA, or the VMAs associated with an anon_vma.
  * The "same_vma" list contains the anon_vma_chains linking
  * all the anon_vmas associated with this VMA.
- * The "rb" field indexes on an interval tree the anon_vma_chains
+ * The "same_anon_vma" list contains the anon_vma_chains
  * which link all the VMAs associated with this anon_vma.
  */
 struct anon_vma_chain {
 	struct vm_area_struct *vma;
 	struct anon_vma *anon_vma;
 	struct list_head same_vma;   /* locked by mmap_sem & page_table_lock */
-	struct rb_node rb;			/* locked by anon_vma->rwsem */
-	unsigned long rb_subtree_last;
-#ifdef CONFIG_DEBUG_VM_RB
-	unsigned long cached_vma_start, cached_vma_last;
-#endif
+	struct list_head same_anon_vma;	/* locked by anon_vma->mutex */
 };
 
 enum ttu_flags {
@@ -108,36 +104,25 @@ static inline void vma_lock_anon_vma(struct vm_area_struct *vma)
 {
 	struct anon_vma *anon_vma = vma->anon_vma;
 	if (anon_vma)
-		down_write(&anon_vma->root->rwsem);
+		mutex_lock(&anon_vma->root->mutex);
 }
 
 static inline void vma_unlock_anon_vma(struct vm_area_struct *vma)
 {
 	struct anon_vma *anon_vma = vma->anon_vma;
 	if (anon_vma)
-		up_write(&anon_vma->root->rwsem);
+		mutex_unlock(&anon_vma->root->mutex);
 }
 
-static inline void anon_vma_lock_write(struct anon_vma *anon_vma)
+static inline void anon_vma_lock(struct anon_vma *anon_vma)
 {
-	down_write(&anon_vma->root->rwsem);
+	mutex_lock(&anon_vma->root->mutex);
 }
 
-static inline void anon_vma_unlock_write(struct anon_vma *anon_vma)
+static inline void anon_vma_unlock(struct anon_vma *anon_vma)
 {
-	up_write(&anon_vma->root->rwsem);
+	mutex_unlock(&anon_vma->root->mutex);
 }
-
-static inline void anon_vma_lock_read(struct anon_vma *anon_vma)
-{
-	down_read(&anon_vma->root->rwsem);
-}
-
-static inline void anon_vma_unlock_read(struct anon_vma *anon_vma)
-{
-	up_read(&anon_vma->root->rwsem);
-}
-
 
 /*
  * anon_vma helper functions.
@@ -146,6 +131,7 @@ void anon_vma_init(void);	/* create anon_vma_cachep */
 int  anon_vma_prepare(struct vm_area_struct *);
 void unlink_anon_vmas(struct vm_area_struct *);
 int anon_vma_clone(struct vm_area_struct *, struct vm_area_struct *);
+void anon_vma_moveto_tail(struct vm_area_struct *);
 int anon_vma_fork(struct vm_area_struct *, struct vm_area_struct *);
 
 static inline void anon_vma_merge(struct vm_area_struct *vma,
@@ -187,6 +173,8 @@ int page_referenced_one(struct page *, struct vm_area_struct *,
 	unsigned long address, unsigned int *mapcount, unsigned long *vm_flags);
 
 #define TTU_ACTION(x) ((x) & TTU_ACTION_MASK)
+
+bool is_vma_temporary_stack(struct vm_area_struct *vma);
 
 int try_to_unmap(struct page *, enum ttu_flags flags);
 int try_to_unmap_one(struct page *, struct vm_area_struct *,
@@ -231,8 +219,8 @@ int try_to_munlock(struct page *);
 /*
  * Called by memory-failure.c to kill processes.
  */
-struct anon_vma *page_lock_anon_vma_read(struct page *page);
-void page_unlock_anon_vma_read(struct anon_vma *anon_vma);
+struct anon_vma *page_lock_anon_vma(struct page *page);
+void page_unlock_anon_vma(struct anon_vma *anon_vma);
 int page_mapped_in_vma(struct page *page, struct vm_area_struct *vma);
 
 /*

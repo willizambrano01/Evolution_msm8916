@@ -5,7 +5,7 @@
  *  protocol extension to H4.
  *
  *  Copyright (C) 2007 Texas Instruments, Inc.
- *  Copyright (c) 2010, 2012, 2014, The Linux Foundation. All rights reserved.
+ *  Copyright (c) 2010, 2012 The Linux Foundation. All rights reserved.
  *
  *  Acknowledgements:
  *  This file is based on hci_ll.c, which was...
@@ -50,7 +50,7 @@
 #include <linux/serial_core.h>
 
 #ifdef CONFIG_SERIAL_MSM_HS
-#include <linux/platform_data/msm_serial_hs.h>
+#include <mach/msm_serial_hs.h>
 #endif
 
 #include <net/bluetooth/bluetooth.h>
@@ -62,9 +62,6 @@
 #define HCI_IBS_SLEEP_IND	0xFE
 #define HCI_IBS_WAKE_IND	0xFD
 #define HCI_IBS_WAKE_ACK	0xFC
-
-/* TX idle time out value */
-#define TX_IDLE_TO		1000
 
 /* HCI_IBS receiver States */
 #define HCI_IBS_W4_PACKET_TYPE	0
@@ -273,7 +270,7 @@ static void ibs_wq_awake_device(struct work_struct *work)
 	ibs->ibs_sent_wakes++; /* debug */
 
 	/* start retransmit timer */
-	mod_timer(&ibs->wake_retrans_timer, jiffies + msecs_to_jiffies(10));
+	mod_timer(&ibs->wake_retrans_timer, jiffies + wake_retrans);
 
 	spin_unlock_irqrestore(&ibs->hci_ibs_lock, flags);
 
@@ -659,8 +656,7 @@ static void ibs_device_woke_up(struct hci_uart *hu)
 			skb_queue_tail(&ibs->txq, skb);
 		/* switch timers and change state to HCI_IBS_TX_AWAKE */
 		del_timer(&ibs->wake_retrans_timer);
-		mod_timer(&ibs->tx_idle_timer, jiffies +
-			msecs_to_jiffies(TX_IDLE_TO));
+		mod_timer(&ibs->tx_idle_timer, jiffies + tx_idle_delay);
 		ibs->tx_ibs_state = HCI_IBS_TX_AWAKE;
 	}
 
@@ -690,8 +686,7 @@ static int ibs_enqueue(struct hci_uart *hu, struct sk_buff *skb)
 	case HCI_IBS_TX_AWAKE:
 		BT_DBG("device awake, sending normally");
 		skb_queue_tail(&ibs->txq, skb);
-		mod_timer(&ibs->tx_idle_timer, jiffies +
-			msecs_to_jiffies(TX_IDLE_TO));
+		mod_timer(&ibs->tx_idle_timer, jiffies + tx_idle_delay);
 		break;
 
 	case HCI_IBS_TX_ASLEEP:
@@ -807,7 +802,7 @@ static int ibs_recv(struct hci_uart *hu, void *data, int count)
 		}
 
 		/* HCI_IBS_W4_PACKET_TYPE */
-		switch ((unsigned char) *ptr) {
+		switch (*ptr) {
 		case HCI_EVENT_PKT:
 			BT_DBG("Event packet");
 			ibs->rx_state = HCI_IBS_W4_EVENT_HDR;

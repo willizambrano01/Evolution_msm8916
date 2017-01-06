@@ -36,13 +36,7 @@
 struct posix_acl_entry {
 	short			e_tag;
 	unsigned short		e_perm;
-	union {
-		kuid_t		e_uid;
-		kgid_t		e_gid;
-#ifndef CONFIG_UIDGID_STRICT_TYPE_CHECKS
-		unsigned int	e_id;
-#endif
-	};
+	unsigned int		e_id;
 };
 
 struct posix_acl {

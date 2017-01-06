@@ -112,12 +112,14 @@ struct aw2 {
 /*********************************
  * FUNCTION DECLARATIONS
  ********************************/
+static int __init alsa_card_aw2_init(void);
+static void __exit alsa_card_aw2_exit(void);
 static int snd_aw2_dev_free(struct snd_device *device);
-static int snd_aw2_create(struct snd_card *card,
-			  struct pci_dev *pci, struct aw2 **rchip);
-static int snd_aw2_probe(struct pci_dev *pci,
-			 const struct pci_device_id *pci_id);
-static void snd_aw2_remove(struct pci_dev *pci);
+static int __devinit snd_aw2_create(struct snd_card *card,
+				    struct pci_dev *pci, struct aw2 **rchip);
+static int __devinit snd_aw2_probe(struct pci_dev *pci,
+				   const struct pci_device_id *pci_id);
+static void __devexit snd_aw2_remove(struct pci_dev *pci);
 static int snd_aw2_pcm_playback_open(struct snd_pcm_substream *substream);
 static int snd_aw2_pcm_playback_close(struct snd_pcm_substream *substream);
 static int snd_aw2_pcm_capture_open(struct snd_pcm_substream *substream);
@@ -135,7 +137,7 @@ static snd_pcm_uframes_t snd_aw2_pcm_pointer_playback(struct snd_pcm_substream
 						      *substream);
 static snd_pcm_uframes_t snd_aw2_pcm_pointer_capture(struct snd_pcm_substream
 						     *substream);
-static int snd_aw2_new_pcm(struct aw2 *chip);
+static int __devinit snd_aw2_new_pcm(struct aw2 *chip);
 
 static int snd_aw2_control_switch_capture_info(struct snd_kcontrol *kcontrol,
 					       struct snd_ctl_elem_info *uinfo);
@@ -169,14 +171,12 @@ static DEFINE_PCI_DEVICE_TABLE(snd_aw2_ids) = {
 MODULE_DEVICE_TABLE(pci, snd_aw2_ids);
 
 /* pci_driver definition */
-static struct pci_driver aw2_driver = {
+static struct pci_driver driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = snd_aw2_ids,
 	.probe = snd_aw2_probe,
-	.remove = snd_aw2_remove,
+	.remove = __devexit_p(snd_aw2_remove),
 };
-
-module_pci_driver(aw2_driver);
 
 /* operators for playback PCM alsa interface */
 static struct snd_pcm_ops snd_aw2_playback_ops = {
@@ -202,7 +202,7 @@ static struct snd_pcm_ops snd_aw2_capture_ops = {
 	.pointer = snd_aw2_pcm_pointer_capture,
 };
 
-static struct snd_kcontrol_new aw2_control = {
+static struct snd_kcontrol_new aw2_control __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "PCM Capture Route",
 	.index = 0,
@@ -216,6 +216,23 @@ static struct snd_kcontrol_new aw2_control = {
 /*********************************
  * FUNCTION IMPLEMENTATIONS
  ********************************/
+
+/* initialization of the module */
+static int __init alsa_card_aw2_init(void)
+{
+	snd_printdd(KERN_DEBUG "aw2: Load aw2 module\n");
+	return pci_register_driver(&driver);
+}
+
+/* clean up the module */
+static void __exit alsa_card_aw2_exit(void)
+{
+	snd_printdd(KERN_DEBUG "aw2: Unload aw2 module\n");
+	pci_unregister_driver(&driver);
+}
+
+module_init(alsa_card_aw2_init);
+module_exit(alsa_card_aw2_exit);
 
 /* component-destructor */
 static int snd_aw2_dev_free(struct snd_device *device)
@@ -242,8 +259,8 @@ static int snd_aw2_dev_free(struct snd_device *device)
 }
 
 /* chip-specific constructor */
-static int snd_aw2_create(struct snd_card *card,
-			  struct pci_dev *pci, struct aw2 **rchip)
+static int __devinit snd_aw2_create(struct snd_card *card,
+				    struct pci_dev *pci, struct aw2 **rchip)
 {
 	struct aw2 *chip;
 	int err;
@@ -332,8 +349,8 @@ static int snd_aw2_create(struct snd_card *card,
 }
 
 /* constructor */
-static int snd_aw2_probe(struct pci_dev *pci,
-			 const struct pci_device_id *pci_id)
+static int __devinit snd_aw2_probe(struct pci_dev *pci,
+				   const struct pci_device_id *pci_id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -389,7 +406,7 @@ static int snd_aw2_probe(struct pci_dev *pci,
 }
 
 /* destructor */
-static void snd_aw2_remove(struct pci_dev *pci)
+static void __devexit snd_aw2_remove(struct pci_dev *pci)
 {
 	snd_card_free(pci_get_drvdata(pci));
 	pci_set_drvdata(pci, NULL);
@@ -591,7 +608,7 @@ static snd_pcm_uframes_t snd_aw2_pcm_pointer_capture(struct snd_pcm_substream
 }
 
 /* create a pcm device */
-static int snd_aw2_new_pcm(struct aw2 *chip)
+static int __devinit snd_aw2_new_pcm(struct aw2 *chip)
 {
 	struct snd_pcm *pcm_playback_ana;
 	struct snd_pcm *pcm_playback_num;

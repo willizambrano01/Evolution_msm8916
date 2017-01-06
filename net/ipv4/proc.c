@@ -125,7 +125,6 @@ static const struct snmp_mib snmp4_ipextstats_list[] = {
 	SNMP_MIB_ITEM("OutMcastOctets", IPSTATS_MIB_OUTMCASTOCTETS),
 	SNMP_MIB_ITEM("InBcastOctets", IPSTATS_MIB_INBCASTOCTETS),
 	SNMP_MIB_ITEM("OutBcastOctets", IPSTATS_MIB_OUTBCASTOCTETS),
-	SNMP_MIB_ITEM("InCsumErrors", IPSTATS_MIB_CSUMERRORS),
 	SNMP_MIB_SENTINEL
 };
 
@@ -163,7 +162,6 @@ static const struct snmp_mib snmp4_tcp_list[] = {
 	SNMP_MIB_ITEM("RetransSegs", TCP_MIB_RETRANSSEGS),
 	SNMP_MIB_ITEM("InErrs", TCP_MIB_INERRS),
 	SNMP_MIB_ITEM("OutRsts", TCP_MIB_OUTRSTS),
-	SNMP_MIB_ITEM("InCsumErrors", TCP_MIB_CSUMERRORS),
 	SNMP_MIB_SENTINEL
 };
 
@@ -174,7 +172,6 @@ static const struct snmp_mib snmp4_udp_list[] = {
 	SNMP_MIB_ITEM("OutDatagrams", UDP_MIB_OUTDATAGRAMS),
 	SNMP_MIB_ITEM("RcvbufErrors", UDP_MIB_RCVBUFERRORS),
 	SNMP_MIB_ITEM("SndbufErrors", UDP_MIB_SNDBUFERRORS),
-	SNMP_MIB_ITEM("InCsumErrors", UDP_MIB_CSUMERRORS),
 	SNMP_MIB_SENTINEL
 };
 
@@ -227,8 +224,6 @@ static const struct snmp_mib snmp4_net_list[] = {
 	SNMP_MIB_ITEM("TCPForwardRetrans", LINUX_MIB_TCPFORWARDRETRANS),
 	SNMP_MIB_ITEM("TCPSlowStartRetrans", LINUX_MIB_TCPSLOWSTARTRETRANS),
 	SNMP_MIB_ITEM("TCPTimeouts", LINUX_MIB_TCPTIMEOUTS),
-	SNMP_MIB_ITEM("TCPLossProbes", LINUX_MIB_TCPLOSSPROBES),
-	SNMP_MIB_ITEM("TCPLossProbeRecovery", LINUX_MIB_TCPLOSSPROBERECOVERY),
 	SNMP_MIB_ITEM("TCPRenoRecoveryFail", LINUX_MIB_TCPRENORECOVERYFAIL),
 	SNMP_MIB_ITEM("TCPSackRecoveryFail", LINUX_MIB_TCPSACKRECOVERYFAIL),
 	SNMP_MIB_ITEM("TCPSchedulerFailed", LINUX_MIB_TCPSCHEDULERFAILED),
@@ -262,17 +257,8 @@ static const struct snmp_mib snmp4_net_list[] = {
 	SNMP_MIB_ITEM("TCPReqQFullDrop", LINUX_MIB_TCPREQQFULLDROP),
 	SNMP_MIB_ITEM("TCPRetransFail", LINUX_MIB_TCPRETRANSFAIL),
 	SNMP_MIB_ITEM("TCPRcvCoalesce", LINUX_MIB_TCPRCVCOALESCE),
-	SNMP_MIB_ITEM("TCPOFOQueue", LINUX_MIB_TCPOFOQUEUE),
-	SNMP_MIB_ITEM("TCPOFODrop", LINUX_MIB_TCPOFODROP),
-	SNMP_MIB_ITEM("TCPOFOMerge", LINUX_MIB_TCPOFOMERGE),
 	SNMP_MIB_ITEM("TCPChallengeACK", LINUX_MIB_TCPCHALLENGEACK),
 	SNMP_MIB_ITEM("TCPSYNChallenge", LINUX_MIB_TCPSYNCHALLENGE),
-	SNMP_MIB_ITEM("TCPFastOpenActive", LINUX_MIB_TCPFASTOPENACTIVE),
-	SNMP_MIB_ITEM("TCPFastOpenPassive", LINUX_MIB_TCPFASTOPENPASSIVE),
-	SNMP_MIB_ITEM("TCPFastOpenPassiveFail", LINUX_MIB_TCPFASTOPENPASSIVEFAIL),
-	SNMP_MIB_ITEM("TCPFastOpenListenOverflow", LINUX_MIB_TCPFASTOPENLISTENOVERFLOW),
-	SNMP_MIB_ITEM("TCPFastOpenCookieReqd", LINUX_MIB_TCPFASTOPENCOOKIEREQD),
-	SNMP_MIB_ITEM("TCPSpuriousRtxHostQueues", LINUX_MIB_TCPSPURIOUS_RTX_HOSTQUEUES),
 	SNMP_MIB_SENTINEL
 };
 
@@ -325,16 +311,15 @@ static void icmp_put(struct seq_file *seq)
 	struct net *net = seq->private;
 	atomic_long_t *ptr = net->mib.icmpmsg_statistics->mibs;
 
-	seq_puts(seq, "\nIcmp: InMsgs InErrors InCsumErrors");
+	seq_puts(seq, "\nIcmp: InMsgs InErrors");
 	for (i=0; icmpmibmap[i].name != NULL; i++)
 		seq_printf(seq, " In%s", icmpmibmap[i].name);
 	seq_printf(seq, " OutMsgs OutErrors");
 	for (i=0; icmpmibmap[i].name != NULL; i++)
 		seq_printf(seq, " Out%s", icmpmibmap[i].name);
-	seq_printf(seq, "\nIcmp: %lu %lu %lu",
+	seq_printf(seq, "\nIcmp: %lu %lu",
 		snmp_fold_field((void __percpu **) net->mib.icmp_statistics, ICMP_MIB_INMSGS),
-		snmp_fold_field((void __percpu **) net->mib.icmp_statistics, ICMP_MIB_INERRORS),
-		snmp_fold_field((void __percpu **) net->mib.icmp_statistics, ICMP_MIB_CSUMERRORS));
+		snmp_fold_field((void __percpu **) net->mib.icmp_statistics, ICMP_MIB_INERRORS));
 	for (i=0; icmpmibmap[i].name != NULL; i++)
 		seq_printf(seq, " %lu",
 			   atomic_long_read(ptr + icmpmibmap[i].index));
@@ -478,29 +463,28 @@ static const struct file_operations netstat_seq_fops = {
 
 static __net_init int ip_proc_init_net(struct net *net)
 {
-	if (!proc_create("sockstat", S_IRUGO, net->proc_net,
-			 &sockstat_seq_fops))
+	if (!proc_net_fops_create(net, "sockstat", S_IRUGO, &sockstat_seq_fops))
 		goto out_sockstat;
-	if (!proc_create("netstat", S_IRUGO, net->proc_net, &netstat_seq_fops))
+	if (!proc_net_fops_create(net, "netstat", S_IRUGO, &netstat_seq_fops))
 		goto out_netstat;
-	if (!proc_create("snmp", S_IRUGO, net->proc_net, &snmp_seq_fops))
+	if (!proc_net_fops_create(net, "snmp", S_IRUGO, &snmp_seq_fops))
 		goto out_snmp;
 
 	return 0;
 
 out_snmp:
-	remove_proc_entry("netstat", net->proc_net);
+	proc_net_remove(net, "netstat");
 out_netstat:
-	remove_proc_entry("sockstat", net->proc_net);
+	proc_net_remove(net, "sockstat");
 out_sockstat:
 	return -ENOMEM;
 }
 
 static __net_exit void ip_proc_exit_net(struct net *net)
 {
-	remove_proc_entry("snmp", net->proc_net);
-	remove_proc_entry("netstat", net->proc_net);
-	remove_proc_entry("sockstat", net->proc_net);
+	proc_net_remove(net, "snmp");
+	proc_net_remove(net, "netstat");
+	proc_net_remove(net, "sockstat");
 }
 
 static __net_initdata struct pernet_operations ip_proc_ops = {

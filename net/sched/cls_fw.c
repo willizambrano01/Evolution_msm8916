@@ -192,7 +192,7 @@ static const struct nla_policy fw_policy[TCA_FW_MAX + 1] = {
 };
 
 static int
-fw_change_attrs(struct net *net, struct tcf_proto *tp, struct fw_filter *f,
+fw_change_attrs(struct tcf_proto *tp, struct fw_filter *f,
 	struct nlattr **tb, struct nlattr **tca, unsigned long base)
 {
 	struct fw_head *head = (struct fw_head *)tp->root;
@@ -200,10 +200,11 @@ fw_change_attrs(struct net *net, struct tcf_proto *tp, struct fw_filter *f,
 	u32 mask;
 	int err;
 
-	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &e, &fw_ext_map);
+	err = tcf_exts_validate(tp, tb, tca[TCA_RATE], &e, &fw_ext_map);
 	if (err < 0)
 		return err;
 
+	err = -EINVAL;
 	if (tb[TCA_FW_CLASSID]) {
 		f->res.classid = nla_get_u32(tb[TCA_FW_CLASSID]);
 		tcf_bind_filter(tp, &f->res, base);
@@ -217,7 +218,6 @@ fw_change_attrs(struct net *net, struct tcf_proto *tp, struct fw_filter *f,
 	}
 #endif /* CONFIG_NET_CLS_IND */
 
-	err = -EINVAL;
 	if (tb[TCA_FW_MASK]) {
 		mask = nla_get_u32(tb[TCA_FW_MASK]);
 		if (mask != head->mask)
@@ -233,8 +233,7 @@ errout:
 	return err;
 }
 
-static int fw_change(struct net *net, struct sk_buff *in_skb,
-		     struct tcf_proto *tp, unsigned long base,
+static int fw_change(struct tcf_proto *tp, unsigned long base,
 		     u32 handle,
 		     struct nlattr **tca,
 		     unsigned long *arg)
@@ -255,7 +254,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 	if (f != NULL) {
 		if (f->id != handle && handle)
 			return -EINVAL;
-		return fw_change_attrs(net, tp, f, tb, tca, base);
+		return fw_change_attrs(tp, f, tb, tca, base);
 	}
 
 	if (!handle)
@@ -282,7 +281,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 
 	f->id = handle;
 
-	err = fw_change_attrs(net, tp, f, tb, tca, base);
+	err = fw_change_attrs(tp, f, tb, tca, base);
 	if (err < 0)
 		goto errout;
 
@@ -347,17 +346,14 @@ static int fw_dump(struct tcf_proto *tp, unsigned long fh,
 	if (nest == NULL)
 		goto nla_put_failure;
 
-	if (f->res.classid &&
-	    nla_put_u32(skb, TCA_FW_CLASSID, f->res.classid))
-		goto nla_put_failure;
+	if (f->res.classid)
+		NLA_PUT_U32(skb, TCA_FW_CLASSID, f->res.classid);
 #ifdef CONFIG_NET_CLS_IND
-	if (strlen(f->indev) &&
-	    nla_put_string(skb, TCA_FW_INDEV, f->indev))
-		goto nla_put_failure;
+	if (strlen(f->indev))
+		NLA_PUT_STRING(skb, TCA_FW_INDEV, f->indev);
 #endif /* CONFIG_NET_CLS_IND */
-	if (head->mask != 0xFFFFFFFF &&
-	    nla_put_u32(skb, TCA_FW_MASK, head->mask))
-		goto nla_put_failure;
+	if (head->mask != 0xFFFFFFFF)
+		NLA_PUT_U32(skb, TCA_FW_MASK, head->mask);
 
 	if (tcf_exts_dump(skb, &f->exts, &fw_ext_map) < 0)
 		goto nla_put_failure;

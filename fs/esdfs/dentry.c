@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1998-2014 Erez Zadok
+ * Copyright (c) 1998-2013 Erez Zadok
  * Copyright (c) 2009	   Shrikar Archak
- * Copyright (c) 2003-2014 Stony Brook University
- * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2003-2013 Stony Brook University
+ * Copyright (c) 2003-2013 The Research Foundation of SUNY
  * Copyright (C) 2013-2014 Motorola Mobility, LLC
  *
  * This program is free software; you can redistribute it and/or modify
@@ -18,7 +18,7 @@
  *          0: tell VFS to invalidate dentry
  *          1: dentry is valid
  */
-static int esdfs_d_revalidate(struct dentry *dentry, unsigned int flags)
+static int esdfs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 {
 	struct path lower_path;
 	struct path lower_parent_path;
@@ -27,7 +27,7 @@ static int esdfs_d_revalidate(struct dentry *dentry, unsigned int flags)
 	struct dentry *lower_parent_dentry = NULL;
 	int err = 1;
 
-	if (flags & LOOKUP_RCU)
+	if (nd && (nd->flags & LOOKUP_RCU))
 		return -ECHILD;
 
 	/* short-circuit if it's root */

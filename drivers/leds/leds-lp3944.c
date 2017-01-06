@@ -86,7 +86,7 @@ static int lp3944_reg_read(struct i2c_client *client, u8 reg, u8 *value)
 
 	tmp = i2c_smbus_read_byte_data(client, reg);
 	if (tmp < 0)
-		return tmp;
+		return -EINVAL;
 
 	*value = tmp;
 
@@ -374,7 +374,7 @@ exit:
 	return err;
 }
 
-static int lp3944_probe(struct i2c_client *client,
+static int __devinit lp3944_probe(struct i2c_client *client,
 				  const struct i2c_device_id *id)
 {
 	struct lp3944_platform_data *lp3944_pdata = client->dev.platform_data;
@@ -393,8 +393,7 @@ static int lp3944_probe(struct i2c_client *client,
 		return -ENODEV;
 	}
 
-	data = devm_kzalloc(&client->dev, sizeof(struct lp3944_data),
-			GFP_KERNEL);
+	data = kzalloc(sizeof(struct lp3944_data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 
@@ -404,14 +403,16 @@ static int lp3944_probe(struct i2c_client *client,
 	mutex_init(&data->lock);
 
 	err = lp3944_configure(client, data, lp3944_pdata);
-	if (err < 0)
+	if (err < 0) {
+		kfree(data);
 		return err;
+	}
 
 	dev_info(&client->dev, "lp3944 enabled\n");
 	return 0;
 }
 
-static int lp3944_remove(struct i2c_client *client)
+static int __devexit lp3944_remove(struct i2c_client *client)
 {
 	struct lp3944_platform_data *pdata = client->dev.platform_data;
 	struct lp3944_data *data = i2c_get_clientdata(client);
@@ -430,6 +431,8 @@ static int lp3944_remove(struct i2c_client *client)
 			break;
 		}
 
+	kfree(data);
+
 	return 0;
 }
 
@@ -446,7 +449,7 @@ static struct i2c_driver lp3944_driver = {
 		   .name = "lp3944",
 	},
 	.probe    = lp3944_probe,
-	.remove   = lp3944_remove,
+	.remove   = __devexit_p(lp3944_remove),
 	.id_table = lp3944_id,
 };
 

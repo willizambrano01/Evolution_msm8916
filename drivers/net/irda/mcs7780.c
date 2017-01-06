@@ -920,10 +920,8 @@ static int mcs_probe(struct usb_interface *intf,
 
 	ndev->netdev_ops = &mcs_netdev_ops;
 
-	if (!intf->cur_altsetting) {
-		ret = -ENOMEM;
+	if (!intf->cur_altsetting)
 		goto error2;
-	}
 
 	ret = mcs_find_endpoints(mcs, intf->cur_altsetting->endpoint,
 				 intf->cur_altsetting->desc.bNumEndpoints);

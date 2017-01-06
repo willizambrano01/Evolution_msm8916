@@ -90,40 +90,6 @@ TRACE_EVENT(cpu_frequency_switch_end,
 	TP_printk("cpu_id=%lu", (unsigned long)__entry->cpu_id)
 );
 
-DECLARE_EVENT_CLASS(set,
-	TP_PROTO(u32 cpu_id, unsigned long currfreq,
-			unsigned long load),
-	TP_ARGS(cpu_id, currfreq, load),
-
-	TP_STRUCT__entry(
-	    __field(u32, cpu_id)
-	    __field(unsigned long, currfreq)
-	    __field(unsigned long, load)
-	),
-
-	TP_fast_assign(
-	    __entry->cpu_id = (u32) cpu_id;
-	    __entry->currfreq = currfreq;
-	    __entry->load = load;
-	),
-
-	TP_printk("cpu=%u currfreq=%lu load=%lu",
-	      __entry->cpu_id, __entry->currfreq,
-	      __entry->load)
-);
-
-DEFINE_EVENT(set, cpufreq_sampling_event,
-	TP_PROTO(u32 cpu_id, unsigned long currfreq,
-		unsigned long load),
-	TP_ARGS(cpu_id, currfreq, load)
-);
-
-DEFINE_EVENT(set, cpufreq_freq_synced,
-	TP_PROTO(u32 cpu_id, unsigned long currfreq,
-		unsigned long load),
-	TP_ARGS(cpu_id, currfreq, load)
-);
-
 TRACE_EVENT(machine_suspend,
 
 	TP_PROTO(unsigned int state),
@@ -174,6 +140,98 @@ DEFINE_EVENT(wakeup_source, wakeup_source_deactivate,
 
 	TP_ARGS(name, state)
 );
+
+#ifdef CONFIG_EVENT_POWER_TRACING_DEPRECATED
+
+/*
+ * The power events are used for cpuidle & suspend (power_start, power_end)
+ *  and for cpufreq (power_frequency)
+ */
+DECLARE_EVENT_CLASS(power,
+
+	TP_PROTO(unsigned int type, unsigned int state, unsigned int cpu_id),
+
+	TP_ARGS(type, state, cpu_id),
+
+	TP_STRUCT__entry(
+		__field(	u64,		type		)
+		__field(	u64,		state		)
+		__field(	u64,		cpu_id		)
+	),
+
+	TP_fast_assign(
+		__entry->type = type;
+		__entry->state = state;
+		__entry->cpu_id = cpu_id;
+	),
+
+	TP_printk("type=%lu state=%lu cpu_id=%lu", (unsigned long)__entry->type,
+		(unsigned long)__entry->state, (unsigned long)__entry->cpu_id)
+);
+
+DEFINE_EVENT(power, power_start,
+
+	TP_PROTO(unsigned int type, unsigned int state, unsigned int cpu_id),
+
+	TP_ARGS(type, state, cpu_id)
+);
+
+DEFINE_EVENT(power, power_frequency,
+
+	TP_PROTO(unsigned int type, unsigned int state, unsigned int cpu_id),
+
+	TP_ARGS(type, state, cpu_id)
+);
+
+TRACE_EVENT(power_end,
+
+	TP_PROTO(unsigned int cpu_id),
+
+	TP_ARGS(cpu_id),
+
+	TP_STRUCT__entry(
+		__field(	u64,		cpu_id		)
+	),
+
+	TP_fast_assign(
+		__entry->cpu_id = cpu_id;
+	),
+
+	TP_printk("cpu_id=%lu", (unsigned long)__entry->cpu_id)
+
+);
+
+/* Deprecated dummy functions must be protected against multi-declartion */
+#ifndef _PWR_EVENT_AVOID_DOUBLE_DEFINING_DEPRECATED
+#define _PWR_EVENT_AVOID_DOUBLE_DEFINING_DEPRECATED
+
+enum {
+	POWER_NONE = 0,
+	POWER_CSTATE = 1,
+	POWER_PSTATE = 2,
+};
+#endif /* _PWR_EVENT_AVOID_DOUBLE_DEFINING_DEPRECATED */
+
+#else /* CONFIG_EVENT_POWER_TRACING_DEPRECATED */
+
+#ifndef _PWR_EVENT_AVOID_DOUBLE_DEFINING_DEPRECATED
+#define _PWR_EVENT_AVOID_DOUBLE_DEFINING_DEPRECATED
+enum {
+       POWER_NONE = 0,
+       POWER_CSTATE = 1,
+       POWER_PSTATE = 2,
+};
+
+/* These dummy declaration have to be ripped out when the deprecated
+   events get removed */
+static inline void trace_power_start(u64 type, u64 state, u64 cpuid) {};
+static inline void trace_power_end(u64 cpuid) {};
+static inline void trace_power_start_rcuidle(u64 type, u64 state, u64 cpuid) {};
+static inline void trace_power_end_rcuidle(u64 cpuid) {};
+static inline void trace_power_frequency(u64 type, u64 state, u64 cpuid) {};
+#endif /* _PWR_EVENT_AVOID_DOUBLE_DEFINING_DEPRECATED */
+
+#endif /* CONFIG_EVENT_POWER_TRACING_DEPRECATED */
 
 /*
  * The clock events are used for clock enable/disable and for
@@ -272,80 +330,6 @@ DEFINE_EVENT(power_domain, power_domain_target,
 
 	TP_ARGS(name, state, cpu_id)
 );
-
-DECLARE_EVENT_CLASS(kpm_module,
-
-	TP_PROTO(unsigned int managed_cpus, unsigned int max_cpus),
-
-	TP_ARGS(managed_cpus, max_cpus),
-
-	TP_STRUCT__entry(
-		__field(u32, managed_cpus)
-		__field(u32, max_cpus)
-	),
-
-	TP_fast_assign(
-		__entry->managed_cpus = managed_cpus;
-		__entry->max_cpus = max_cpus;
-	),
-
-	TP_printk("managed:%x max_cpus=%u", (unsigned int)__entry->managed_cpus,
-					(unsigned int)__entry->max_cpus)
-);
-
-DEFINE_EVENT(kpm_module, set_max_cpus,
-	TP_PROTO(unsigned int managed_cpus, unsigned int max_cpus),
-	TP_ARGS(managed_cpus, max_cpus)
-);
-
-DEFINE_EVENT(kpm_module, reevaluate_hotplug,
-	TP_PROTO(unsigned int managed_cpus, unsigned int max_cpus),
-	TP_ARGS(managed_cpus, max_cpus)
-);
-
-TRACE_EVENT(core_ctl_eval_need,
-
-	TP_PROTO(unsigned int cpu, unsigned int old_need,
-		 unsigned int new_need, unsigned int updated),
-	TP_ARGS(cpu, old_need, new_need, updated),
-	TP_STRUCT__entry(
-		__field(u32, cpu)
-		__field(u32, old_need)
-		__field(u32, new_need)
-		__field(u32, updated)
-	),
-	TP_fast_assign(
-		__entry->cpu = cpu;
-		__entry->old_need = old_need;
-		__entry->new_need = new_need;
-		__entry->updated = updated;
-	),
-	TP_printk("cpu=%u, old_need=%u, new_need=%u, updated=%u", __entry->cpu,
-		  __entry->old_need, __entry->new_need, __entry->updated)
-);
-
-TRACE_EVENT(core_ctl_set_busy,
-
-	TP_PROTO(unsigned int cpu, unsigned int busy,
-		 unsigned int old_is_busy, unsigned int is_busy),
-	TP_ARGS(cpu, busy, old_is_busy, is_busy),
-	TP_STRUCT__entry(
-		__field(u32, cpu)
-		__field(u32, busy)
-		__field(u32, old_is_busy)
-		__field(u32, is_busy)
-	),
-	TP_fast_assign(
-		__entry->cpu = cpu;
-		__entry->busy = busy;
-		__entry->old_is_busy = old_is_busy;
-		__entry->is_busy = is_busy;
-	),
-	TP_printk("cpu=%u, busy=%u, old_is_busy=%u, new_is_busy=%u",
-		  __entry->cpu, __entry->busy, __entry->old_is_busy,
-		  __entry->is_busy)
-);
-
 #endif /* _TRACE_POWER_H */
 
 /* This part must be outside protection */

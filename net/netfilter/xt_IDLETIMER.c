@@ -74,7 +74,6 @@ struct idletimer_tg {
 	bool work_pending;
 	bool send_nl_msg;
 	bool active;
-	bool suspend_time_valid;
 	uid_t uid;
 };
 
@@ -165,8 +164,6 @@ static void notify_netlink_uevent(const char *iface, struct idletimer_tg *timer)
 		 timestamp_msg, uid_msg);
 	kobject_uevent_env(idletimer_tg_kobj, KOBJ_CHANGE, envp);
 	return;
-
-
 }
 
 static
@@ -245,13 +242,8 @@ static int idletimer_resume(struct notifier_block *notifier,
 	switch (pm_event) {
 	case PM_SUSPEND_PREPARE:
 		get_monotonic_boottime(&timer->last_suspend_time);
-		timer->suspend_time_valid = true;
 		break;
 	case PM_POST_SUSPEND:
-		if (!timer->suspend_time_valid)
-			break;
-		timer->suspend_time_valid = false;
-
 		spin_lock_bh(&timestamp_lock);
 		if (!timer->active) {
 			spin_unlock_bh(&timestamp_lock);
@@ -286,7 +278,7 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 {
 	int ret;
 
-	info->timer = kzalloc(sizeof(*info->timer), GFP_KERNEL);
+	info->timer = kmalloc(sizeof(*info->timer), GFP_KERNEL);
 	if (!info->timer) {
 		ret = -ENOMEM;
 		goto out;
@@ -386,23 +378,13 @@ static void reset_timer(const struct idletimer_tg_info *info,
  * The actual xt_tables plugin.
  */
 static unsigned int idletimer_tg_target(struct sk_buff *skb,
-					 const struct xt_action_param *par)
+		const struct xt_action_param *par)
 {
 	const struct idletimer_tg_info *info = par->targinfo;
-	unsigned long now = jiffies;
-
 	pr_debug("resetting timer %s, timeout period %u\n",
 		 info->label, info->timeout);
 
 	BUG_ON(!info->timer);
-
-	info->timer->active = true;
-
-	if (time_before(info->timer->timer.expires, now)) {
-		schedule_work(&info->timer->work);
-		pr_debug("Starting timer %s (Expired, Jiffies): %lu, %lu\n",
-			 info->label, info->timer->timer.expires, now);
-	}
 
 	/* TODO: Avoid modifying timers on each packet */
 	reset_timer(info, skb);
@@ -413,7 +395,6 @@ static int idletimer_tg_checkentry(const struct xt_tgchk_param *par)
 {
 	struct idletimer_tg_info *info = par->targinfo;
 	int ret;
-
 	pr_debug("checkentry targinfo %s\n", info->label);
 
 	if (info->timeout == 0) {
@@ -444,9 +425,7 @@ static int idletimer_tg_checkentry(const struct xt_tgchk_param *par)
 			return ret;
 		}
 	}
-
 	mutex_unlock(&list_mutex);
-
 	return 0;
 }
 
@@ -463,7 +442,6 @@ static void idletimer_tg_destroy(const struct xt_tgdtor_param *par)
 
 		list_del(&info->timer->entry);
 		del_timer_sync(&info->timer->timer);
-		cancel_work_sync(&info->timer->work);
 		sysfs_remove_file(idletimer_tg_kobj, &info->timer->attr.attr);
 		unregister_pm_notifier(&info->timer->pm_nb);
 		kfree(info->timer->attr.attr.name);

@@ -18,16 +18,22 @@
 #include <linux/rcupdate.h>
 
 
-#if IS_ENABLED(CONFIG_NETPRIO_CGROUP)
 struct netprio_map {
 	struct rcu_head rcu;
 	u32 priomap_len;
 	u32 priomap[];
 };
 
+#ifdef CONFIG_CGROUPS
+
 struct cgroup_netprio_state {
 	struct cgroup_subsys_state css;
+	u32 prioidx;
 };
+
+#ifndef CONFIG_NETPRIO_CGROUP
+extern int net_prio_subsys_id;
+#endif
 
 extern void sock_update_netprioidx(struct sock *sk);
 
@@ -35,12 +41,13 @@ extern void sock_update_netprioidx(struct sock *sk);
 
 static inline u32 task_netprioidx(struct task_struct *p)
 {
-	struct cgroup_subsys_state *css;
+	struct cgroup_netprio_state *state;
 	u32 idx;
 
 	rcu_read_lock();
-	css = task_subsys_state(p, net_prio_subsys_id);
-	idx = css->cgroup->id;
+	state = container_of(task_subsys_state(p, net_prio_subsys_id),
+			     struct cgroup_netprio_state, css);
+	idx = state->prioidx;
 	rcu_read_unlock();
 	return idx;
 }
@@ -49,27 +56,33 @@ static inline u32 task_netprioidx(struct task_struct *p)
 
 static inline u32 task_netprioidx(struct task_struct *p)
 {
-	struct cgroup_subsys_state *css;
+	struct cgroup_netprio_state *state;
+	int subsys_id;
 	u32 idx = 0;
 
 	rcu_read_lock();
-	css = task_subsys_state(p, net_prio_subsys_id);
-	if (css)
-		idx = css->cgroup->id;
+	subsys_id = rcu_dereference_index_check(net_prio_subsys_id,
+						rcu_read_lock_held());
+	if (subsys_id >= 0) {
+		state = container_of(task_subsys_state(p, subsys_id),
+				     struct cgroup_netprio_state, css);
+		idx = state->prioidx;
+	}
 	rcu_read_unlock();
 	return idx;
 }
-#endif
 
-#else /* !CONFIG_NETPRIO_CGROUP */
+#else
 
 static inline u32 task_netprioidx(struct task_struct *p)
 {
 	return 0;
 }
 
-#define sock_update_netprioidx(sk)
-
 #endif /* CONFIG_NETPRIO_CGROUP */
+
+#else
+#define sock_update_netprioidx(sk)
+#endif
 
 #endif  /* _NET_CLS_CGROUP_H */

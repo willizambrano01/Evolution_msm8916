@@ -231,12 +231,12 @@ static void bluecard_write_wakeup(bluecard_info_t *info)
 	}
 
 	do {
-		unsigned int iobase = info->p_dev->resource[0]->start;
-		unsigned int offset;
-		unsigned char command;
-		unsigned long ready_bit;
+		register unsigned int iobase = info->p_dev->resource[0]->start;
+		register unsigned int offset;
+		register unsigned char command;
+		register unsigned long ready_bit;
 		register struct sk_buff *skb;
-		int len;
+		register int len;
 
 		clear_bit(XMIT_WAKEUP, &(info->tx_state));
 
@@ -561,7 +561,7 @@ static irqreturn_t bluecard_interrupt(int irq, void *dev_inst)
 
 static int bluecard_hci_set_baud_rate(struct hci_dev *hdev, int baud)
 {
-	bluecard_info_t *info = hci_get_drvdata(hdev);
+	bluecard_info_t *info = (bluecard_info_t *)(hdev->driver_data);
 	struct sk_buff *skb;
 
 	/* Ericsson baud rate command */
@@ -609,7 +609,7 @@ static int bluecard_hci_set_baud_rate(struct hci_dev *hdev, int baud)
 
 static int bluecard_hci_flush(struct hci_dev *hdev)
 {
-	bluecard_info_t *info = hci_get_drvdata(hdev);
+	bluecard_info_t *info = (bluecard_info_t *)(hdev->driver_data);
 
 	/* Drop TX queue */
 	skb_queue_purge(&(info->txq));
@@ -620,7 +620,8 @@ static int bluecard_hci_flush(struct hci_dev *hdev)
 
 static int bluecard_hci_open(struct hci_dev *hdev)
 {
-	bluecard_info_t *info = hci_get_drvdata(hdev);
+	bluecard_info_t *info = (bluecard_info_t *)(hdev->driver_data);
+	unsigned int iobase = info->p_dev->resource[0]->start;
 
 	if (test_bit(CARD_HAS_PCCARD_ID, &(info->hw_state)))
 		bluecard_hci_set_baud_rate(hdev, DEFAULT_BAUD_RATE);
@@ -629,8 +630,6 @@ static int bluecard_hci_open(struct hci_dev *hdev)
 		return 0;
 
 	if (test_bit(CARD_HAS_PCCARD_ID, &(info->hw_state))) {
-		unsigned int iobase = info->p_dev->resource[0]->start;
-
 		/* Enable LED */
 		outb(0x08 | 0x20, iobase + 0x30);
 	}
@@ -641,7 +640,8 @@ static int bluecard_hci_open(struct hci_dev *hdev)
 
 static int bluecard_hci_close(struct hci_dev *hdev)
 {
-	bluecard_info_t *info = hci_get_drvdata(hdev);
+	bluecard_info_t *info = (bluecard_info_t *)(hdev->driver_data);
+	unsigned int iobase = info->p_dev->resource[0]->start;
 
 	if (!test_and_clear_bit(HCI_RUNNING, &(hdev->flags)))
 		return 0;
@@ -649,8 +649,6 @@ static int bluecard_hci_close(struct hci_dev *hdev)
 	bluecard_hci_flush(hdev);
 
 	if (test_bit(CARD_HAS_PCCARD_ID, &(info->hw_state))) {
-		unsigned int iobase = info->p_dev->resource[0]->start;
-
 		/* Disable LED */
 		outb(0x00, iobase + 0x30);
 	}
@@ -669,7 +667,7 @@ static int bluecard_hci_send_frame(struct sk_buff *skb)
 		return -ENODEV;
 	}
 
-	info = hci_get_drvdata(hdev);
+	info = (bluecard_info_t *)(hdev->driver_data);
 
 	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
@@ -681,7 +679,7 @@ static int bluecard_hci_send_frame(struct sk_buff *skb)
 	case HCI_SCODATA_PKT:
 		hdev->stat.sco_tx++;
 		break;
-	}
+	};
 
 	/* Prepend skb with frame type */
 	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
@@ -690,6 +688,11 @@ static int bluecard_hci_send_frame(struct sk_buff *skb)
 	bluecard_write_wakeup(info);
 
 	return 0;
+}
+
+
+static void bluecard_hci_destruct(struct hci_dev *hdev)
+{
 }
 
 
@@ -731,14 +734,17 @@ static int bluecard_open(bluecard_info_t *info)
 	info->hdev = hdev;
 
 	hdev->bus = HCI_PCCARD;
-	hci_set_drvdata(hdev, info);
+	hdev->driver_data = info;
 	SET_HCIDEV_DEV(hdev, &info->p_dev->dev);
 
 	hdev->open     = bluecard_hci_open;
 	hdev->close    = bluecard_hci_close;
 	hdev->flush    = bluecard_hci_flush;
 	hdev->send     = bluecard_hci_send_frame;
+	hdev->destruct = bluecard_hci_destruct;
 	hdev->ioctl    = bluecard_hci_ioctl;
+
+	hdev->owner = THIS_MODULE;
 
 	id = inb(iobase + 0x30);
 
@@ -838,7 +844,9 @@ static int bluecard_close(bluecard_info_t *info)
 	/* Turn FPGA off */
 	outb(0x80, iobase + 0x30);
 
-	hci_unregister_dev(hdev);
+	if (hci_unregister_dev(hdev) < 0)
+		BT_ERR("Can't unregister HCI device %s", hdev->name);
+
 	hci_free_dev(hdev);
 
 	return 0;
@@ -849,7 +857,7 @@ static int bluecard_probe(struct pcmcia_device *link)
 	bluecard_info_t *info;
 
 	/* Create new info device */
-	info = devm_kzalloc(&link->dev, sizeof(*info), GFP_KERNEL);
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
 
@@ -864,7 +872,10 @@ static int bluecard_probe(struct pcmcia_device *link)
 
 static void bluecard_detach(struct pcmcia_device *link)
 {
+	bluecard_info_t *info = link->priv;
+
 	bluecard_release(link);
+	kfree(info);
 }
 
 
@@ -919,7 +930,7 @@ static void bluecard_release(struct pcmcia_device *link)
 	pcmcia_disable_device(link);
 }
 
-static const struct pcmcia_device_id bluecard_ids[] = {
+static struct pcmcia_device_id bluecard_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("BlueCard", "LSE041", 0xbaf16fbf, 0x657cc15e),
 	PCMCIA_DEVICE_PROD_ID12("BTCFCARD", "LSE139", 0xe3987764, 0x2524b59c),
 	PCMCIA_DEVICE_PROD_ID12("WSS", "LSE039", 0x0a0736ec, 0x24e6dfab),
@@ -934,4 +945,17 @@ static struct pcmcia_driver bluecard_driver = {
 	.remove		= bluecard_detach,
 	.id_table	= bluecard_ids,
 };
-module_pcmcia_driver(bluecard_driver);
+
+static int __init init_bluecard_cs(void)
+{
+	return pcmcia_register_driver(&bluecard_driver);
+}
+
+
+static void __exit exit_bluecard_cs(void)
+{
+	pcmcia_unregister_driver(&bluecard_driver);
+}
+
+module_init(init_bluecard_cs);
+module_exit(exit_bluecard_cs);

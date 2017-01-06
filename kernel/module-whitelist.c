@@ -7,7 +7,6 @@
 #include <linux/list.h>
 #include <linux/scatterlist.h>
 #include <linux/string.h>
-#include <linux/vmalloc.h>
 
 #include "module-whitelist.h"
 
@@ -111,10 +110,18 @@ int check_module_hash(const Elf_Ehdr *hdr, unsigned long len)
 
 		/* on the first iteration through */
 		if (!sg) {
-			unsigned long count = (len + offset_in_page(data)
-					+ PAGE_SIZE - 1) / PAGE_SIZE;
+			unsigned long count = len / PAGE_SIZE;
 
-			ptr = sg = vmalloc(sizeof(struct scatterlist) * count);
+			/* is there a fractional page at the beginning? */
+			if (offset)
+				count++;
+
+			/* how about a fractional page at the end? */
+			if ((size - size_in_page) % PAGE_SIZE)
+				count++;
+
+			ptr = sg = kmalloc(sizeof(struct scatterlist) * count,
+					GFP_KERNEL);
 			if (!sg) {
 				rc = -ENOMEM;
 				goto free_hash;
@@ -161,7 +168,7 @@ free_digest:
 	kfree(digest);
 
 free_sg:
-	vfree(sg);
+	kfree(sg);
 
 free_hash:
 	crypto_free_hash(desc.tfm);

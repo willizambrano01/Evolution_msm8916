@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -44,15 +44,18 @@ static struct snd_soc_dai_driver msm_stub_dais[] = {
 
 static struct snd_soc_codec_driver soc_msm_stub = {};
 
-static int msm_stub_dev_probe(struct platform_device *pdev)
+static int __devinit msm_stub_dev_probe(struct platform_device *pdev)
 {
+	if (pdev->dev.of_node)
+		dev_set_name(&pdev->dev, "%s.%d", "msm-stub-codec", 1);
+
 	dev_dbg(&pdev->dev, "dev name %s\n", dev_name(&pdev->dev));
 
 	return snd_soc_register_codec(&pdev->dev,
 	&soc_msm_stub, msm_stub_dais, ARRAY_SIZE(msm_stub_dais));
 }
 
-static int msm_stub_dev_remove(struct platform_device *pdev)
+static int __devexit msm_stub_dev_remove(struct platform_device *pdev)
 {
 	snd_soc_unregister_codec(&pdev->dev);
 	return 0;
@@ -69,7 +72,7 @@ static struct platform_driver msm_stub_driver = {
 		.of_match_table = msm_stub_codec_dt_match,
 	},
 	.probe = msm_stub_dev_probe,
-	.remove = msm_stub_dev_remove,
+	.remove = __devexit_p(msm_stub_dev_remove),
 };
 
 static int __init msm_stub_init(void)

@@ -69,8 +69,7 @@ void __init setup_cmdline(char **cmdline_p)
 		/* called from hpux boot loader */
 		boot_command_line[0] = '\0';
 	} else {
-		strlcpy(boot_command_line, (char *)__va(boot_args[1]),
-			COMMAND_LINE_SIZE);
+		strcpy(boot_command_line, (char *)__va(boot_args[1]));
 
 #ifdef CONFIG_BLK_DEV_INITRD
 		if (boot_args[2] != 0) /* did palo pass us a ramdisk? */
@@ -129,8 +128,6 @@ void __init setup_arch(char **cmdline_p)
 #else
 	printk(KERN_INFO "The 32-bit Kernel has started...\n");
 #endif
-
-	printk(KERN_INFO "Default page size is %dKB.\n", (int)(PAGE_SIZE / 1024));
 
 	pdc_console_init();
 

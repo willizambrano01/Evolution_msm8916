@@ -597,7 +597,7 @@ fst_q_work_item(u64 * queue, int card_index)
 	 * bottom half for the card.  Note the limitation of 64 cards.
 	 * That ought to be enough
 	 */
-	mask = (u64)1 << card_index;
+	mask = 1 << card_index;
 	*queue |= mask;
 	spin_unlock_irqrestore(&fst_work_q_lock, flags);
 }
@@ -1972,7 +1972,6 @@ fst_get_iface(struct fst_card_info *card, struct fst_port_info *port,
 	}
 
 	i = port->index;
-	memset(&sync, 0, sizeof(sync));
 	sync.clock_rate = FST_RDL(card, portConfig[i].lineSpeed);
 	/* Lucky card and linux use same encoding here */
 	sync.clock_type = FST_RDB(card, portConfig[i].internalClock) ==
@@ -2362,7 +2361,7 @@ fst_start_xmit(struct sk_buff *skb, struct net_device *dev)
  *      via a printk and leave the corresponding interface and all that follow
  *      disabled.
  */
-static char *type_strings[] = {
+static char *type_strings[] __devinitdata = {
 	"no hardware",		/* Should never be seen */
 	"FarSync T2P",
 	"FarSync T4P",
@@ -2372,7 +2371,7 @@ static char *type_strings[] = {
 	"FarSync TE1"
 };
 
-static void
+static void __devinit
 fst_init_card(struct fst_card_info *card)
 {
 	int i;
@@ -2416,7 +2415,7 @@ static const struct net_device_ops fst_ops = {
  *      Initialise card when detected.
  *      Returns 0 to indicate success, or errno otherwise.
  */
-static int
+static int __devinit
 fst_add_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	static int no_of_cards_added = 0;
@@ -2449,9 +2448,11 @@ fst_add_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	/* Allocate driver private data */
-	card = kzalloc(sizeof(struct fst_card_info), GFP_KERNEL);
-	if (card == NULL)
+	card = kzalloc(sizeof (struct fst_card_info), GFP_KERNEL);
+	if (card == NULL) {
+		pr_err("FarSync card found but insufficient memory for driver storage\n");
 		return -ENOMEM;
+	}
 
 	/* Try to enable the device */
 	if ((err = pci_enable_device(pdev)) != 0) {
@@ -2614,7 +2615,7 @@ fst_add_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 /*
  *      Cleanup and close down a card
  */
-static void
+static void __devexit
 fst_remove_one(struct pci_dev *pdev)
 {
 	struct fst_card_info *card;
@@ -2651,7 +2652,7 @@ static struct pci_driver fst_driver = {
         .name		= FST_NAME,
         .id_table	= fst_pci_dev_id,
         .probe		= fst_add_one,
-        .remove	= fst_remove_one,
+        .remove	= __devexit_p(fst_remove_one),
         .suspend	= NULL,
         .resume	= NULL,
 };

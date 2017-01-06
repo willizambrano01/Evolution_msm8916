@@ -1014,7 +1014,7 @@ static int greth_set_mac_add(struct net_device *dev, void *p)
 	struct greth_regs *regs;
 
 	greth = netdev_priv(dev);
-	regs = greth->regs;
+	regs = (struct greth_regs *) greth->regs;
 
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
@@ -1036,7 +1036,7 @@ static void greth_set_hash_filter(struct net_device *dev)
 {
 	struct netdev_hw_addr *ha;
 	struct greth_private *greth = netdev_priv(dev);
-	struct greth_regs *regs = greth->regs;
+	struct greth_regs *regs = (struct greth_regs *) greth->regs;
 	u32 mc_filter[2];
 	unsigned int bitnr;
 
@@ -1055,7 +1055,7 @@ static void greth_set_multicast_list(struct net_device *dev)
 {
 	int cfg;
 	struct greth_private *greth = netdev_priv(dev);
-	struct greth_regs *regs = greth->regs;
+	struct greth_regs *regs = (struct greth_regs *) greth->regs;
 
 	cfg = GRETH_REGLOAD(regs->control);
 	if (dev->flags & IFF_PROMISC)
@@ -1127,11 +1127,10 @@ static void greth_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *in
 {
 	struct greth_private *greth = netdev_priv(dev);
 
-	strlcpy(info->driver, dev_driver_string(greth->dev),
-		sizeof(info->driver));
-	strlcpy(info->version, "revision: 1.0", sizeof(info->version));
-	strlcpy(info->bus_info, greth->dev->bus->name, sizeof(info->bus_info));
-	strlcpy(info->fw_version, "N/A", sizeof(info->fw_version));
+	strncpy(info->driver, dev_driver_string(greth->dev), 32);
+	strncpy(info->version, "revision: 1.0", 32);
+	strncpy(info->bus_info, greth->dev->bus->name, 32);
+	strncpy(info->fw_version, "N/A", 32);
 	info->eedump_len = 0;
 	info->regdump_len = sizeof(struct greth_regs);
 }
@@ -1288,7 +1287,9 @@ static int greth_mdio_probe(struct net_device *dev)
 	}
 
 	ret = phy_connect_direct(dev, phy, &greth_link_change,
-				 greth->gbit_mac ? PHY_INTERFACE_MODE_GMII : PHY_INTERFACE_MODE_MII);
+			0, greth->gbit_mac ?
+			PHY_INTERFACE_MODE_GMII :
+			PHY_INTERFACE_MODE_MII);
 	if (ret) {
 		if (netif_msg_ifup(greth))
 			dev_err(&dev->dev, "could not attach to PHY\n");
@@ -1375,7 +1376,7 @@ error:
 }
 
 /* Initialize the GRETH MAC */
-static int greth_of_probe(struct platform_device *ofdev)
+static int __devinit greth_of_probe(struct platform_device *ofdev)
 {
 	struct net_device *dev;
 	struct greth_private *greth;
@@ -1413,7 +1414,7 @@ static int greth_of_probe(struct platform_device *ofdev)
 		goto error1;
 	}
 
-	regs = greth->regs;
+	regs = (struct greth_regs *) greth->regs;
 	greth->irq = ofdev->archdata.irqs[0];
 
 	dev_set_drvdata(greth->dev, dev);
@@ -1464,22 +1465,34 @@ static int greth_of_probe(struct platform_device *ofdev)
 	}
 
 	/* Allocate TX descriptor ring in coherent memory */
-	greth->tx_bd_base = dma_alloc_coherent(greth->dev, 1024,
-					       &greth->tx_bd_base_phys,
-					       GFP_KERNEL | __GFP_ZERO);
+	greth->tx_bd_base = (struct greth_bd *) dma_alloc_coherent(greth->dev,
+								   1024,
+								   &greth->tx_bd_base_phys,
+								   GFP_KERNEL);
+
 	if (!greth->tx_bd_base) {
+		if (netif_msg_probe(greth))
+			dev_err(&dev->dev, "could not allocate descriptor memory.\n");
 		err = -ENOMEM;
 		goto error3;
 	}
 
+	memset(greth->tx_bd_base, 0, 1024);
+
 	/* Allocate RX descriptor ring in coherent memory */
-	greth->rx_bd_base = dma_alloc_coherent(greth->dev, 1024,
-					       &greth->rx_bd_base_phys,
-					       GFP_KERNEL | __GFP_ZERO);
+	greth->rx_bd_base = (struct greth_bd *) dma_alloc_coherent(greth->dev,
+								   1024,
+								   &greth->rx_bd_base_phys,
+								   GFP_KERNEL);
+
 	if (!greth->rx_bd_base) {
+		if (netif_msg_probe(greth))
+			dev_err(greth->dev, "could not allocate descriptor memory.\n");
 		err = -ENOMEM;
 		goto error4;
 	}
+
+	memset(greth->rx_bd_base, 0, 1024);
 
 	/* Get MAC address from: module param, OF property or ID prom */
 	for (i = 0; i < 6; i++) {
@@ -1563,7 +1576,7 @@ error1:
 	return err;
 }
 
-static int greth_of_remove(struct platform_device *of_dev)
+static int __devexit greth_of_remove(struct platform_device *of_dev)
 {
 	struct net_device *ndev = dev_get_drvdata(&of_dev->dev);
 	struct greth_private *greth = netdev_priv(ndev);
@@ -1606,7 +1619,7 @@ static struct platform_driver greth_of_driver = {
 		.of_match_table = greth_of_match,
 	},
 	.probe = greth_of_probe,
-	.remove = greth_of_remove,
+	.remove = __devexit_p(greth_of_remove),
 };
 
 module_platform_driver(greth_of_driver);

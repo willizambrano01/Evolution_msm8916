@@ -32,6 +32,7 @@
  *
  */
 
+#include "ttype.h"
 #include "tmacro.h"
 #include "tether.h"
 #include "device.h"
@@ -41,14 +42,16 @@
 #include "wpa.h"
 #include "80211mgr.h"
 
+/*---------------------  Static Variables  --------------------------*/
 static int          msglevel                =MSG_LEVEL_INFO;
 
-const u8 abyOUI00[4] = { 0x00, 0x50, 0xf2, 0x00 };
-const u8 abyOUI01[4] = { 0x00, 0x50, 0xf2, 0x01 };
-const u8 abyOUI02[4] = { 0x00, 0x50, 0xf2, 0x02 };
-const u8 abyOUI03[4] = { 0x00, 0x50, 0xf2, 0x03 };
-const u8 abyOUI04[4] = { 0x00, 0x50, 0xf2, 0x04 };
-const u8 abyOUI05[4] = { 0x00, 0x50, 0xf2, 0x05 };
+const BYTE abyOUI00[4] = { 0x00, 0x50, 0xf2, 0x00 };
+const BYTE abyOUI01[4] = { 0x00, 0x50, 0xf2, 0x01 };
+const BYTE abyOUI02[4] = { 0x00, 0x50, 0xf2, 0x02 };
+const BYTE abyOUI03[4] = { 0x00, 0x50, 0xf2, 0x03 };
+const BYTE abyOUI04[4] = { 0x00, 0x50, 0xf2, 0x04 };
+const BYTE abyOUI05[4] = { 0x00, 0x50, 0xf2, 0x05 };
+
 
 /*+
  *
@@ -80,10 +83,11 @@ WPA_ClearRSN(
     pBSSList->wAuthCount = 0;
     pBSSList->byDefaultK_as_PK = 0;
     pBSSList->byReplayIdx = 0;
-    pBSSList->sRSNCapObj.bRSNCapExist = false;
+    pBSSList->sRSNCapObj.bRSNCapExist = FALSE;
     pBSSList->sRSNCapObj.wRSNCap = 0;
-    pBSSList->bWPAValid = false;
+    pBSSList->bWPAValid = FALSE;
 }
+
 
 /*+
  *
@@ -108,7 +112,7 @@ WPA_ParseRSN(
 {
     PWLAN_IE_RSN_AUTH  pIE_RSN_Auth = NULL;
     int                i, j, m, n = 0;
-    u8 *              pbyCaps;
+    PBYTE              pbyCaps;
 
     WPA_ClearRSN(pBSSList);
 
@@ -145,7 +149,7 @@ WPA_ParseRSN(
             j = 0;
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"wPKCount: %d, sizeof(pBSSList->abyPKType): %zu\n", pRSN->wPKCount, sizeof(pBSSList->abyPKType));
 	    for (i = 0; (i < pRSN->wPKCount) &&
-		   (j < ARRAY_SIZE(pBSSList->abyPKType)); i++) {
+		   (j < sizeof(pBSSList->abyPKType)/sizeof(BYTE)); i++) {
                 if(pRSN->len >= 12+i*4+4) { //oui1(4)+ver(2)+GKS(4)+PKSCnt(2)+PKS(4*i)
                     if ( !memcmp(pRSN->PKSList[i].abyOUI, abyOUI00, 4))
                         pBSSList->abyPKType[j++] = WPA_NONE;
@@ -163,7 +167,7 @@ WPA_ParseRSN(
                     break;
                 //DBG_PRN_GRP14(("abyPKType[%d]: %X\n", j-1, pBSSList->abyPKType[j-1]));
             } //for
-            pBSSList->wPKCount = (u16)j;
+            pBSSList->wPKCount = (WORD)j;
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"wPKCount: %d\n", pBSSList->wPKCount);
         }
 
@@ -178,7 +182,7 @@ WPA_ParseRSN(
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"wAuthCount: %d, sizeof(pBSSList->abyAuthType): %zu\n",
                           pIE_RSN_Auth->wAuthCount, sizeof(pBSSList->abyAuthType));
 	    for (i = 0; (i < pIE_RSN_Auth->wAuthCount) &&
-		   (j < ARRAY_SIZE(pBSSList->abyAuthType)); i++) {
+		   (j < sizeof(pBSSList->abyAuthType)/sizeof(BYTE)); i++) {
                 if(pRSN->len >= 14+4+(m+i)*4) { //oui1(4)+ver(2)+GKS(4)+PKSCnt(2)+PKS(4*m)+AKC(2)+AKS(4*i)
                     if ( !memcmp(pIE_RSN_Auth->AuthKSList[i].abyOUI, abyOUI01, 4))
                         pBSSList->abyAuthType[j++] = WPA_AUTH_IEEE802_1X;
@@ -193,7 +197,7 @@ WPA_ParseRSN(
                 //DBG_PRN_GRP14(("abyAuthType[%d]: %X\n", j-1, pBSSList->abyAuthType[j-1]));
             }
             if(j > 0)
-                pBSSList->wAuthCount = (u16)j;
+                pBSSList->wAuthCount = (WORD)j;
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"wAuthCount: %d\n", pBSSList->wAuthCount);
         }
 
@@ -205,17 +209,17 @@ WPA_ParseRSN(
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"14+4+(m+n)*4: %d\n", 14+4+(m+n)*4);
 
             if(pRSN->len+2 >= 14+4+(m+n)*4) { //oui1(4)+ver(2)+GKS(4)+PKSCnt(2)+PKS(4*m)+AKC(2)+AKS(4*n)+Cap(2)
-                pbyCaps = (u8 *)pIE_RSN_Auth->AuthKSList[n].abyOUI;
+                pbyCaps = (PBYTE)pIE_RSN_Auth->AuthKSList[n].abyOUI;
                 pBSSList->byDefaultK_as_PK = (*pbyCaps) & WPA_GROUPFLAG;
                 pBSSList->byReplayIdx = 2 << ((*pbyCaps >> WPA_REPLAYBITSSHIFT) & WPA_REPLAYBITS);
-                pBSSList->sRSNCapObj.bRSNCapExist = true;
-                pBSSList->sRSNCapObj.wRSNCap = *(u16 *)pbyCaps;
+                pBSSList->sRSNCapObj.bRSNCapExist = TRUE;
+                pBSSList->sRSNCapObj.wRSNCap = *(PWORD)pbyCaps;
                 //DBG_PRN_GRP14(("pbyCaps: %X\n", *pbyCaps));
                 //DBG_PRN_GRP14(("byDefaultK_as_PK: %X\n", pBSSList->byDefaultK_as_PK));
                 //DBG_PRN_GRP14(("byReplayIdx: %X\n", pBSSList->byReplayIdx));
             }
         }
-        pBSSList->bWPAValid = true;
+        pBSSList->bWPAValid = TRUE;
     }
 }
 
@@ -227,7 +231,7 @@ WPA_ParseRSN(
  * Parameters:
  *  In:
  *      byCmd    - Search type
- *      byEncrypt- Encrypt Type
+ *      byEncrypt- Encrcypt Type
  *      pBSSList - BSS list
  *  Out:
  *      none
@@ -235,24 +239,24 @@ WPA_ParseRSN(
  * Return Value: none.
  *
 -*/
-bool
+BOOL
 WPA_SearchRSN(
-    u8                byCmd,
-    u8                byEncrypt,
+    BYTE                byCmd,
+    BYTE                byEncrypt,
      PKnownBSS        pBSSList
     )
 {
     int ii;
-    u8 byPKType = WPA_NONE;
+    BYTE byPKType = WPA_NONE;
 
-    if (pBSSList->bWPAValid == false)
-        return false;
+    if (pBSSList->bWPAValid == FALSE)
+        return FALSE;
 
     switch(byCmd) {
     case 0:
 
         if (byEncrypt != pBSSList->byGKType)
-            return false;
+            return FALSE;
 
         if (pBSSList->wPKCount > 0) {
             for (ii = 0; ii < pBSSList->wPKCount; ii ++) {
@@ -266,9 +270,9 @@ WPA_SearchRSN(
                      byPKType = WPA_WEP104;
             }
             if (byEncrypt != byPKType)
-                return false;
+                return FALSE;
         }
-        return true;
+        return TRUE;
 //        if (pBSSList->wAuthCount > 0)
 //            for (ii=0; ii < pBSSList->wAuthCount; ii ++)
 //                if (byAuth == pBSSList->abyAuthType[ii])
@@ -278,7 +282,7 @@ WPA_SearchRSN(
     default:
         break;
     }
-    return false;
+    return FALSE;
 }
 
 /*+
@@ -295,20 +299,20 @@ WPA_SearchRSN(
  * Return Value: none.
  *
 -*/
-bool
+BOOL
 WPAb_Is_RSN(
      PWLAN_IE_RSN_EXT pRSN
     )
 {
     if (pRSN == NULL)
-        return false;
+        return FALSE;
 
     if ((pRSN->len >= 6) && // oui1(4)+ver(2)
         (pRSN->byElementID == WLAN_EID_RSN_WPA) &&  !memcmp(pRSN->abyOUI, abyOUI01, 4) &&
         (pRSN->wVersion == 1)) {
-        return true;
+        return TRUE;
     }
     else
-        return false;
+        return FALSE;
 }
 

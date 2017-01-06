@@ -154,15 +154,13 @@ struct linux_xfrm_mib {
  */
 #define SNMP_UPD_PO_STATS(mib, basefield, addend)	\
 	do { \
-		__typeof__(*mib[0]->mibs) *ptr = mib[0]->mibs;	\
-		this_cpu_inc(ptr[basefield##PKTS]);		\
-		this_cpu_add(ptr[basefield##OCTETS], addend);	\
+		this_cpu_inc(mib[0]->mibs[basefield##PKTS]);		\
+		this_cpu_add(mib[0]->mibs[basefield##OCTETS], addend);	\
 	} while (0)
 #define SNMP_UPD_PO_STATS_BH(mib, basefield, addend)	\
 	do { \
-		__typeof__(*mib[0]->mibs) *ptr = mib[0]->mibs;	\
-		__this_cpu_inc(ptr[basefield##PKTS]);		\
-		__this_cpu_add(ptr[basefield##OCTETS], addend);	\
+		__this_cpu_inc(mib[0]->mibs[basefield##PKTS]);		\
+		__this_cpu_add(mib[0]->mibs[basefield##OCTETS], addend);	\
 	} while (0)
 
 

@@ -61,8 +61,9 @@ static inline int plat_device_is_coherent(struct device *dev)
 {
 #ifdef CONFIG_DMA_COHERENT
 	return 1;
-#else
-	return coherentio;
+#endif
+#ifdef CONFIG_DMA_NONCOHERENT
+	return 0;
 #endif
 }
 

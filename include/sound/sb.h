@@ -22,8 +22,8 @@
  *
  */
 
-#include <sound/pcm.h>
-#include <sound/rawmidi.h>
+#include "pcm.h"
+#include "rawmidi.h"
 #include <linux/interrupt.h>
 #include <asm/io.h>
 

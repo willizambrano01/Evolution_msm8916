@@ -24,8 +24,6 @@
 #include <linux/parser.h>
 #include <linux/statfs.h>
 #include <linux/sched.h>
-#include <linux/nsproxy.h>
-#include <net/net_namespace.h>
 #include "internal.h"
 
 #define AFS_FS_MAGIC 0x6B414653 /* 'kAFS' */
@@ -45,7 +43,6 @@ struct file_system_type afs_fs_type = {
 	.kill_sb	= afs_kill_super,
 	.fs_flags	= 0,
 };
-MODULE_ALIAS_FS("afs");
 
 static const struct super_operations afs_super_ops = {
 	.statfs		= afs_statfs,
@@ -126,11 +123,6 @@ void __exit afs_fs_exit(void)
 		BUG();
 	}
 
-	/*
-	 * Make sure all delayed rcu free inodes are flushed before we
-	 * destroy cache.
-	 */
-	rcu_barrier();
 	kmem_cache_destroy(afs_inode_cachep);
 	_leave("");
 }
@@ -366,10 +358,6 @@ static struct dentry *afs_mount(struct file_system_type *fs_type,
 
 	memset(&params, 0, sizeof(params));
 
-	ret = -EINVAL;
-	if (current->nsproxy->net_ns != &init_net)
-		goto error;
-
 	/* parse the options and device name */
 	if (options) {
 		ret = afs_parse_options(&params, options, &dev_name);
@@ -407,7 +395,7 @@ static struct dentry *afs_mount(struct file_system_type *fs_type,
 	as->volume = vol;
 
 	/* allocate a deviceless superblock */
-	sb = sget(fs_type, afs_test_super, afs_set_super, flags, as);
+	sb = sget(fs_type, afs_test_super, afs_set_super, as);
 	if (IS_ERR(sb)) {
 		ret = PTR_ERR(sb);
 		afs_put_volume(vol);
@@ -418,6 +406,7 @@ static struct dentry *afs_mount(struct file_system_type *fs_type,
 	if (!sb->s_root) {
 		/* initial superblock/root creation */
 		_debug("create");
+		sb->s_flags = flags;
 		ret = afs_fill_super(sb, &params);
 		if (ret < 0) {
 			deactivate_locked_super(sb);

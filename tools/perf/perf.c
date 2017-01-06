@@ -13,8 +13,7 @@
 #include "util/quote.h"
 #include "util/run-command.h"
 #include "util/parse-events.h"
-#include <lk/debugfs.h>
-#include <pthread.h>
+#include "util/debugfs.h"
 
 const char perf_usage_string[] =
 	"perf [--version] [--help] COMMAND [ARGS]";
@@ -24,45 +23,6 @@ const char perf_more_info_string[] =
 
 int use_browser = -1;
 static int use_pager = -1;
-const char *input_name;
-
-struct cmd_struct {
-	const char *cmd;
-	int (*fn)(int, const char **, const char *);
-	int option;
-};
-
-static struct cmd_struct commands[] = {
-	{ "buildid-cache", cmd_buildid_cache, 0 },
-	{ "buildid-list", cmd_buildid_list, 0 },
-	{ "diff",	cmd_diff,	0 },
-	{ "evlist",	cmd_evlist,	0 },
-	{ "help",	cmd_help,	0 },
-	{ "list",	cmd_list,	0 },
-	{ "record",	cmd_record,	0 },
-	{ "report",	cmd_report,	0 },
-	{ "bench",	cmd_bench,	0 },
-	{ "stat",	cmd_stat,	0 },
-	{ "periodic",   cmd_periodic,   0 },
-	{ "timechart",	cmd_timechart,	0 },
-	{ "top",	cmd_top,	0 },
-	{ "annotate",	cmd_annotate,	0 },
-	{ "version",	cmd_version,	0 },
-	{ "script",	cmd_script,	0 },
-	{ "sched",	cmd_sched,	0 },
-#ifdef LIBELF_SUPPORT
-	{ "probe",	cmd_probe,	0 },
-#endif
-	{ "kmem",	cmd_kmem,	0 },
-	{ "lock",	cmd_lock,	0 },
-	{ "kvm",	cmd_kvm,	0 },
-	{ "test",	cmd_test,	0 },
-#ifdef LIBAUDIT_SUPPORT
-	{ "trace",	cmd_trace,	0 },
-#endif
-	{ "inject",	cmd_inject,	0 },
-	{ "mem",	cmd_mem,	0 },
-};
 
 struct pager_config {
 	const char *cmd;
@@ -87,26 +47,21 @@ int check_pager_config(const char *cmd)
 	return c.val;
 }
 
-static int browser_command_config(const char *var, const char *value, void *data)
+static int tui_command_config(const char *var, const char *value, void *data)
 {
 	struct pager_config *c = data;
 	if (!prefixcmp(var, "tui.") && !strcmp(var + 4, c->cmd))
 		c->val = perf_config_bool(var, value);
-	if (!prefixcmp(var, "gtk.") && !strcmp(var + 4, c->cmd))
-		c->val = perf_config_bool(var, value) ? 2 : 0;
 	return 0;
 }
 
-/*
- * returns 0 for "no tui", 1 for "use tui", 2 for "use gtk",
- * and -1 for "not specified"
- */
-static int check_browser_config(const char *cmd)
+/* returns 0 for "no tui", 1 for "use tui", and -1 for "not specified" */
+static int check_tui_config(const char *cmd)
 {
 	struct pager_config c;
 	c.cmd = cmd;
 	c.val = -1;
-	perf_config(browser_command_config, &c);
+	perf_config(tui_command_config, &c);
 	return c.val;
 }
 
@@ -195,24 +150,16 @@ static int handle_options(const char ***argv, int *argc, int *envchanged)
 				fprintf(stderr, "No directory given for --debugfs-dir.\n");
 				usage(perf_usage_string);
 			}
-			perf_debugfs_set_path((*argv)[1]);
+			debugfs_set_path((*argv)[1]);
 			if (envchanged)
 				*envchanged = 1;
 			(*argv)++;
 			(*argc)--;
 		} else if (!prefixcmp(cmd, CMD_DEBUGFS_DIR)) {
-			perf_debugfs_set_path(cmd + strlen(CMD_DEBUGFS_DIR));
+			debugfs_set_path(cmd + strlen(CMD_DEBUGFS_DIR));
 			fprintf(stderr, "dir: %s\n", debugfs_mountpoint);
 			if (envchanged)
 				*envchanged = 1;
-		} else if (!strcmp(cmd, "--list-cmds")) {
-			unsigned int i;
-
-			for (i = 0; i < ARRAY_SIZE(commands); i++) {
-				struct cmd_struct *p = commands+i;
-				printf("%s ", p->cmd);
-			}
-			exit(0);
 		} else {
 			fprintf(stderr, "Unknown option: %s\n", cmd);
 			usage(perf_usage_string);
@@ -298,6 +245,12 @@ const char perf_version_string[] = PERF_VERSION;
  */
 #define NEED_WORK_TREE	(1<<2)
 
+struct cmd_struct {
+	const char *cmd;
+	int (*fn)(int, const char **, const char *);
+	int option;
+};
+
 static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 {
 	int status;
@@ -309,7 +262,7 @@ static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 		prefix = NULL; /* setup_perf_directory(); */
 
 	if (use_browser == -1)
-		use_browser = check_browser_config(p->cmd);
+		use_browser = check_tui_config(p->cmd);
 
 	if (use_pager == -1 && p->option & RUN_SETUP)
 		use_pager = check_pager_config(p->cmd);
@@ -330,28 +283,44 @@ static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 	if (S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode))
 		return 0;
 
-	status = 1;
 	/* Check for ENOSPC and EIO errors.. */
-	if (fflush(stdout)) {
-		fprintf(stderr, "write failure on standard output: %s", strerror(errno));
-		goto out;
-	}
-	if (ferror(stdout)) {
-		fprintf(stderr, "unknown write failure on standard output");
-		goto out;
-	}
-	if (fclose(stdout)) {
-		fprintf(stderr, "close failed on standard output: %s", strerror(errno));
-		goto out;
-	}
-	status = 0;
-out:
-	return status;
+	if (fflush(stdout))
+		die("write failure on standard output: %s", strerror(errno));
+	if (ferror(stdout))
+		die("unknown write failure on standard output");
+	if (fclose(stdout))
+		die("close failed on standard output: %s", strerror(errno));
+	return 0;
 }
 
 static void handle_internal_command(int argc, const char **argv)
 {
 	const char *cmd = argv[0];
+	static struct cmd_struct commands[] = {
+		{ "buildid-cache", cmd_buildid_cache, 0 },
+		{ "buildid-list", cmd_buildid_list, 0 },
+		{ "diff",	cmd_diff,	0 },
+		{ "evlist",	cmd_evlist,	0 },
+		{ "help",	cmd_help,	0 },
+		{ "list",	cmd_list,	0 },
+		{ "record",	cmd_record,	0 },
+		{ "report",	cmd_report,	0 },
+		{ "bench",	cmd_bench,	0 },
+		{ "stat",	cmd_stat,	0 },
+		{ "periodic",   cmd_periodic,   0 },
+		{ "timechart",	cmd_timechart,	0 },
+		{ "top",	cmd_top,	0 },
+		{ "annotate",	cmd_annotate,	0 },
+		{ "version",	cmd_version,	0 },
+		{ "script",	cmd_script,	0 },
+		{ "sched",	cmd_sched,	0 },
+		{ "probe",	cmd_probe,	0 },
+		{ "kmem",	cmd_kmem,	0 },
+		{ "lock",	cmd_lock,	0 },
+		{ "kvm",	cmd_kvm,	0 },
+		{ "test",	cmd_test,	0 },
+		{ "inject",	cmd_inject,	0 },
+	};
 	unsigned int i;
 	static const char ext[] = STRIP_EXTENSION;
 
@@ -457,13 +426,11 @@ int main(int argc, const char **argv)
 {
 	const char *cmd;
 
-	page_size = sysconf(_SC_PAGE_SIZE);
-
 	cmd = perf_extract_argv0_path(argv[0]);
 	if (!cmd)
 		cmd = "perf-help";
 	/* get debugfs mount point from /proc/mounts */
-	perf_debugfs_mount(NULL);
+	debugfs_mount(NULL);
 	/*
 	 * "perf-xxxx" is the same as "perf xxxx", but we obviously:
 	 *
@@ -478,8 +445,7 @@ int main(int argc, const char **argv)
 		cmd += 5;
 		argv[0] = cmd;
 		handle_internal_command(argc, argv);
-		fprintf(stderr, "cannot handle %s internally", cmd);
-		goto out;
+		die("cannot handle %s internally", cmd);
 	}
 
 	/* Look for flags.. */
@@ -497,11 +463,9 @@ int main(int argc, const char **argv)
 		printf("\n usage: %s\n\n", perf_usage_string);
 		list_common_cmds_help();
 		printf("\n %s\n\n", perf_more_info_string);
-		goto out;
+		exit(1);
 	}
 	cmd = argv[0];
-
-	test_attr__init();
 
 	/*
 	 * We use PATH to find perf commands, but we prepend some higher
@@ -519,8 +483,9 @@ int main(int argc, const char **argv)
 
 	while (1) {
 		static int done_help;
-		int was_alias = run_argv(&argc, &argv);
+		static int was_alias;
 
+		was_alias = run_argv(&argc, &argv);
 		if (errno != ENOENT)
 			break;
 
@@ -528,7 +493,7 @@ int main(int argc, const char **argv)
 			fprintf(stderr, "Expansion of alias '%s' failed; "
 				"'%s' is not a perf-command\n",
 				cmd, argv[0]);
-			goto out;
+			exit(1);
 		}
 		if (!done_help) {
 			cmd = argv[0] = help_unknown_cmd(cmd);
@@ -539,6 +504,6 @@ int main(int argc, const char **argv)
 
 	fprintf(stderr, "Failed to run command '%s': %s\n",
 		cmd, strerror(errno));
-out:
+
 	return 1;
 }

@@ -15,7 +15,7 @@
 #include <linux/module.h>
 #include <linux/time.h>
 
-#include <linux/platform_data/mtd-davinci-aemif.h>
+#include <mach/aemif.h>
 
 /* Timing value configuration */
 

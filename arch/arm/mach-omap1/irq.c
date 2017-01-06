@@ -45,11 +45,9 @@
 #include <asm/irq.h>
 #include <asm/mach/irq.h>
 
-#include "soc.h"
+#include <plat/cpu.h>
 
 #include <mach/hardware.h>
-
-#include "common.h"
 
 #define IRQ_BANK(irq) ((irq) >> 5)
 #define IRQ_BIT(irq)  ((irq) & 0x1f)

@@ -41,7 +41,6 @@ enum {
 #ifdef CONFIG_X86_64
 #define vdso_enabled			sysctl_vsyscall32
 #define arch_setup_additional_pages	syscall32_setup_pages
-extern int sysctl_ldt16;
 #endif
 
 /*
@@ -206,9 +205,9 @@ void syscall32_cpu_init(void)
 {
 	/* Load these always in case some future AMD CPU supports
 	   SYSENTER from compat mode too. */
-	wrmsrl_safe(MSR_IA32_SYSENTER_CS, (u64)__KERNEL_CS);
-	wrmsrl_safe(MSR_IA32_SYSENTER_ESP, 0ULL);
-	wrmsrl_safe(MSR_IA32_SYSENTER_EIP, (u64)ia32_sysenter_target);
+	checking_wrmsrl(MSR_IA32_SYSENTER_CS, (u64)__KERNEL_CS);
+	checking_wrmsrl(MSR_IA32_SYSENTER_ESP, 0ULL);
+	checking_wrmsrl(MSR_IA32_SYSENTER_EIP, (u64)ia32_sysenter_target);
 
 	wrmsrl(MSR_CSTAR, ia32_cstar_target);
 }
@@ -377,13 +376,6 @@ static ctl_table abi_table2[] = {
 	{
 		.procname	= "vsyscall32",
 		.data		= &sysctl_vsyscall32,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec
-	},
-	{
-		.procname	= "ldt16",
-		.data		= &sysctl_ldt16,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec

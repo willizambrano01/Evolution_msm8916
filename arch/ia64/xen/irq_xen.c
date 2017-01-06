@@ -273,8 +273,9 @@ xen_bind_early_percpu_irq(void)
  */
 
 #ifdef CONFIG_HOTPLUG_CPU
-static int unbind_evtchn_callback(struct notifier_block *nfb,
-				  unsigned long action, void *hcpu)
+static int __devinit
+unbind_evtchn_callback(struct notifier_block *nfb,
+		       unsigned long action, void *hcpu)
 {
 	unsigned int cpu = (unsigned long)hcpu;
 
@@ -432,7 +433,7 @@ xen_resend_irq(unsigned int vector)
 	(void)resend_irq_on_evtchn(vector);
 }
 
-const struct pv_irq_ops xen_irq_ops __initconst = {
+const struct pv_irq_ops xen_irq_ops __initdata = {
 	.register_ipi = xen_register_ipi,
 
 	.assign_irq_vector = xen_assign_irq_vector,

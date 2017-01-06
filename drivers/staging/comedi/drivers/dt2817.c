@@ -47,6 +47,29 @@ Configuration options:
 #define DT2817_CR 0
 #define DT2817_DATA 1
 
+static int dt2817_attach(struct comedi_device *dev,
+			 struct comedi_devconfig *it);
+static int dt2817_detach(struct comedi_device *dev);
+static struct comedi_driver driver_dt2817 = {
+	.driver_name = "dt2817",
+	.module = THIS_MODULE,
+	.attach = dt2817_attach,
+	.detach = dt2817_detach,
+};
+
+static int __init driver_dt2817_init_module(void)
+{
+	return comedi_driver_register(&driver_dt2817);
+}
+
+static void __exit driver_dt2817_cleanup_module(void)
+{
+	comedi_driver_unregister(&driver_dt2817);
+}
+
+module_init(driver_dt2817_init_module);
+module_exit(driver_dt2817_cleanup_module);
+
 static int dt2817_dio_insn_config(struct comedi_device *dev,
 				  struct comedi_subdevice *s,
 				  struct comedi_insn *insn, unsigned int *data)
@@ -119,23 +142,29 @@ static int dt2817_dio_insn_bits(struct comedi_device *dev,
 	data[1] |= (inb(dev->iobase + DT2817_DATA + 2) << 16);
 	data[1] |= (inb(dev->iobase + DT2817_DATA + 3) << 24);
 
-	return insn->n;
+	return 2;
 }
 
 static int dt2817_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 {
 	int ret;
 	struct comedi_subdevice *s;
+	unsigned long iobase;
 
-	ret = comedi_request_region(dev, it->options[0], DT2817_SIZE);
-	if (ret)
+	iobase = it->options[0];
+	printk(KERN_INFO "comedi%d: dt2817: 0x%04lx ", dev->minor, iobase);
+	if (!request_region(iobase, DT2817_SIZE, "dt2817")) {
+		printk("I/O port conflict\n");
+		return -EIO;
+	}
+	dev->iobase = iobase;
+	dev->board_name = "dt2817";
+
+	ret = alloc_subdevices(dev, 1);
+	if (ret < 0)
 		return ret;
 
-	ret = comedi_alloc_subdevices(dev, 1);
-	if (ret)
-		return ret;
-
-	s = &dev->subdevices[0];
+	s = dev->subdevices + 0;
 
 	s->n_chan = 32;
 	s->type = COMEDI_SUBD_DIO;
@@ -148,16 +177,20 @@ static int dt2817_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	s->state = 0;
 	outb(0, dev->iobase + DT2817_CR);
 
+	printk(KERN_INFO "\n");
+
 	return 0;
 }
 
-static struct comedi_driver dt2817_driver = {
-	.driver_name	= "dt2817",
-	.module		= THIS_MODULE,
-	.attach		= dt2817_attach,
-	.detach		= comedi_legacy_detach,
-};
-module_comedi_driver(dt2817_driver);
+static int dt2817_detach(struct comedi_device *dev)
+{
+	printk(KERN_INFO "comedi%d: dt2817: remove\n", dev->minor);
+
+	if (dev->iobase)
+		release_region(dev->iobase, DT2817_SIZE);
+
+	return 0;
+}
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");

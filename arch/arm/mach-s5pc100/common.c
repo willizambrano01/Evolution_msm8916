@@ -24,7 +24,6 @@
 #include <linux/serial_core.h>
 #include <linux/platform_device.h>
 #include <linux/sched.h>
-#include <linux/reboot.h>
 
 #include <asm/irq.h>
 #include <asm/proc-fns.h>
@@ -46,7 +45,6 @@
 #include <plat/fb-core.h>
 #include <plat/iic-core.h>
 #include <plat/onenand-core.h>
-#include <plat/spi-core.h>
 #include <plat/regs-serial.h>
 #include <plat/watchdog-reset.h>
 
@@ -167,8 +165,6 @@ void __init s5pc100_map_io(void)
 	s3c_onenand_setname("s5pc100-onenand");
 	s3c_fb_setname("s5pc100-fb");
 	s3c_cfcon_setname("s5pc100-pata");
-
-	s3c64xx_spi_setname("s5pc100-spi");
 }
 
 void __init s5pc100_init_clocks(int xtal)
@@ -217,10 +213,10 @@ void __init s5pc100_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 	s3c24xx_init_uartdevs("s3c6400-uart", s5p_uart_resources, cfg, no);
 }
 
-void s5pc100_restart(enum reboot_mode mode, const char *cmd)
+void s5pc100_restart(char mode, const char *cmd)
 {
-	if (mode != REBOOT_SOFT)
-		samsung_wdt_reset();
+	if (mode != 's')
+		arch_wdt_reset();
 
 	soft_restart(0);
 }

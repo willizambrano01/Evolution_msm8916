@@ -24,10 +24,26 @@ static struct man_viewer_info_list {
 } *man_viewer_info_list;
 
 enum help_format {
-	HELP_FORMAT_NONE,
 	HELP_FORMAT_MAN,
 	HELP_FORMAT_INFO,
 	HELP_FORMAT_WEB,
+};
+
+static bool show_all = false;
+static enum help_format help_format = HELP_FORMAT_MAN;
+static struct option builtin_help_options[] = {
+	OPT_BOOLEAN('a', "all", &show_all, "print all available commands"),
+	OPT_SET_UINT('m', "man", &help_format, "show man page", HELP_FORMAT_MAN),
+	OPT_SET_UINT('w', "web", &help_format, "show manual in web browser",
+			HELP_FORMAT_WEB),
+	OPT_SET_UINT('i', "info", &help_format, "show info page",
+			HELP_FORMAT_INFO),
+	OPT_END(),
+};
+
+static const char * const builtin_help_usage[] = {
+	"perf help [--all] [--man|--web|--info] [command]",
+	NULL
 };
 
 static enum help_format parse_help_format(const char *format)
@@ -38,9 +54,7 @@ static enum help_format parse_help_format(const char *format)
 		return HELP_FORMAT_INFO;
 	if (!strcmp(format, "web") || !strcmp(format, "html"))
 		return HELP_FORMAT_WEB;
-
-	pr_err("unrecognized help format '%s'", format);
-	return HELP_FORMAT_NONE;
+	die("unrecognized help format '%s'", format);
 }
 
 static const char *get_man_viewer_info(const char *name)
@@ -241,14 +255,10 @@ static int add_man_viewer_info(const char *var, const char *value)
 
 static int perf_help_config(const char *var, const char *value, void *cb)
 {
-	enum help_format *help_formatp = cb;
-
 	if (!strcmp(var, "help.format")) {
 		if (!value)
 			return config_error_nonbool(var);
-		*help_formatp = parse_help_format(value);
-		if (*help_formatp == HELP_FORMAT_NONE)
-			return -1;
+		help_format = parse_help_format(value);
 		return 0;
 	}
 	if (!strcmp(var, "man.viewer")) {
@@ -342,7 +352,7 @@ static void exec_viewer(const char *name, const char *page)
 		warning("'%s': unknown man viewer.", name);
 }
 
-static int show_man_page(const char *perf_cmd)
+static void show_man_page(const char *perf_cmd)
 {
 	struct man_viewer_list *viewer;
 	const char *page = cmd_to_page(perf_cmd);
@@ -355,35 +365,28 @@ static int show_man_page(const char *perf_cmd)
 	if (fallback)
 		exec_viewer(fallback, page);
 	exec_viewer("man", page);
-
-	pr_err("no man viewer handled the request");
-	return -1;
+	die("no man viewer handled the request");
 }
 
-static int show_info_page(const char *perf_cmd)
+static void show_info_page(const char *perf_cmd)
 {
 	const char *page = cmd_to_page(perf_cmd);
 	setenv("INFOPATH", system_path(PERF_INFO_PATH), 1);
 	execlp("info", "info", "perfman", page, NULL);
-	return -1;
 }
 
-static int get_html_page_path(struct strbuf *page_path, const char *page)
+static void get_html_page_path(struct strbuf *page_path, const char *page)
 {
 	struct stat st;
 	const char *html_path = system_path(PERF_HTML_PATH);
 
 	/* Check that we have a perf documentation directory. */
 	if (stat(mkpath("%s/perf.html", html_path), &st)
-	    || !S_ISREG(st.st_mode)) {
-		pr_err("'%s': not a documentation directory.", html_path);
-		return -1;
-	}
+	    || !S_ISREG(st.st_mode))
+		die("'%s': not a documentation directory.", html_path);
 
 	strbuf_init(page_path, 0);
 	strbuf_addf(page_path, "%s/%s.html", html_path, page);
-
-	return 0;
 }
 
 /*
@@ -398,42 +401,23 @@ static void open_html(const char *path)
 }
 #endif
 
-static int show_html_page(const char *perf_cmd)
+static void show_html_page(const char *perf_cmd)
 {
 	const char *page = cmd_to_page(perf_cmd);
 	struct strbuf page_path; /* it leaks but we exec bellow */
 
-	if (get_html_page_path(&page_path, page) != 0)
-		return -1;
+	get_html_page_path(&page_path, page);
 
 	open_html(page_path.buf);
-
-	return 0;
 }
 
-int cmd_help(int argc, const char **argv, const char *prefix __maybe_unused)
+int cmd_help(int argc, const char **argv, const char *prefix __used)
 {
-	bool show_all = false;
-	enum help_format help_format = HELP_FORMAT_MAN;
-	struct option builtin_help_options[] = {
-	OPT_BOOLEAN('a', "all", &show_all, "print all available commands"),
-	OPT_SET_UINT('m', "man", &help_format, "show man page", HELP_FORMAT_MAN),
-	OPT_SET_UINT('w', "web", &help_format, "show manual in web browser",
-			HELP_FORMAT_WEB),
-	OPT_SET_UINT('i', "info", &help_format, "show info page",
-			HELP_FORMAT_INFO),
-	OPT_END(),
-	};
-	const char * const builtin_help_usage[] = {
-		"perf help [--all] [--man|--web|--info] [command]",
-		NULL
-	};
 	const char *alias;
-	int rc = 0;
 
 	load_command_list("perf-", &main_cmds, &other_cmds);
 
-	perf_config(perf_help_config, &help_format);
+	perf_config(perf_help_config, NULL);
 
 	argc = parse_options(argc, argv, builtin_help_options,
 			builtin_help_usage, 0);
@@ -460,20 +444,16 @@ int cmd_help(int argc, const char **argv, const char *prefix __maybe_unused)
 
 	switch (help_format) {
 	case HELP_FORMAT_MAN:
-		rc = show_man_page(argv[0]);
+		show_man_page(argv[0]);
 		break;
 	case HELP_FORMAT_INFO:
-		rc = show_info_page(argv[0]);
+		show_info_page(argv[0]);
 		break;
 	case HELP_FORMAT_WEB:
-		rc = show_html_page(argv[0]);
-		break;
-	case HELP_FORMAT_NONE:
-		/* fall-through */
+		show_html_page(argv[0]);
 	default:
-		rc = -1;
 		break;
 	}
 
-	return rc;
+	return 0;
 }

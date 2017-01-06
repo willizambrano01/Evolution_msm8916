@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
 * This program is free software; you can redistribute it and/or modify
 * it under the terms of the GNU General Public License version 2 and
 * only version 2 as published by the Free Software Foundation.
@@ -9,12 +9,24 @@
 * GNU General Public License for more details.
 */
 
+#include <linux/init.h>
 #include <linux/err.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/platform_device.h>
 #include <linux/bitops.h>
+#include <linux/mutex.h>
+#include <linux/of_device.h>
+#include <linux/slab.h>
+#include <sound/core.h>
+#include <sound/soc.h>
+#include <sound/soc-dapm.h>
+#include <sound/pcm.h>
+#include <sound/initval.h>
 #include <sound/control.h>
 #include <sound/q6adm-v2.h>
-#include <sound/q6core.h>
+#include <sound/q6asm-v2.h>
+#include <sound/q6afe-v2.h>
 
 #include "msm-dolby-dap-config.h"
 
@@ -167,7 +179,23 @@ const struct dolby_dap_endp_params_s
 		 DOLBY_ENDDEP_PARAM_VMB_OFFSET},
 		{-320, -320, 144}
 	},
-	{REMOTE_SUBMIX,	2, DOLBY_ENDP_EXT_SPEAKERS,
+	{REMOTE_SUBMIX,	2, DOLBY_ENDP_HDMI,
+		{DOLBY_PARAM_ID_DVLO, DOLBY_PARAM_ID_DVLI, DOLBY_PARAM_ID_VMB},
+		{DOLBY_ENDDEP_PARAM_DVLO_LENGTH, DOLBY_ENDDEP_PARAM_DVLI_LENGTH,
+		 DOLBY_ENDDEP_PARAM_VMB_LENGTH},
+		{DOLBY_ENDDEP_PARAM_DVLO_OFFSET, DOLBY_ENDDEP_PARAM_DVLI_OFFSET,
+		 DOLBY_ENDDEP_PARAM_VMB_OFFSET},
+		{-496, -496, 0}
+	},
+	{ANC_HEADSET, 2, DOLBY_ENDP_HEADPHONES,
+		{DOLBY_PARAM_ID_DVLO, DOLBY_PARAM_ID_DVLI, DOLBY_PARAM_ID_VMB},
+		{DOLBY_ENDDEP_PARAM_DVLO_LENGTH, DOLBY_ENDDEP_PARAM_DVLI_LENGTH,
+		 DOLBY_ENDDEP_PARAM_VMB_LENGTH},
+		{DOLBY_ENDDEP_PARAM_DVLO_OFFSET, DOLBY_ENDDEP_PARAM_DVLI_OFFSET,
+		 DOLBY_ENDDEP_PARAM_VMB_OFFSET},
+		{-320, -320, 144}
+	},
+	{ANC_HEADPHONE,	2, DOLBY_ENDP_HEADPHONES,
 		{DOLBY_PARAM_ID_DVLO, DOLBY_PARAM_ID_DVLI, DOLBY_PARAM_ID_VMB},
 		{DOLBY_ENDDEP_PARAM_DVLO_LENGTH, DOLBY_ENDDEP_PARAM_DVLI_LENGTH,
 		 DOLBY_ENDDEP_PARAM_VMB_LENGTH},
@@ -191,13 +219,13 @@ const struct dolby_dap_endp_params_s
 		 DOLBY_ENDDEP_PARAM_VMB_OFFSET},
 		{-320, -320, 144}
 	},
-	{FM, 2, DOLBY_ENDP_EXT_SPEAKERS,
+	{FM, 2, DOLBY_ENDP_HDMI,
 		{DOLBY_PARAM_ID_DVLO, DOLBY_PARAM_ID_DVLI, DOLBY_PARAM_ID_VMB},
 		{DOLBY_ENDDEP_PARAM_DVLO_LENGTH, DOLBY_ENDDEP_PARAM_DVLI_LENGTH,
 		 DOLBY_ENDDEP_PARAM_VMB_LENGTH},
 		{DOLBY_ENDDEP_PARAM_DVLO_OFFSET, DOLBY_ENDDEP_PARAM_DVLI_OFFSET,
 		 DOLBY_ENDDEP_PARAM_VMB_OFFSET},
-		{-320, -320, 144}
+		{-496, -496, 0}
 	},
 	{FM_TX,	2, DOLBY_ENDP_EXT_SPEAKERS,
 		{DOLBY_PARAM_ID_DVLO, DOLBY_PARAM_ID_DVLI, DOLBY_PARAM_ID_VMB},
@@ -308,24 +336,23 @@ struct dolby_dap_params_states_s {
 	bool use_cache;
 	bool auto_endp;
 	bool enddep_params;
-	int  port_id[AFE_MAX_PORTS];
-	int  copp_idx[AFE_MAX_PORTS];
+	int  port_id;
 	int  port_open_count;
 	int  port_ids_dolby_can_be_enabled;
 	int  device;
 };
 
 static struct dolby_dap_params_get_s dolby_dap_params_get = {-1, DEVICE_OUT_ALL,
-							     0, 0, 0};
+								 0, 0, 0};
 static struct dolby_dap_params_states_s dolby_dap_params_states = { true, true,
-						true, {DOLBY_INVALID_PORT_ID},
-						{-1}, 0, DEVICE_OUT_ALL, 0 };
+						true, DOLBY_INVALID_PORT_ID,
+						0, DEVICE_OUT_ALL, 0 };
 /*
 port_ids_dolby_can_be_enabled is set to 0x7FFFFFFF.
 this needs to be removed after interface validation
 */
 
-static int msm_dolby_dap_map_device_to_dolby_endpoint(int device)
+static int map_device_to_dolby_endpoint(int device)
 {
 	int i, dolby_dap_device = DOLBY_ENDP_EXT_SPEAKERS;
 	for (i = 0; i < NUM_DOLBY_ENDP_DEVICE; i++) {
@@ -341,7 +368,7 @@ static int msm_dolby_dap_map_device_to_dolby_endpoint(int device)
 	return dolby_dap_device;
 }
 
-static int msm_dolby_dap_send_end_point(int port_id, int copp_idx)
+static int dolby_dap_send_end_point(int port_id)
 {
 	int rc = 0;
 	char *params_value;
@@ -360,10 +387,8 @@ static int msm_dolby_dap_send_end_point(int port_id, int copp_idx)
 	*update_params_value++ = DOLBY_PARAM_ID_INIT_ENDP;
 	*update_params_value++ = DOLBY_PARAM_INT_ENDP_LENGTH * sizeof(uint32_t);
 	*update_params_value++ =
-		 msm_dolby_dap_map_device_to_dolby_endpoint(
-						dolby_dap_params_states.device);
-	rc = adm_dolby_dap_send_params(port_id, copp_idx, params_value,
-				       params_length);
+		 map_device_to_dolby_endpoint(dolby_dap_params_states.device);
+	rc = adm_dolby_dap_send_params(port_id, params_value, params_length);
 	if (rc) {
 		pr_err("%s: send dolby params failed\n", __func__);
 		rc = -EINVAL;
@@ -372,8 +397,7 @@ static int msm_dolby_dap_send_end_point(int port_id, int copp_idx)
 	return rc;
 }
 
-static int msm_dolby_dap_send_enddep_params(int port_id, int copp_idx,
-					    int device_channels)
+static int dolby_dap_send_enddep_params(int port_id, int device_channels)
 {
 	int i, j, rc = 0, idx, offset;
 	char *params_value;
@@ -420,8 +444,7 @@ static int msm_dolby_dap_send_enddep_params(int port_id, int copp_idx,
 			*update_params_value++ =
 				dolby_dap_endp_params[idx].params_val[offset+j];
 	}
-	rc = adm_dolby_dap_send_params(port_id, copp_idx, params_value,
-				       params_length);
+	rc = adm_dolby_dap_send_params(port_id, params_value, params_length);
 	if (rc) {
 		pr_err("%s: send dolby params failed\n", __func__);
 		rc = -EINVAL;
@@ -430,8 +453,7 @@ static int msm_dolby_dap_send_enddep_params(int port_id, int copp_idx,
 	return rc;
 }
 
-static int msm_dolby_dap_send_cached_params(int port_id, int copp_idx,
-					    int commit)
+static int dolby_dap_send_cached_params(int port_id, int commit)
 {
 	char *params_value;
 	int *update_params_value, rc = 0;
@@ -458,16 +480,15 @@ static int msm_dolby_dap_send_cached_params(int port_id, int copp_idx,
 		*update_params_value++ = dolby_dap_params_length[i] *
 						sizeof(uint32_t);
 		index_offset = dolby_dap_params_offset[i];
-		for (j = 0; j < dolby_dap_params_length[i]; j++) {
+		for (j = 0; j < dolby_dap_params_length[i]; j++)
 			*update_params_value++ =
-					dolby_dap_params_value[index_offset+j];
-		}
+				dolby_dap_params_value[index_offset+j];
 		params_length += (DOLBY_PARAM_PAYLOAD_SIZE +
 				dolby_dap_params_length[i]) * sizeof(uint32_t);
 	}
 	pr_debug("%s, valid param length: %d", __func__, params_length);
 	if (params_length) {
-		rc = adm_dolby_dap_send_params(port_id, copp_idx, params_value,
+		rc = adm_dolby_dap_send_params(port_id, params_value,
 						params_length);
 		if (rc) {
 			pr_err("%s: send dolby params failed\n", __func__);
@@ -488,31 +509,23 @@ static int msm_dolby_dap_send_cached_params(int port_id, int copp_idx,
 	return 0;
 }
 
-int msm_dolby_dap_init(int port_id, int copp_idx, int channels,
-		       bool is_custom_stereo_on)
+int dolby_dap_init(int port_id, int channels)
 {
 	int ret = 0;
-	int index = adm_validate_and_get_port_index(port_id);
-	if (index < 0) {
-		pr_err("%s: Invalid port idx %d port_id %#x\n", __func__, index,
-			port_id);
-		return -EINVAL;
-	}
 	if ((port_id != DOLBY_INVALID_PORT_ID) &&
-	    (port_id & dolby_dap_params_states.port_ids_dolby_can_be_enabled)) {
-		dolby_dap_params_states.port_id[index] = port_id;
-		dolby_dap_params_states.copp_idx[index] = copp_idx;
+		(port_id &
+		 dolby_dap_params_states.port_ids_dolby_can_be_enabled)) {
+		dolby_dap_params_states.port_id = port_id;
 		dolby_dap_params_states.port_open_count++;
 		if (dolby_dap_params_states.auto_endp) {
-			ret = msm_dolby_dap_send_end_point(port_id, copp_idx);
+			ret = dolby_dap_send_end_point(port_id);
 			if (ret) {
 				pr_err("%s: err sending endppoint\n", __func__);
 				return ret;
 			}
 		}
 		if (dolby_dap_params_states.use_cache) {
-			ret = msm_dolby_dap_send_cached_params(port_id,
-							       copp_idx, 0);
+			ret = dolby_dap_send_cached_params(port_id, 0);
 			if (ret) {
 				pr_err("%s: err sending cached params\n",
 					__func__);
@@ -520,134 +533,27 @@ int msm_dolby_dap_init(int port_id, int copp_idx, int channels,
 			}
 		}
 		if (dolby_dap_params_states.enddep_params) {
-			msm_dolby_dap_send_enddep_params(port_id, copp_idx,
-							 channels);
+			dolby_dap_send_enddep_params(port_id,
+				channels);
 			if (ret) {
 				pr_err("%s: err sending endp dependent params\n",
 					__func__);
 				return ret;
 			}
 		}
-		if (is_custom_stereo_on)
-			dolby_dap_set_custom_stereo_onoff(port_id, copp_idx,
-							  is_custom_stereo_on);
 	}
 	return ret;
 }
 
-void msm_dolby_dap_deinit(int port_id)
+void dolby_dap_deinit(int port_id)
 {
-	int index = adm_validate_and_get_port_index(port_id);
-	if (index < 0) {
-		pr_err("%s: Invalid port idx %d port_id %#x\n", __func__, index,
-			port_id);
-		return;
-	}
 	dolby_dap_params_states.port_open_count--;
-	if ((dolby_dap_params_states.port_id[index] == port_id) &&
-		(!dolby_dap_params_states.port_open_count)) {
-		dolby_dap_params_states.port_id[index] = DOLBY_INVALID_PORT_ID;
-		dolby_dap_params_states.copp_idx[index] = -1;
-	}
+	if ((dolby_dap_params_states.port_id == port_id) &&
+		(!dolby_dap_params_states.port_open_count))
+		dolby_dap_params_states.port_id = DOLBY_INVALID_PORT_ID;
 }
 
-static int msm_dolby_dap_set_vspe_vdhe(int port_id, int copp_idx,
-				       bool is_custom_stereo_enabled)
-{
-	char *params_value;
-	int *update_params_value, rc = 0;
-	uint32_t index_offset, i, j;
-	uint32_t params_length = (TOTAL_LENGTH_DOLBY_PARAM +
-				2 * DOLBY_PARAM_PAYLOAD_SIZE) *
-				sizeof(uint32_t);
-	if (port_id == DOLBY_INVALID_PORT_ID) {
-		pr_err("%s: Not a Dolby topology. Do not set custom stereo mixing\n",
-			__func__);
-		return -EINVAL;
-	}
-	params_value = kzalloc(params_length, GFP_KERNEL);
-	if (!params_value) {
-		pr_err("%s, params memory alloc failed\n", __func__);
-		return -ENOMEM;
-	}
-	update_params_value = (int *)params_value;
-	params_length = 0;
-	/* for VDHE and VSPE DAP params at index 0 and 1 in table */
-	for (i = 0; i < 2; i++) {
-		*update_params_value++ = DOLBY_BUNDLE_MODULE_ID;
-		*update_params_value++ = dolby_dap_params_id[i];
-		*update_params_value++ = dolby_dap_params_length[i] *
-					sizeof(uint32_t);
-		index_offset = dolby_dap_params_offset[i];
-		for (j = 0; j < dolby_dap_params_length[i]; j++) {
-			if (is_custom_stereo_enabled)
-				*update_params_value++ = 0;
-			else
-				*update_params_value++ =
-					dolby_dap_params_value[index_offset+j];
-		}
-		params_length += (DOLBY_PARAM_PAYLOAD_SIZE +
-				dolby_dap_params_length[i]) * sizeof(uint32_t);
-	}
-	pr_debug("%s, valid param length: %d", __func__, params_length);
-	if (params_length) {
-		rc = adm_dolby_dap_send_params(port_id, copp_idx, params_value,
-					       params_length);
-		if (rc) {
-			pr_err("%s: send vdhe/vspe params failed with rc=%d\n",
-				__func__, rc);
-			kfree(params_value);
-			return -EINVAL;
-		}
-	}
-	kfree(params_value);
-	return 0;
-}
-
-int dolby_dap_set_custom_stereo_onoff(int port_id, int copp_idx,
-				      bool is_custom_stereo_enabled)
-{
-	char *params_value;
-	int *update_params_value, rc = 0;
-	uint32_t params_length = (TOTAL_LENGTH_DOLBY_PARAM +
-				DOLBY_PARAM_PAYLOAD_SIZE) *
-				sizeof(uint32_t);
-	if (port_id == DOLBY_INVALID_PORT_ID)
-		return -EINVAL;
-
-	msm_dolby_dap_set_vspe_vdhe(port_id, copp_idx,
-				    is_custom_stereo_enabled);
-	params_value = kzalloc(params_length, GFP_KERNEL);
-	if (!params_value) {
-		pr_err("%s, params memory alloc failed\n", __func__);
-		return -ENOMEM;
-	}
-	update_params_value = (int *)params_value;
-	params_length = 0;
-	*update_params_value++ = DOLBY_BUNDLE_MODULE_ID;
-	*update_params_value++ = DOLBY_ENABLE_CUSTOM_STEREO;
-	*update_params_value++ = sizeof(uint32_t);
-	if (is_custom_stereo_enabled)
-		*update_params_value++ = 1;
-	else
-		*update_params_value++ = 0;
-	params_length += (DOLBY_PARAM_PAYLOAD_SIZE + 1) * sizeof(uint32_t);
-	pr_debug("%s, valid param length: %d", __func__, params_length);
-	if (params_length) {
-		rc = adm_dolby_dap_send_params(port_id, copp_idx, params_value,
-					       params_length);
-		if (rc) {
-			pr_err("%s: setting ds1 custom stereo param failed with rc=%d\n",
-				__func__, rc);
-			kfree(params_value);
-			return -EINVAL;
-		}
-	}
-	kfree(params_value);
-	return 0;
-}
-
-static int msm_dolby_dap_map_device_to_port_id(int device)
+static int map_device_to_port_id(int device)
 {
 	int port_id = SLIMBUS_0_RX;
 	device = DEVICE_OUT_ALL;
@@ -666,25 +572,27 @@ static int msm_dolby_dap_map_device_to_port_id(int device)
 	return port_id;
 }
 
-int msm_dolby_dap_param_to_set_control_get(struct snd_kcontrol *kcontrol,
-					   struct snd_ctl_elem_value *ucontrol)
-{
+int msm_routing_get_dolby_dap_param_to_set_control(
+		struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol) {
 	/* not used while setting the parameters */
 	return 0;
 }
 
-int msm_dolby_dap_param_to_set_control_put(struct snd_kcontrol *kcontrol,
-					   struct snd_ctl_elem_value *ucontrol)
-{
-	int rc = 0, port_id, copp_idx;
+int msm_routing_put_dolby_dap_param_to_set_control(
+		struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol) {
+	int rc = 0;
 	uint32_t idx, j;
 	uint32_t device = ucontrol->value.integer.value[0];
 	uint32_t param_id = ucontrol->value.integer.value[1];
 	uint32_t offset = ucontrol->value.integer.value[2];
 	uint32_t length = ucontrol->value.integer.value[3];
 
+	int port_id = dolby_dap_params_states.port_id;
+
 	dolby_dap_params_states.port_ids_dolby_can_be_enabled =
-				msm_dolby_dap_map_device_to_port_id(device);
+						map_device_to_port_id(device);
 	for (idx = 0; idx < ALL_DOLBY_PARAMS; idx++) {
 		/*paramid from user space*/
 		if (param_id == dolby_dap_params_id[idx])
@@ -699,35 +607,15 @@ int msm_dolby_dap_param_to_set_control_put(struct snd_kcontrol *kcontrol,
 		case DOLBY_COMMIT_ALL_IDX: {
 			/* COMIIT ALL: Send all parameters to DSP */
 			pr_debug("%s: COMMIT_ALL recvd\n", __func__);
-			for (idx = 0; idx < AFE_MAX_PORTS; idx++) {
-				port_id = dolby_dap_params_states.port_id[idx];
-				copp_idx =
-					dolby_dap_params_states.copp_idx[idx];
-				if ((copp_idx > 0) &&
-				    (copp_idx < MAX_COPPS_PER_PORT) &&
-				    (port_id != DOLBY_INVALID_PORT_ID))
-					rc |= msm_dolby_dap_send_cached_params(
-								      port_id,
-								      copp_idx,
-								      0);
-			}
+			if (port_id != DOLBY_INVALID_PORT_ID)
+				rc = dolby_dap_send_cached_params(port_id, 0);
 		}
 		break;
 		case DOLBY_COMMIT_IDX: {
 			pr_debug("%s: COMMIT recvd\n", __func__);
 			/* COMMIT: Send only modified paramters to DSP */
-			for (idx = 0; idx < AFE_MAX_PORTS; idx++) {
-				port_id = dolby_dap_params_states.port_id[idx];
-				copp_idx =
-					dolby_dap_params_states.copp_idx[idx];
-				if ((copp_idx > 0) &&
-				    (copp_idx < MAX_COPPS_PER_PORT) &&
-				    (port_id == DOLBY_INVALID_PORT_ID))
-					rc |= msm_dolby_dap_send_cached_params(
-								      port_id,
-								      copp_idx,
-								      1);
-			}
+			if (port_id != DOLBY_INVALID_PORT_ID)
+				rc = dolby_dap_send_cached_params(port_id, 1);
 		}
 		break;
 		case DOLBY_USE_CACHE_IDX: {
@@ -771,32 +659,20 @@ int msm_dolby_dap_param_to_set_control_put(struct snd_kcontrol *kcontrol,
 	return rc;
 }
 
-int msm_dolby_dap_param_to_get_control_get(struct snd_kcontrol *kcontrol,
-					   struct snd_ctl_elem_value *ucontrol)
-{
-	int rc = 0, i, index;
+int msm_routing_get_dolby_dap_param_to_get_control(
+		struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol) {
+	int rc = 0, i;
 	char *params_value;
 	int *update_params_value;
 	uint32_t params_length = DOLBY_MAX_LENGTH_INDIVIDUAL_PARAM *
 					sizeof(uint32_t);
 	uint32_t param_payload_len =
 			DOLBY_PARAM_PAYLOAD_SIZE * sizeof(uint32_t);
-	int port_id = dolby_dap_params_get.port_id, copp_idx;
+	int port_id = dolby_dap_params_states.port_id;
 
 	if (port_id == DOLBY_INVALID_PORT_ID) {
-		pr_err("%s, port_id not set, do not query ADM\n", __func__);
-		return -EINVAL;
-	}
-	index = adm_validate_and_get_port_index(port_id);
-	if (index < 0) {
-		pr_err("%s: Invalid port idx %d port_id %#x\n", __func__, index,
-			port_id);
-		return -EINVAL;
-	}
-	copp_idx = dolby_dap_params_states.copp_idx[index];
-	if ((copp_idx < 0) || (copp_idx >= MAX_COPPS_PER_PORT)) {
-		pr_debug("%s: get params called before copp open.copp_idx:%d\n",
-			 __func__, copp_idx);
+		pr_err("%s, port_id not set, returning error", __func__);
 		return -EINVAL;
 	}
 	params_value = kzalloc(params_length, GFP_KERNEL);
@@ -805,10 +681,12 @@ int msm_dolby_dap_param_to_get_control_get(struct snd_kcontrol *kcontrol,
 		return -ENOMEM;
 	}
 	if (DOLBY_PARAM_ID_VER == dolby_dap_params_get.param_id) {
-		rc = adm_get_params(port_id, copp_idx,
-				    DOLBY_BUNDLE_MODULE_ID, DOLBY_PARAM_ID_VER,
-				    params_length + param_payload_len,
-				    params_value);
+		rc = adm_get_params(dolby_dap_params_get.port_id,
+						DOLBY_BUNDLE_MODULE_ID,
+						DOLBY_PARAM_ID_VER,
+						params_length +
+							param_payload_len,
+						params_value);
 	} else {
 		for (i = 0; i < MAX_DOLBY_PARAMS; i++)
 			if (dolby_dap_params_id[i] ==
@@ -821,15 +699,17 @@ int msm_dolby_dap_param_to_get_control_get(struct snd_kcontrol *kcontrol,
 			params_length = (dolby_dap_params_length[i] +
 						DOLBY_PARAM_PAYLOAD_SIZE) *
 						sizeof(uint32_t);
-			rc = adm_get_params(port_id, copp_idx,
-					    DOLBY_BUNDLE_MODULE_ID,
-					    dolby_dap_params_id[i],
-					    params_length + param_payload_len,
-					    params_value);
+			rc = adm_get_params(
+						dolby_dap_params_get.port_id,
+						DOLBY_BUNDLE_MODULE_ID,
+						dolby_dap_params_id[i],
+						params_length +
+						 param_payload_len,
+						params_value);
 		}
 	}
 	if (rc) {
-		pr_err("%s: get parameters failed rc:%d\n", __func__, rc);
+		pr_err("%s: get parameters failed\n", __func__);
 		kfree(params_value);
 		return -EINVAL;
 	}
@@ -855,26 +735,14 @@ int msm_dolby_dap_param_to_get_control_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-int msm_dolby_dap_param_to_get_control_put(struct snd_kcontrol *kcontrol,
-					   struct snd_ctl_elem_value *ucontrol)
-{
-	int port_id, idx, copp_idx;
+int msm_routing_put_dolby_dap_param_to_get_control(
+					struct snd_kcontrol *kcontrol,
+					struct snd_ctl_elem_value *ucontrol) {
 	dolby_dap_params_get.device_id = ucontrol->value.integer.value[0];
-	port_id = msm_dolby_dap_map_device_to_port_id(
-						dolby_dap_params_get.device_id);
-	for (idx = 0; idx < AFE_MAX_PORTS; idx++) {
-		port_id = dolby_dap_params_states.port_id[idx];
-		copp_idx = dolby_dap_params_states.copp_idx[idx];
-		if ((copp_idx < 0) ||
-		    (copp_idx >= MAX_COPPS_PER_PORT) ||
-		    (port_id == DOLBY_INVALID_PORT_ID))
-			continue;
-		else
-			break;
-	}
-	if (idx == AFE_MAX_PORTS)
-		port_id = SLIMBUS_0_RX;
-	dolby_dap_params_get.port_id = port_id;
+	dolby_dap_params_get.port_id =
+			(dolby_dap_params_get.device_id == DEVICE_OUT_ALL) ?
+			dolby_dap_params_states.port_id :
+			map_device_to_port_id(dolby_dap_params_get.device_id);
 	dolby_dap_params_get.param_id = ucontrol->value.integer.value[1];
 	dolby_dap_params_get.offset = ucontrol->value.integer.value[2];
 	dolby_dap_params_get.length = ucontrol->value.integer.value[3];
@@ -884,9 +752,9 @@ int msm_dolby_dap_param_to_get_control_put(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-int msm_dolby_dap_param_visualizer_control_get(struct snd_kcontrol *kcontrol,
-					   struct snd_ctl_elem_value *ucontrol)
-{
+int msm_routing_get_dolby_dap_param_visualizer_control(
+		struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol) {
 	uint32_t length = dolby_dap_params_value[DOLBY_PARAM_VCNB_OFFSET];
 	char *visualizer_data;
 	int i, rc;
@@ -895,18 +763,8 @@ int msm_dolby_dap_param_visualizer_control_get(struct snd_kcontrol *kcontrol,
 		(2*length + DOLBY_VIS_PARAM_HEADER_SIZE)*sizeof(uint32_t);
 	uint32_t param_payload_len =
 		DOLBY_PARAM_PAYLOAD_SIZE * sizeof(uint32_t);
-	int port_id, copp_idx, idx;
-	for (idx = 0; idx < AFE_MAX_PORTS; idx++) {
-		port_id = dolby_dap_params_states.port_id[idx];
-		copp_idx = dolby_dap_params_states.copp_idx[idx];
-		if ((copp_idx < 0) ||
-		    (copp_idx >= MAX_COPPS_PER_PORT) ||
-		    (port_id == DOLBY_INVALID_PORT_ID))
-			continue;
-		else
-			break;
-	}
-	if (idx == AFE_MAX_PORTS) {
+	int port_id = dolby_dap_params_states.port_id;
+	if (port_id == DOLBY_INVALID_PORT_ID) {
 		pr_debug("%s, port_id not set, returning error", __func__);
 		ucontrol->value.integer.value[0] = 0;
 		return -EINVAL;
@@ -918,10 +776,11 @@ int msm_dolby_dap_param_visualizer_control_get(struct snd_kcontrol *kcontrol,
 	}
 	offset = 0;
 	params_length = length * sizeof(uint32_t);
-	rc = adm_get_params(port_id, copp_idx, DOLBY_BUNDLE_MODULE_ID,
-			    DOLBY_PARAM_ID_VCBG,
-			    params_length + param_payload_len,
-			    visualizer_data + offset);
+	rc = adm_get_params(dolby_dap_params_states.port_id,
+					DOLBY_BUNDLE_MODULE_ID,
+					DOLBY_PARAM_ID_VCBG,
+					params_length + param_payload_len,
+					visualizer_data + offset);
 	if (rc) {
 		pr_err("%s: get parameters failed\n", __func__);
 		kfree(visualizer_data);
@@ -929,10 +788,11 @@ int msm_dolby_dap_param_visualizer_control_get(struct snd_kcontrol *kcontrol,
 	}
 
 	offset = length * sizeof(uint32_t);
-	rc = adm_get_params(port_id, copp_idx, DOLBY_BUNDLE_MODULE_ID,
-			    DOLBY_PARAM_ID_VCBE,
-			    params_length + param_payload_len,
-			    visualizer_data + offset);
+	rc = adm_get_params(dolby_dap_params_states.port_id,
+					DOLBY_BUNDLE_MODULE_ID,
+					DOLBY_PARAM_ID_VCBE,
+					params_length + param_payload_len,
+					visualizer_data + offset);
 	if (rc) {
 		pr_err("%s: get parameters failed\n", __func__);
 		kfree(visualizer_data);
@@ -951,117 +811,24 @@ int msm_dolby_dap_param_visualizer_control_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-int msm_dolby_dap_param_visualizer_control_put(struct snd_kcontrol *kcontrol,
-					   struct snd_ctl_elem_value *ucontrol)
-{
+int msm_routing_put_dolby_dap_param_visualizer_control(
+		struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol) {
 	/* not used while getting the visualizer data */
 	return 0;
 }
 
-int msm_dolby_dap_endpoint_control_get(struct snd_kcontrol *kcontrol,
-				       struct snd_ctl_elem_value *ucontrol)
-{
+int msm_routing_get_dolby_dap_endpoint_control(
+		struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol) {
 	/* not used while setting the endpoint */
 	return 0;
 }
 
-int msm_dolby_dap_endpoint_control_put(struct snd_kcontrol *kcontrol,
-				       struct snd_ctl_elem_value *ucontrol)
-{
+int msm_routing_put_dolby_dap_endpoint_control(
+		struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol) {
 	int device = ucontrol->value.integer.value[0];
 	dolby_dap_params_states.device = device;
 	return 0;
-}
-
-int msm_dolby_dap_security_control_get(struct snd_kcontrol *kcontrol,
-				       struct snd_ctl_elem_value *ucontrol)
-{
-	/* not used while setting the manfr id*/
-	return 0;
-}
-
-int msm_dolby_dap_security_control_put(struct snd_kcontrol *kcontrol,
-				       struct snd_ctl_elem_value *ucontrol)
-{
-	int manufacturer_id = ucontrol->value.integer.value[0];
-	core_set_dolby_manufacturer_id(manufacturer_id);
-	return 0;
-}
-
-int msm_dolby_dap_license_control_get(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	ucontrol->value.integer.value[0] =
-			core_get_license_status(DOLBY_DS1_LICENSE_ID);
-	return 0;
-}
-
-int msm_dolby_dap_license_control_put(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	return core_set_license(ucontrol->value.integer.value[0],
-						DOLBY_DS1_LICENSE_ID);
-}
-
-static const struct snd_kcontrol_new dolby_license_controls[] = {
-	SOC_SINGLE_MULTI_EXT("DS1 License", SND_SOC_NOPM, 0,
-	0xFFFFFFFF, 0, 1, msm_dolby_dap_license_control_get,
-	msm_dolby_dap_license_control_put),
-};
-
-static const struct snd_kcontrol_new dolby_security_controls[] = {
-	SOC_SINGLE_MULTI_EXT("DS1 Security", SND_SOC_NOPM, 0,
-	0xFFFFFFFF, 0, 1, msm_dolby_dap_security_control_get,
-	msm_dolby_dap_security_control_put),
-};
-
-static const struct snd_kcontrol_new dolby_dap_param_to_set_controls[] = {
-	SOC_SINGLE_MULTI_EXT("DS1 DAP Set Param", SND_SOC_NOPM, 0, 0xFFFFFFFF,
-	0, 128, msm_dolby_dap_param_to_set_control_get,
-	msm_dolby_dap_param_to_set_control_put),
-};
-
-static const struct snd_kcontrol_new dolby_dap_param_to_get_controls[] = {
-	SOC_SINGLE_MULTI_EXT("DS1 DAP Get Param", SND_SOC_NOPM, 0, 0xFFFFFFFF,
-	0, 128, msm_dolby_dap_param_to_get_control_get,
-	msm_dolby_dap_param_to_get_control_put),
-};
-
-static const struct snd_kcontrol_new dolby_dap_param_visualizer_controls[] = {
-	SOC_SINGLE_MULTI_EXT("DS1 DAP Get Visualizer", SND_SOC_NOPM, 0,
-	0xFFFFFFFF, 0, 41, msm_dolby_dap_param_visualizer_control_get,
-	msm_dolby_dap_param_visualizer_control_put),
-};
-
-static const struct snd_kcontrol_new dolby_dap_param_end_point_controls[] = {
-	SOC_SINGLE_MULTI_EXT("DS1 DAP Endpoint", SND_SOC_NOPM, 0,
-	0xFFFFFFFF, 0, 1, msm_dolby_dap_endpoint_control_get,
-	msm_dolby_dap_endpoint_control_put),
-};
-
-void msm_dolby_dap_add_controls(struct snd_soc_platform *platform)
-{
-	snd_soc_add_platform_controls(platform,
-				dolby_license_controls,
-			ARRAY_SIZE(dolby_license_controls));
-
-	snd_soc_add_platform_controls(platform,
-				dolby_security_controls,
-			ARRAY_SIZE(dolby_security_controls));
-
-	snd_soc_add_platform_controls(platform,
-				dolby_dap_param_to_set_controls,
-			ARRAY_SIZE(dolby_dap_param_to_set_controls));
-
-	snd_soc_add_platform_controls(platform,
-				dolby_dap_param_to_get_controls,
-			ARRAY_SIZE(dolby_dap_param_to_get_controls));
-
-	snd_soc_add_platform_controls(platform,
-				dolby_dap_param_visualizer_controls,
-			ARRAY_SIZE(dolby_dap_param_visualizer_controls));
-
-	snd_soc_add_platform_controls(platform,
-				dolby_dap_param_end_point_controls,
-			ARRAY_SIZE(dolby_dap_param_end_point_controls));
 }

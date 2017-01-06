@@ -27,7 +27,6 @@
 #include <linux/uaccess.h>
 #include <linux/io.h>
 #include <linux/reboot.h>
-#include <linux/slab.h>
 
 #include <asm/setup.h>
 #include <asm/page.h>
@@ -95,7 +94,7 @@ void __init efi_call_phys_epilog(void)
 }
 
 void __iomem *__init efi_ioremap(unsigned long phys_addr, unsigned long size,
-				 u32 type, u64 attribute)
+				 u32 type)
 {
 	unsigned long last_map_pfn;
 
@@ -105,11 +104,8 @@ void __iomem *__init efi_ioremap(unsigned long phys_addr, unsigned long size,
 	last_map_pfn = init_memory_mapping(phys_addr, phys_addr + size);
 	if ((last_map_pfn << PAGE_SHIFT) < phys_addr + size) {
 		unsigned long top = last_map_pfn << PAGE_SHIFT;
-		efi_ioremap(top, size - (top - phys_addr), type, attribute);
+		efi_ioremap(top, size - (top - phys_addr), type);
 	}
-
-	if (!(attribute & EFI_MEMORY_WB))
-		efi_memory_uc((u64)(unsigned long)__va(phys_addr), size);
 
 	return (void __iomem *)__va(phys_addr);
 }

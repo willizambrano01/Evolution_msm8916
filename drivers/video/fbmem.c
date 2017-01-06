@@ -727,7 +727,7 @@ static const struct file_operations fb_proc_fops = {
  */
 static struct fb_info *file_fb_info(struct file *file)
 {
-	struct inode *inode = file_inode(file);
+	struct inode *inode = file->f_path.dentry->d_inode;
 	int fbidx = iminor(inode);
 	struct fb_info *info = registered_fb[fbidx];
 
@@ -1399,11 +1399,6 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 	len = info->fix.smem_len;
 	mmio_pgoff = PAGE_ALIGN((start & ~PAGE_MASK) + len) >> PAGE_SHIFT;
 	if (vma->vm_pgoff >= mmio_pgoff) {
-		if (info->var.accel_flags) {
-			mutex_unlock(&info->mm_lock);
-			return -EINVAL;
-		}
-
 		vma->vm_pgoff -= mmio_pgoff;
 		start = info->fix.mmio_start;
 		len = info->fix.mmio_len;
@@ -1441,7 +1436,6 @@ __releases(&info->lock)
 		goto out;
 	}
 	file->private_data = info;
-	info->file = file;
 	if (info->fbops->fb_open) {
 		res = info->fbops->fb_open(info,1);
 		if (res)
@@ -1466,7 +1460,6 @@ __releases(&info->lock)
 	struct fb_info * const info = file->private_data;
 
 	mutex_lock(&info->lock);
-	info->file = file;
 	if (info->fbops->fb_release)
 		info->fbops->fb_release(info,1);
 	module_put(info->fbops->owner);
@@ -1642,11 +1635,6 @@ static int do_register_framebuffer(struct fb_info *fb_info)
 	if (!fb_info->modelist.prev || !fb_info->modelist.next)
 		INIT_LIST_HEAD(&fb_info->modelist);
 
-	if (fb_info->skip_vt_switch)
-		pm_vt_switch_required(fb_info->dev, false);
-	else
-		pm_vt_switch_required(fb_info->dev, true);
-
 	fb_var_to_videomode(&mode, &fb_info->var);
 	fb_add_videomode(&mode, &fb_info->modelist);
 	registered_fb[i] = fb_info;
@@ -1680,8 +1668,6 @@ static int do_unregister_framebuffer(struct fb_info *fb_info)
 
 	if (ret)
 		return -EINVAL;
-
-	pm_vt_switch_unregister(fb_info->dev);
 
 	unlink_framebuffer(fb_info);
 	if (fb_info->pixmap.addr &&

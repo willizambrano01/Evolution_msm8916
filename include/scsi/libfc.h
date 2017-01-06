@@ -224,7 +224,7 @@ struct fc_rport_priv {
 };
 
 /**
- * struct fc_stats - fc stats structure
+ * struct fcoe_dev_stats - fcoe stats structure
  * @SecondsSinceLastReset: Seconds since the last reset
  * @TxFrames:              Number of transmitted frames
  * @TxWords:               Number of transmitted words
@@ -232,9 +232,6 @@ struct fc_rport_priv {
  * @RxWords:               Number of received words
  * @ErrorFrames:           Number of received error frames
  * @DumpedFrames:          Number of dumped frames
- * @FcpPktAllocFails:      Number of fcp packet allocation failures
- * @FcpPktAborts:          Number of fcp packet aborts
- * @FcpFrameAllocFails:    Number of fcp frame allocation failures
  * @LinkFailureCount:      Number of link failures
  * @LossOfSignalCount:     Number for signal losses
  * @InvalidTxWordCount:    Number of invalid transmitted words
@@ -247,7 +244,7 @@ struct fc_rport_priv {
  * @VLinkFailureCount:     Number of virtual link failures
  * @MissDiscAdvCount:      Number of missing FIP discovery advertisement
  */
-struct fc_stats {
+struct fcoe_dev_stats {
 	u64		SecondsSinceLastReset;
 	u64		TxFrames;
 	u64		TxWords;
@@ -255,9 +252,6 @@ struct fc_stats {
 	u64		RxWords;
 	u64		ErrorFrames;
 	u64		DumpedFrames;
-	u64		FcpPktAllocFails;
-	u64		FcpPktAborts;
-	u64		FcpFrameAllocFails;
 	u64		LinkFailureCount;
 	u64		LossOfSignalCount;
 	u64		InvalidTxWordCount;
@@ -516,7 +510,7 @@ struct libfc_function_template {
 	int (*ddp_done)(struct fc_lport *, u16);
 	/*
 	 * Sets up the DDP context for a given exchange id on the given
-	 * scatterlist if LLD supports DDP for target.
+	 * scatterlist if LLD supports DDP for FCoE target.
 	 *
 	 * STATUS: OPTIONAL
 	 */
@@ -823,7 +817,8 @@ enum fc_lport_event {
  * @state:                 Identifies the state
  * @boot_time:             Timestamp indicating when the local port came online
  * @host_stats:            SCSI host statistics
- * @stats:                 FC local port stats (TODO separate libfc LLD stats)
+ * @dev_stats:             FCoE device stats (TODO: libfc should not be
+ *                         FCoE aware)
  * @retry_count:           Number of retries in the current state
  * @port_id:               FC Port ID
  * @wwpn:                  World Wide Port Name
@@ -872,7 +867,7 @@ struct fc_lport {
 	enum fc_lport_state	       state;
 	unsigned long		       boot_time;
 	struct fc_host_statistics      host_stats;
-	struct fc_stats	__percpu       *stats;
+	struct fcoe_dev_stats __percpu *dev_stats;
 	u8			       retry_count;
 
 	/* Fabric information */
@@ -985,8 +980,8 @@ static inline void fc_lport_state_enter(struct fc_lport *lport,
  */
 static inline int fc_lport_init_stats(struct fc_lport *lport)
 {
-	lport->stats = alloc_percpu(struct fc_stats);
-	if (!lport->stats)
+	lport->dev_stats = alloc_percpu(struct fcoe_dev_stats);
+	if (!lport->dev_stats)
 		return -ENOMEM;
 	return 0;
 }
@@ -997,7 +992,7 @@ static inline int fc_lport_init_stats(struct fc_lport *lport)
  */
 static inline void fc_lport_free_stats(struct fc_lport *lport)
 {
-	free_percpu(lport->stats);
+	free_percpu(lport->dev_stats);
 }
 
 /**
@@ -1074,8 +1069,7 @@ void fc_rport_terminate_io(struct fc_rport *);
 /*
  * DISCOVERY LAYER
  *****************************/
-void fc_disc_init(struct fc_lport *);
-void fc_disc_config(struct fc_lport *, void *);
+int fc_disc_init(struct fc_lport *);
 
 static inline struct fc_lport *fc_disc_lport(struct fc_disc *disc)
 {
@@ -1122,7 +1116,6 @@ void fc_fill_hdr(struct fc_frame *, const struct fc_frame *,
  * EXCHANGE MANAGER LAYER
  *****************************/
 int fc_exch_init(struct fc_lport *);
-void fc_exch_update_stats(struct fc_lport *lport);
 struct fc_exch_mgr_anchor *fc_exch_mgr_add(struct fc_lport *,
 					   struct fc_exch_mgr *,
 					   bool (*match)(struct fc_frame *));

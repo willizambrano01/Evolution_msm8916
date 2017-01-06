@@ -13,7 +13,6 @@
 #include <linux/io.h>
 #include <linux/spi/spi.h>
 #include <linux/gpio.h>
-#include <linux/fec.h>
 #include <asm/traps.h>
 #include <asm/coldfire.h>
 #include <asm/mcfsim.h>
@@ -21,7 +20,7 @@
 #include <asm/mcfqspi.h>
 
 /*
- *	All current ColdFire parts contain from 2, 3, 4 or 10 UARTS.
+ *	All current ColdFire parts contain from 2, 3 or 4 UARTS.
  */
 static struct mcf_platform_uart mcf_uart_platform_data[] = {
 	{
@@ -44,42 +43,6 @@ static struct mcf_platform_uart mcf_uart_platform_data[] = {
 		.irq		= MCF_IRQ_UART3,
 	},
 #endif
-#ifdef MCFUART_BASE4
-	{
-		.mapbase	= MCFUART_BASE4,
-		.irq		= MCF_IRQ_UART4,
-	},
-#endif
-#ifdef MCFUART_BASE5
-	{
-		.mapbase	= MCFUART_BASE5,
-		.irq		= MCF_IRQ_UART5,
-	},
-#endif
-#ifdef MCFUART_BASE6
-	{
-		.mapbase	= MCFUART_BASE6,
-		.irq		= MCF_IRQ_UART6,
-	},
-#endif
-#ifdef MCFUART_BASE7
-	{
-		.mapbase	= MCFUART_BASE7,
-		.irq		= MCF_IRQ_UART7,
-	},
-#endif
-#ifdef MCFUART_BASE8
-	{
-		.mapbase	= MCFUART_BASE8,
-		.irq		= MCF_IRQ_UART8,
-	},
-#endif
-#ifdef MCFUART_BASE9
-	{
-		.mapbase	= MCFUART_BASE9,
-		.irq		= MCF_IRQ_UART9,
-	},
-#endif
 	{ },
 };
 
@@ -90,18 +53,6 @@ static struct platform_device mcf_uart = {
 };
 
 #ifdef CONFIG_FEC
-
-#ifdef CONFIG_M5441x
-#define FEC_NAME	"enet-fec"
-static struct fec_platform_data fec_pdata = {
-	.phy		= PHY_INTERFACE_MODE_RMII,
-};
-#define FEC_PDATA	(&fec_pdata)
-#else
-#define FEC_NAME	"fec"
-#define FEC_PDATA	NULL
-#endif
-
 /*
  *	Some ColdFire cores contain the Fast Ethernet Controller (FEC)
  *	block. It is Freescale's own hardware block. Some ColdFires
@@ -131,11 +82,10 @@ static struct resource mcf_fec0_resources[] = {
 };
 
 static struct platform_device mcf_fec0 = {
-	.name			= FEC_NAME,
+	.name			= "fec",
 	.id			= 0,
 	.num_resources		= ARRAY_SIZE(mcf_fec0_resources),
 	.resource		= mcf_fec0_resources,
-	.dev.platform_data	= FEC_PDATA,
 };
 
 #ifdef MCFFEC_BASE1
@@ -163,11 +113,10 @@ static struct resource mcf_fec1_resources[] = {
 };
 
 static struct platform_device mcf_fec1 = {
-	.name			= FEC_NAME,
+	.name			= "fec",
 	.id			= 1,
 	.num_resources		= ARRAY_SIZE(mcf_fec1_resources),
 	.resource		= mcf_fec1_resources,
-	.dev.platform_data	= FEC_PDATA,
 };
 #endif /* MCFFEC_BASE1 */
 #endif /* CONFIG_FEC */
@@ -347,12 +296,12 @@ static void __init mcf_uart_set_irq(void)
 {
 #ifdef MCFUART_UIVR
 	/* UART0 interrupt setup */
-	writeb(MCFSIM_ICR_LEVEL6 | MCFSIM_ICR_PRI1, MCFSIM_UART1ICR);
+	writeb(MCFSIM_ICR_LEVEL6 | MCFSIM_ICR_PRI1, MCF_MBAR + MCFSIM_UART1ICR);
 	writeb(MCF_IRQ_UART0, MCFUART_BASE0 + MCFUART_UIVR);
 	mcf_mapirq2imr(MCF_IRQ_UART0, MCFINTC_UART0);
 
 	/* UART1 interrupt setup */
-	writeb(MCFSIM_ICR_LEVEL6 | MCFSIM_ICR_PRI2, MCFSIM_UART2ICR);
+	writeb(MCFSIM_ICR_LEVEL6 | MCFSIM_ICR_PRI2, MCF_MBAR + MCFSIM_UART2ICR);
 	writeb(MCF_IRQ_UART1, MCFUART_BASE1 + MCFUART_UIVR);
 	mcf_mapirq2imr(MCF_IRQ_UART1, MCFINTC_UART1);
 #endif

@@ -42,11 +42,14 @@
 /*---------------------  Export Functions  --------------------------*/
 
 bool
-device_receive_frame(
-	PSDevice pDevice,
-	PSRxDesc pCurrRD
-);
+device_receive_frame (
+    PSDevice pDevice,
+    PSRxDesc pCurrRD
+    );
 
 void	MngWorkItem(void *Context);
 
 #endif // __RXTX_H__
+
+
+

@@ -61,7 +61,6 @@ config MMC_BLOCK_DEFERRED_RESUME
 
 config SDIO_UART
 	tristate "SDIO UART/GPS class support"
-	depends on TTY
 	help
 	  SDIO function driver for SDIO cards that implements the UART
 	  class, as well as the GPS class which appears like a UART.
@@ -87,10 +86,3 @@ config MMC_BLOCK_TEST
 	  Currently used to test eMMC 4.5 features (packed commands, sanitize,
 	  BKOPs).
 
-config MMC_FFU
-	bool "FFU SUPPORT"
-	depends on MMC != n
-	help
-	  This is an option to run firmware update on eMMC 5.0.
-	  Field firmware updates (FFU) enables features enhancment
-	  in the field.

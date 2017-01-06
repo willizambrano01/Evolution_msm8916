@@ -171,11 +171,11 @@ static void hfa384x_ctlxout_callback(struct urb *urb);
 static void hfa384x_usbin_callback(struct urb *urb);
 
 static void
-hfa384x_usbin_txcompl(wlandevice_t *wlandev, hfa384x_usbin_t *usbin);
+hfa384x_usbin_txcompl(wlandevice_t *wlandev, hfa384x_usbin_t * usbin);
 
 static void hfa384x_usbin_rx(wlandevice_t *wlandev, struct sk_buff *skb);
 
-static void hfa384x_usbin_info(wlandevice_t *wlandev, hfa384x_usbin_t *usbin);
+static void hfa384x_usbin_info(wlandevice_t *wlandev, hfa384x_usbin_t * usbin);
 
 static void
 hfa384x_usbout_tx(wlandevice_t *wlandev, hfa384x_usbout_t *usbout);
@@ -285,7 +285,7 @@ static inline const char *ctlxstr(CTLX_STATE s)
 	return ctlx_str[s];
 };
 
-static inline hfa384x_usbctlx_t *get_active_ctlx(hfa384x_t *hw)
+static inline hfa384x_usbctlx_t *get_active_ctlx(hfa384x_t * hw)
 {
 	return list_entry(hw->ctlxq.active.next, hfa384x_usbctlx_t, list);
 }
@@ -2140,7 +2140,11 @@ exit_proc:
 ----------------------------------------------------------------*/
 int hfa384x_drvr_getconfig(hfa384x_t *hw, u16 rid, void *buf, u16 len)
 {
-	return hfa384x_dorrid_wait(hw, rid, buf, len);
+	int result;
+
+	result = hfa384x_dorrid_wait(hw, rid, buf, len);
+
+	return result;
 }
 
 /*----------------------------------------------------------------
@@ -3786,7 +3790,7 @@ static void hfa384x_ctlxout_callback(struct urb *urb)
 #endif
 	if ((urb->status == -ESHUTDOWN) ||
 	    (urb->status == -ENODEV) || (hw == NULL))
-		return;
+		goto done;
 
 retry:
 	spin_lock_irqsave(&hw->ctlxq.lock, flags);
@@ -3799,7 +3803,7 @@ retry:
 	 */
 	if (list_empty(&hw->ctlxq.active)) {
 		spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
-		return;
+		goto done;
 	}
 
 	/*
@@ -3882,6 +3886,9 @@ delresp:
 
 	if (run_queue)
 		hfa384x_usbctlxq_run(hw);
+
+done:
+	;
 }
 
 /*----------------------------------------------------------------
@@ -3978,10 +3985,15 @@ static void hfa384x_usbctlx_resptimerfn(unsigned long data)
 		if (unlocked_usbctlx_cancel_async(hw, ctlx) == 0) {
 			spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
 			hfa384x_usbctlxq_run(hw);
-			return;
+			goto done;
 		}
 	}
+
 	spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
+
+done:
+	;
+
 }
 
 /*----------------------------------------------------------------
@@ -4045,20 +4057,23 @@ static void hfa384x_usb_throttlefn(unsigned long data)
 static int hfa384x_usbctlx_submit(hfa384x_t *hw, hfa384x_usbctlx_t *ctlx)
 {
 	unsigned long flags;
+	int ret;
 
 	spin_lock_irqsave(&hw->ctlxq.lock, flags);
 
 	if (hw->wlandev->hwremoved) {
 		spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
-		return -ENODEV;
+		ret = -ENODEV;
+	} else {
+		ctlx->state = CTLX_PENDING;
+		list_add_tail(&ctlx->list, &hw->ctlxq.pending);
+
+		spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
+		hfa384x_usbctlxq_run(hw);
+		ret = 0;
 	}
 
-	ctlx->state = CTLX_PENDING;
-	list_add_tail(&ctlx->list, &hw->ctlxq.pending);
-	spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
-	hfa384x_usbctlxq_run(hw);
-
-	return 0;
+	return ret;
 }
 
 /*----------------------------------------------------------------

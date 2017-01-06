@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2013, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,6 +46,7 @@
 #include "acnamesp.h"
 #include "acdispat.h"
 #include "acinterp.h"
+#include <linux/nmi.h>
 
 #define _COMPONENT          ACPI_NAMESPACE
 ACPI_MODULE_NAME("nsinit")
@@ -86,7 +87,7 @@ acpi_status acpi_ns_initialize_objects(void)
 	ACPI_DEBUG_PRINT((ACPI_DB_DISPATCH,
 			  "**** Starting initialization of namespace objects ****\n"));
 	ACPI_DEBUG_PRINT_RAW((ACPI_DB_INIT,
-			      "Completing Region/Field/Buffer/Package initialization:\n"));
+			      "Completing Region/Field/Buffer/Package initialization:"));
 
 	/* Set all init info to zero */
 
@@ -95,14 +96,14 @@ acpi_status acpi_ns_initialize_objects(void)
 	/* Walk entire namespace from the supplied root */
 
 	status = acpi_walk_namespace(ACPI_TYPE_ANY, ACPI_ROOT_OBJECT,
-				     ACPI_UINT32_MAX, acpi_ns_init_one_object,
-				     NULL, &info, NULL);
+				     ACPI_UINT32_MAX, acpi_ns_init_one_object, NULL,
+				     &info, NULL);
 	if (ACPI_FAILURE(status)) {
 		ACPI_EXCEPTION((AE_INFO, status, "During WalkNamespace"));
 	}
 
 	ACPI_DEBUG_PRINT_RAW((ACPI_DB_INIT,
-			      "    Initialized %u/%u Regions %u/%u Fields %u/%u "
+			      "\nInitialized %u/%u Regions %u/%u Fields %u/%u "
 			      "Buffers %u/%u Packages (%u nodes)\n",
 			      info.op_region_init, info.op_region_count,
 			      info.field_init, info.field_count,
@@ -149,7 +150,7 @@ acpi_status acpi_ns_initialize_devices(void)
 
 	ACPI_DEBUG_PRINT_RAW((ACPI_DB_INIT,
 			      "Initializing Device/Processor/Thermal objects "
-			      "and executing _INI/_STA methods:\n"));
+			      "by executing _INI methods:"));
 
 	/* Tree analysis: find all subtrees that contain _INI methods */
 
@@ -207,7 +208,7 @@ acpi_status acpi_ns_initialize_devices(void)
 	}
 
 	ACPI_DEBUG_PRINT_RAW((ACPI_DB_INIT,
-			      "    Executed %u _INI methods requiring %u _STA executions "
+			      "\nExecuted %u _INI methods requiring %u _STA executions "
 			      "(examined %u objects)\n",
 			      info.num_INI, info.num_STA, info.device_count));
 
@@ -223,8 +224,8 @@ acpi_status acpi_ns_initialize_devices(void)
  * FUNCTION:    acpi_ns_init_one_object
  *
  * PARAMETERS:  obj_handle      - Node
- *              level           - Current nesting level
- *              context         - Points to a init info struct
+ *              Level           - Current nesting level
+ *              Context         - Points to a init info struct
  *              return_value    - Not used
  *
  * RETURN:      Status
@@ -346,6 +347,14 @@ acpi_ns_init_one_object(acpi_handle obj_handle,
 				"Could not execute arguments for [%4.4s] (%s)",
 				acpi_ut_get_node_name(node),
 				acpi_ut_get_type_name(type)));
+	}
+
+	/*
+	 * Print a dot for each object unless we are going to print the entire
+	 * pathname
+	 */
+	if (!(acpi_dbg_level & ACPI_LV_INIT_NAMES)) {
+		ACPI_DEBUG_PRINT_RAW((ACPI_DB_INIT, "."));
 	}
 
 	/*
@@ -521,7 +530,7 @@ acpi_ns_init_one_device(acpi_handle obj_handle,
 			 * we will not run _INI, but we continue to examine the children
 			 * of this device.
 			 *
-			 * From the ACPI spec, description of _STA: (note - no mention
+			 * From the ACPI spec, description of _STA: (Note - no mention
 			 * of whether to run _INI or not on the device in question)
 			 *
 			 * "_STA may return bit 0 clear (not present) with bit 3 set
@@ -558,16 +567,25 @@ acpi_ns_init_one_device(acpi_handle obj_handle,
 	ACPI_DEBUG_EXEC(acpi_ut_display_init_pathname
 			(ACPI_TYPE_METHOD, device_node, METHOD_NAME__INI));
 
-	ACPI_MEMSET(info, 0, sizeof(struct acpi_evaluate_info));
 	info->prefix_node = device_node;
 	info->pathname = METHOD_NAME__INI;
 	info->parameters = NULL;
 	info->flags = ACPI_IGNORE_RETURN_VALUE;
 
+	/*
+	 * Some hardware relies on this being executed as atomically
+	 * as possible (without an NMI being received in the middle of
+	 * this) - so disable NMIs and initialize the device:
+	 */
 	status = acpi_ns_evaluate(info);
 
 	if (ACPI_SUCCESS(status)) {
 		walk_info->num_INI++;
+
+		if ((acpi_dbg_level <= ACPI_LV_ALL_EXCEPTIONS) &&
+		    (!(acpi_dbg_level & ACPI_LV_INFO))) {
+			ACPI_DEBUG_PRINT_RAW((ACPI_DB_INIT, "."));
+		}
 	}
 #ifdef ACPI_DEBUG_OUTPUT
 	else if (status != AE_NOT_FOUND) {

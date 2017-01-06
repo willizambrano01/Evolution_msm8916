@@ -7,7 +7,7 @@
  * Derived from:
  *
  *  Based on the max1619 driver.
- *  Copyright (C) 2003-2004 Oleksij Rempel <bug-track@fisher-privat.net>
+ *  Copyright (C) 2003-2004 Alexey Fisher <fishor@mail.ru>
  *                          Jean Delvare <khali@linux-fr.org>
  *
  * The MAX6642 is a sensor chip made by Maxim.
@@ -239,7 +239,7 @@ static ssize_t set_temp_max(struct device *dev, struct device_attribute *attr,
 		return err;
 
 	mutex_lock(&data->update_lock);
-	data->temp_high[attr2->nr] = clamp_val(temp_to_reg(val), 0, 255);
+	data->temp_high[attr2->nr] = SENSORS_LIMIT(temp_to_reg(val), 0, 255);
 	i2c_smbus_write_byte_data(client, attr2->index,
 				  data->temp_high[attr2->nr]);
 	mutex_unlock(&data->update_lock);
@@ -286,10 +286,11 @@ static int max6642_probe(struct i2c_client *new_client,
 	struct max6642_data *data;
 	int err;
 
-	data = devm_kzalloc(&new_client->dev, sizeof(struct max6642_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct max6642_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(new_client, data);
 	mutex_init(&data->update_lock);
@@ -300,7 +301,7 @@ static int max6642_probe(struct i2c_client *new_client,
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&new_client->dev.kobj, &max6642_group);
 	if (err)
-		return err;
+		goto exit_free;
 
 	data->hwmon_dev = hwmon_device_register(&new_client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -312,6 +313,9 @@ static int max6642_probe(struct i2c_client *new_client,
 
 exit_remove_files:
 	sysfs_remove_group(&new_client->dev.kobj, &max6642_group);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -322,6 +326,7 @@ static int max6642_remove(struct i2c_client *client)
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &max6642_group);
 
+	kfree(data);
 	return 0;
 }
 

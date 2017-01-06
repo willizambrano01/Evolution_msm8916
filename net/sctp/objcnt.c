@@ -130,20 +130,20 @@ static const struct file_operations sctp_objcnt_ops = {
 };
 
 /* Initialize the objcount in the proc filesystem.  */
-void sctp_dbg_objcnt_init(struct net *net)
+void sctp_dbg_objcnt_init(void)
 {
 	struct proc_dir_entry *ent;
 
 	ent = proc_create("sctp_dbg_objcnt", 0,
-			  net->sctp.proc_net_sctp, &sctp_objcnt_ops);
+			  proc_net_sctp, &sctp_objcnt_ops);
 	if (!ent)
 		pr_warn("sctp_dbg_objcnt: Unable to create /proc entry.\n");
 }
 
 /* Cleanup the objcount entry in the proc filesystem.  */
-void sctp_dbg_objcnt_exit(struct net *net)
+void sctp_dbg_objcnt_exit(void)
 {
-	remove_proc_entry("sctp_dbg_objcnt", net->sctp.proc_net_sctp);
+	remove_proc_entry("sctp_dbg_objcnt", proc_net_sctp);
 }
 
 

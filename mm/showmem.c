@@ -16,6 +16,7 @@
 #include <linux/debugfs.h>
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/module.h>
 
 BLOCKING_NOTIFIER_HEAD(show_mem_notifier);
 

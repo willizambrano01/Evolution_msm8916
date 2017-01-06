@@ -215,13 +215,9 @@ int dm_table_create(struct dm_table **result, fmode_t mode,
 
 	num_targets = dm_round_up(num_targets, KEYS_PER_NODE);
 
-	if (!num_targets) {
-		kfree(t);
-		return -ENOMEM;
-	}
-
 	if (alloc_targets(t, num_targets)) {
 		kfree(t);
+		t = NULL;
 		return -ENOMEM;
 	}
 
@@ -290,7 +286,7 @@ void dm_table_put(struct dm_table *t)
 	if (!t)
 		return;
 
-	smp_mb__before_atomic();
+	smp_mb__before_atomic_dec();
 	atomic_dec(&t->holders);
 }
 EXPORT_SYMBOL(dm_table_put);
@@ -558,19 +554,8 @@ EXPORT_SYMBOL_GPL(dm_set_device_limits);
  */
 void dm_put_device(struct dm_target *ti, struct dm_dev *d)
 {
-	struct dm_dev_internal *dd;
-
-	if (!ti) {
-		DMERR("%s: dm_target pointer is NULL", __func__);
-		return;
-	}
-
-	if (!d) {
-		DMERR("%s: dm_dev pointer is NULL", __func__);
-		return;
-	}
-
-	dd = container_of(d, struct dm_dev_internal, dm_dev);
+	struct dm_dev_internal *dd = container_of(d, struct dm_dev_internal,
+						  dm_dev);
 
 	if (atomic_dec_and_test(&dd->count)) {
 		close_dev(dd, ti->table->md);
@@ -596,28 +581,14 @@ static int adjoin(struct dm_table *table, struct dm_target *ti)
 
 /*
  * Used to dynamically allocate the arg array.
- *
- * We do first allocation with GFP_NOIO because dm-mpath and dm-thin must
- * process messages even if some device is suspended. These messages have a
- * small fixed number of arguments.
- *
- * On the other hand, dm-switch needs to process bulk data using messages and
- * excessive use of GFP_NOIO could cause trouble.
  */
 static char **realloc_argv(unsigned *array_size, char **old_argv)
 {
 	char **argv;
 	unsigned new_size;
-	gfp_t gfp;
 
-	if (*array_size) {
-		new_size = *array_size * 2;
-		gfp = GFP_KERNEL;
-	} else {
-		new_size = 8;
-		gfp = GFP_NOIO;
-	}
-	argv = kmalloc(new_size * sizeof(*argv), gfp);
+	new_size = *array_size ? *array_size * 2 : 64;
+	argv = kmalloc(new_size * sizeof(*argv), GFP_KERNEL);
 	if (argv) {
 		memcpy(argv, old_argv, *array_size * sizeof(*argv));
 		*array_size = new_size;
@@ -852,8 +823,8 @@ int dm_table_add_target(struct dm_table *t, const char *type,
 
 	t->highs[t->num_targets++] = tgt->begin + tgt->len - 1;
 
-	if (!tgt->num_discard_bios && tgt->discards_supported)
-		DMWARN("%s: %s: ignoring discards_supported because num_discard_bios is zero.",
+	if (!tgt->num_discard_requests && tgt->discards_supported)
+		DMWARN("%s: %s: ignoring discards_supported because num_discard_requests is zero.",
 		       dm_device_name(t->md), type);
 
 	return 0;
@@ -996,22 +967,13 @@ bool dm_table_request_based(struct dm_table *t)
 int dm_table_alloc_md_mempools(struct dm_table *t)
 {
 	unsigned type = dm_table_get_type(t);
-	unsigned per_bio_data_size = 0;
-	struct dm_target *tgt;
-	unsigned i;
 
 	if (unlikely(type == DM_TYPE_NONE)) {
 		DMWARN("no table type is set, can't allocate mempools");
 		return -EINVAL;
 	}
 
-	if (type == DM_TYPE_BIO_BASED)
-		for (i = 0; i < t->num_targets; i++) {
-			tgt = t->targets + i;
-			per_bio_data_size = max(per_bio_data_size, tgt->per_bio_data_size);
-		}
-
-	t->mempools = dm_alloc_md_mempools(type, t->integrity_supported, per_bio_data_size);
+	t->mempools = dm_alloc_md_mempools(type, t->integrity_supported);
 	if (!t->mempools)
 		return -ENOMEM;
 
@@ -1250,41 +1212,6 @@ struct dm_target *dm_table_find_target(struct dm_table *t, sector_t sector)
 	return &t->targets[(KEYS_PER_NODE * n) + k];
 }
 
-static int count_device(struct dm_target *ti, struct dm_dev *dev,
-			sector_t start, sector_t len, void *data)
-{
-	unsigned *num_devices = data;
-
-	(*num_devices)++;
-
-	return 0;
-}
-
-/*
- * Check whether a table has no data devices attached using each
- * target's iterate_devices method.
- * Returns false if the result is unknown because a target doesn't
- * support iterate_devices.
- */
-bool dm_table_has_no_data_devices(struct dm_table *table)
-{
-	struct dm_target *uninitialized_var(ti);
-	unsigned i = 0, num_devices = 0;
-
-	while (i < dm_table_get_num_targets(table)) {
-		ti = dm_table_get_target(table, i++);
-
-		if (!ti->type->iterate_devices)
-			return false;
-
-		ti->type->iterate_devices(ti, count_device, &num_devices);
-		if (num_devices)
-			return false;
-	}
-
-	return true;
-}
-
 /*
  * Establish the new table's queue_limits and validate them.
  */
@@ -1389,11 +1316,8 @@ static bool dm_table_supports_flush(struct dm_table *t, unsigned flush)
 	while (i < dm_table_get_num_targets(t)) {
 		ti = dm_table_get_target(t, i++);
 
-		if (!ti->num_flush_bios)
+		if (!ti->num_flush_requests)
 			continue;
-
-		if (ti->flush_supported)
-			return 1;
 
 		if (ti->type->iterate_devices &&
 		    ti->type->iterate_devices(ti, device_flush_capable, &flush))
@@ -1452,33 +1376,6 @@ static bool dm_table_all_devices_attribute(struct dm_table *t,
 	return 1;
 }
 
-static int device_not_write_same_capable(struct dm_target *ti, struct dm_dev *dev,
-					 sector_t start, sector_t len, void *data)
-{
-	struct request_queue *q = bdev_get_queue(dev->bdev);
-
-	return q && !q->limits.max_write_same_sectors;
-}
-
-static bool dm_table_supports_write_same(struct dm_table *t)
-{
-	struct dm_target *ti;
-	unsigned i = 0;
-
-	while (i < dm_table_get_num_targets(t)) {
-		ti = dm_table_get_target(t, i++);
-
-		if (!ti->num_write_same_bios)
-			return false;
-
-		if (!ti->type->iterate_devices ||
-		    ti->type->iterate_devices(ti, device_not_write_same_capable, NULL))
-			return false;
-	}
-
-	return true;
-}
-
 void dm_table_set_restrictions(struct dm_table *t, struct request_queue *q,
 			       struct queue_limits *limits)
 {
@@ -1509,9 +1406,6 @@ void dm_table_set_restrictions(struct dm_table *t, struct request_queue *q,
 		queue_flag_set_unlocked(QUEUE_FLAG_NONROT, q);
 	else
 		queue_flag_clear_unlocked(QUEUE_FLAG_NONROT, q);
-
-	if (!dm_table_supports_write_same(t))
-		q->limits.max_write_same_sectors = 0;
 
 	dm_table_set_integrity(t);
 
@@ -1686,7 +1580,7 @@ bool dm_table_supports_discards(struct dm_table *t)
 	while (i < dm_table_get_num_targets(t)) {
 		ti = dm_table_get_target(t, i++);
 
-		if (!ti->num_discard_bios)
+		if (!ti->num_discard_requests)
 			continue;
 
 		if (ti->discards_supported)

@@ -2063,12 +2063,7 @@ static int stk3x1x_power_ctl(struct stk3x1x_data *data, bool on)
 		if (ret) {
 			dev_err(&data->client->dev,
 				"Regulator vio disable failed ret=%d\n", ret);
-			ret = regulator_enable(data->vdd);
-			if (ret) {
-				dev_err(&data->client->dev,
-					"Regulator vdd enable failed ret=%d\n",
-					ret);
-			}
+			regulator_enable(data->vdd);
 			return ret;
 		}
 		data->power_enabled = on;

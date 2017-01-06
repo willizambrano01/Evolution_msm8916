@@ -22,10 +22,9 @@
 #include <asm/mach/map.h>
 
 #include <mach/pxa25x.h>
-#undef GPIO24_SSP1_SFRM
 #include <mach/pxa27x.h>
 #include <mach/audio.h>
-#include <linux/platform_data/video-pxafb.h>
+#include <mach/pxafb.h>
 #include <mach/smemc.h>
 
 #include <asm/hardware/it8152.h>
@@ -520,7 +519,7 @@ MACHINE_START(ARMCORE, "Compulab CM-X2XX")
 	.init_irq	= cmx2xx_init_irq,
 	/* NOTE: pxa25x_handle_irq() works on PXA27x w/o camera support */
 	.handle_irq	= pxa25x_handle_irq,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.init_machine	= cmx2xx_init,
 #ifdef CONFIG_PCI
 	.dma_zone_size	= SZ_64M,

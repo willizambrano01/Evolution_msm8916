@@ -45,9 +45,11 @@ struct pxa2xx_flash_info {
 	struct map_info		map;
 };
 
-static const char * const probes[] = { "RedBoot", "cmdlinepart", NULL };
 
-static int pxa2xx_flash_probe(struct platform_device *pdev)
+static const char *probes[] = { "RedBoot", "cmdlinepart", NULL };
+
+
+static int __devinit pxa2xx_flash_probe(struct platform_device *pdev)
 {
 	struct flash_platform_data *flash = pdev->dev.platform_data;
 	struct pxa2xx_flash_info *info;
@@ -73,7 +75,7 @@ static int pxa2xx_flash_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 	info->map.cached =
-		ioremap_cache(info->map.phys, info->map.size);
+		ioremap_cached(info->map.phys, info->map.size);
 	if (!info->map.cached)
 		printk(KERN_WARNING "Failed to ioremap cached %s\n",
 		       info->map.name);
@@ -103,7 +105,7 @@ static int pxa2xx_flash_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int pxa2xx_flash_remove(struct platform_device *dev)
+static int __devexit pxa2xx_flash_remove(struct platform_device *dev)
 {
 	struct pxa2xx_flash_info *info = platform_get_drvdata(dev);
 
@@ -137,7 +139,7 @@ static struct platform_driver pxa2xx_flash_driver = {
 		.owner		= THIS_MODULE,
 	},
 	.probe		= pxa2xx_flash_probe,
-	.remove		= pxa2xx_flash_remove,
+	.remove		= __devexit_p(pxa2xx_flash_remove),
 	.shutdown	= pxa2xx_flash_shutdown,
 };
 

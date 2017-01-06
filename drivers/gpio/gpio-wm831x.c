@@ -102,8 +102,10 @@ static int wm831x_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
 	struct wm831x_gpio *wm831x_gpio = to_wm831x_gpio(chip);
 	struct wm831x *wm831x = wm831x_gpio->wm831x;
 
-	return irq_create_mapping(wm831x->irq_domain,
-				  WM831X_IRQ_GPIO_1 + offset);
+	if (!wm831x->irq_base)
+		return -EINVAL;
+
+	return wm831x->irq_base + WM831X_IRQ_GPIO_1 + offset;
 }
 
 static int wm831x_gpio_set_debounce(struct gpio_chip *chip, unsigned offset,
@@ -243,15 +245,14 @@ static struct gpio_chip template_chip = {
 	.can_sleep		= 1,
 };
 
-static int wm831x_gpio_probe(struct platform_device *pdev)
+static int __devinit wm831x_gpio_probe(struct platform_device *pdev)
 {
 	struct wm831x *wm831x = dev_get_drvdata(pdev->dev.parent);
 	struct wm831x_pdata *pdata = wm831x->dev->platform_data;
 	struct wm831x_gpio *wm831x_gpio;
 	int ret;
 
-	wm831x_gpio = devm_kzalloc(&pdev->dev, sizeof(*wm831x_gpio),
-				   GFP_KERNEL);
+	wm831x_gpio = kzalloc(sizeof(*wm831x_gpio), GFP_KERNEL);
 	if (wm831x_gpio == NULL)
 		return -ENOMEM;
 
@@ -266,27 +267,37 @@ static int wm831x_gpio_probe(struct platform_device *pdev)
 
 	ret = gpiochip_add(&wm831x_gpio->gpio_chip);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "Could not register gpiochip, %d\n", ret);
-		return ret;
+		dev_err(&pdev->dev, "Could not register gpiochip, %d\n",
+			ret);
+		goto err;
 	}
 
 	platform_set_drvdata(pdev, wm831x_gpio);
 
 	return ret;
+
+err:
+	kfree(wm831x_gpio);
+	return ret;
 }
 
-static int wm831x_gpio_remove(struct platform_device *pdev)
+static int __devexit wm831x_gpio_remove(struct platform_device *pdev)
 {
 	struct wm831x_gpio *wm831x_gpio = platform_get_drvdata(pdev);
+	int ret;
 
-	return  gpiochip_remove(&wm831x_gpio->gpio_chip);
+	ret = gpiochip_remove(&wm831x_gpio->gpio_chip);
+	if (ret == 0)
+		kfree(wm831x_gpio);
+
+	return ret;
 }
 
 static struct platform_driver wm831x_gpio_driver = {
 	.driver.name	= "wm831x-gpio",
 	.driver.owner	= THIS_MODULE,
 	.probe		= wm831x_gpio_probe,
-	.remove		= wm831x_gpio_remove,
+	.remove		= __devexit_p(wm831x_gpio_remove),
 };
 
 static int __init wm831x_gpio_init(void)

@@ -16,6 +16,8 @@
 #include <linux/device.h>
 #include <linux/hid.h>
 #include <linux/module.h>
+#include <linux/usb.h>
+#include "usbhid/usbhid.h"
 
 #include "hid-ids.h"
 
@@ -359,7 +361,7 @@ static int kye_tablet_enable(struct hid_device *hdev)
 	value[4] = 0x00;
 	value[5] = 0x00;
 	value[6] = 0x00;
-	hid_hw_request(hdev, report, HID_REQ_SET_REPORT);
+	usbhid_submit_report(hdev, report, USB_DIR_OUT);
 
 	return 0;
 }
@@ -417,6 +419,17 @@ static struct hid_driver kye_driver = {
 	.probe = kye_probe,
 	.report_fixup = kye_report_fixup,
 };
-module_hid_driver(kye_driver);
 
+static int __init kye_init(void)
+{
+	return hid_register_driver(&kye_driver);
+}
+
+static void __exit kye_exit(void)
+{
+	hid_unregister_driver(&kye_driver);
+}
+
+module_init(kye_init);
+module_exit(kye_exit);
 MODULE_LICENSE("GPL");

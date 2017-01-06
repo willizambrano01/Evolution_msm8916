@@ -26,9 +26,32 @@
  * DAMAGE.
  */
 
-
 #ifndef _UAPI_STML0XX_H
 #define _UAPI_STML0XX_H
+
+/* Log macros */
+#define ENABLE_VERBOSE_LOGGING 0
+
+/* SPI */
+#define SPI_FLASH_CLK_SPD_HZ    4000000
+#define SPI_NORMAL_CLK_SPD_HZ   4000000
+#define SPI_BUFF_SIZE           1152
+#define SPI_RETRIES             5
+#define SPI_RETRY_DELAY         20
+#define SPI_SENSORHUB_TIMEOUT   5000
+#define SPI_BARKER_1            0xF9
+#define SPI_BARKER_2            0xAE
+#define SPI_HEADER_SIZE         6
+#define SPI_CRC_SIZE            2
+#define SPI_WRITE_REG_HDR_SIZE      6
+#define SPI_READ_REG_HDR_SIZE       6
+#define SPI_CRC_LEN                 2
+#define SPI_READ_SENSORS_HDR_SIZE   3
+#define SPI_TX_PAYLOAD_LEN         88
+#define SPI_MSG_SIZE	\
+	(SPI_HEADER_SIZE+SPI_TX_PAYLOAD_LEN+SPI_CRC_SIZE)
+#define SPI_RX_PAYLOAD_LEN	\
+	(SPI_MSG_SIZE - SPI_CRC_SIZE)
 
 /** The following define the IOCTL command values via the ioctl macros */
 #define STML0XX_IOCTL_BASE		77
@@ -184,9 +207,9 @@
 #define M_LIFT			0x004000
 #define M_LOG_MSG		0x008000
 
-#define M_CHOPCHOP		0x010000
+/*#define M_UNUSED		0x010000*/
 /*#define M_UNUSED		0x020000*/
-#define M_GLANCE		0x040000
+/*#define M_UNUSED		0x040000*/
 /*#define M_UNUSED		0x080000*/
 /*#define M_UNUSED		0x100000*/
 /*#define M_UNUSED		0x200000*/
@@ -272,10 +295,7 @@ enum STML0XX_data_types {
 	DT_UNCALIB_GYRO,
 	DT_UNCALIB_MAG,
 	DT_ACCEL2,
-	DT_FLUSH,
-	DT_LIFT,
-	DT_CHOPCHOP,
-	DT_GLANCE
+	DT_FLUSH
 };
 
 enum {
@@ -316,6 +336,8 @@ enum sh_log_level {
 	SH_LOG_VERBOSE,
 	SH_LOG_DEBUG
 };
+
+
 
 struct stm_response {
 	/* 0x0080 */

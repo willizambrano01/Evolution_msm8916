@@ -37,6 +37,7 @@
 #include <linux/of_gpio.h>
 
 #include <asm/uaccess.h>
+#include <asm/mach-types.h>
 #include <asm/setup.h>
 
 #define I2C_RETRY_COUNT 10
@@ -1546,7 +1547,7 @@ static int remove_sysfs_interfaces(struct device *dev,
 }
 
 static struct device_attribute light_attr[] = {
-	__ATTR(ls_adc, 0444, ls_adc_show, NULL),
+	__ATTR(ls_adc, 0664, ls_adc_show, NULL),
 	__ATTR(ls_kadc, 0664, ls_kadc_show, ls_kadc_store),
 	__ATTR(ls_gadc, 0664, ls_gadc_show, ls_gadc_store),
 	__ATTR(ls_conf, 0664, ls_conf_show, ls_conf_store),

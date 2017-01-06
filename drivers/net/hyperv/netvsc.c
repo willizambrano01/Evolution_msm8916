@@ -42,7 +42,6 @@ static struct netvsc_device *alloc_net_device(struct hv_device *device)
 	if (!net_device)
 		return NULL;
 
-	init_waitqueue_head(&net_device->wait_drain);
 	net_device->start_remove = false;
 	net_device->destroy = false;
 	net_device->dev = device;
@@ -383,6 +382,17 @@ int netvsc_device_remove(struct hv_device *device)
 	unsigned long flags;
 
 	net_device = hv_get_drvdata(device);
+	spin_lock_irqsave(&device->channel->inbound_lock, flags);
+	net_device->destroy = true;
+	spin_unlock_irqrestore(&device->channel->inbound_lock, flags);
+
+	/* Wait for all send completions */
+	while (atomic_read(&net_device->num_outstanding_sends)) {
+		dev_info(&device->device,
+			"waiting for %d requests to complete...\n",
+			atomic_read(&net_device->num_outstanding_sends));
+		udelay(100);
+	}
 
 	netvsc_disconnect_vsp(net_device);
 
@@ -418,24 +428,6 @@ int netvsc_device_remove(struct hv_device *device)
 	return 0;
 }
 
-
-#define RING_AVAIL_PERCENT_HIWATER 20
-#define RING_AVAIL_PERCENT_LOWATER 10
-
-/*
- * Get the percentage of available bytes to write in the ring.
- * The return value is in range from 0 to 100.
- */
-static inline u32 hv_ringbuf_avail_percent(
-		struct hv_ring_buffer_info *ring_info)
-{
-	u32 avail_read, avail_write;
-
-	hv_get_ringbuffer_availbytes(ring_info, &avail_read, &avail_write);
-
-	return avail_write * 100 / ring_info->ring_datasize;
-}
-
 static void netvsc_send_completion(struct hv_device *device,
 				   struct vmpacket_descriptor *packet)
 {
@@ -463,29 +455,18 @@ static void netvsc_send_completion(struct hv_device *device,
 		complete(&net_device->channel_init_wait);
 	} else if (nvsp_packet->hdr.msg_type ==
 		   NVSP_MSG1_TYPE_SEND_RNDIS_PKT_COMPLETE) {
-		int num_outstanding_sends;
-
 		/* Get the send context */
 		nvsc_packet = (struct hv_netvsc_packet *)(unsigned long)
 			packet->trans_id;
 
 		/* Notify the layer above us */
-		if (nvsc_packet)
-			nvsc_packet->completion.send.send_completion(
-				nvsc_packet->completion.send.
-				send_completion_ctx);
+		nvsc_packet->completion.send.send_completion(
+			nvsc_packet->completion.send.send_completion_ctx);
 
-		num_outstanding_sends =
-			atomic_dec_return(&net_device->num_outstanding_sends);
+		atomic_dec(&net_device->num_outstanding_sends);
 
-		if (net_device->destroy && num_outstanding_sends == 0)
-			wake_up(&net_device->wait_drain);
-
-		if (netif_queue_stopped(ndev) && !net_device->start_remove &&
-			(hv_ringbuf_avail_percent(&device->channel->outbound)
-			> RING_AVAIL_PERCENT_HIWATER ||
-			num_outstanding_sends < 1))
-				netif_wake_queue(ndev);
+		if (netif_queue_stopped(ndev) && !net_device->start_remove)
+			netif_wake_queue(ndev);
 	} else {
 		netdev_err(ndev, "Unknown send completion packet type- "
 			   "%d received!!\n", nvsp_packet->hdr.msg_type);
@@ -500,7 +481,6 @@ int netvsc_send(struct hv_device *device,
 	int ret = 0;
 	struct nvsp_message sendMessage;
 	struct net_device *ndev;
-	u64 req_id;
 
 	net_device = get_outbound_net_device(device);
 	if (!net_device)
@@ -521,41 +501,28 @@ int netvsc_send(struct hv_device *device,
 		0xFFFFFFFF;
 	sendMessage.msg.v1_msg.send_rndis_pkt.send_buf_section_size = 0;
 
-	if (packet->completion.send.send_completion)
-		req_id = (ulong)packet;
-	else
-		req_id = 0;
-
 	if (packet->page_buf_cnt) {
 		ret = vmbus_sendpacket_pagebuffer(device->channel,
 						  packet->page_buf,
 						  packet->page_buf_cnt,
 						  &sendMessage,
 						  sizeof(struct nvsp_message),
-						  req_id);
+						  (unsigned long)packet);
 	} else {
 		ret = vmbus_sendpacket(device->channel, &sendMessage,
 				sizeof(struct nvsp_message),
-				req_id,
+				(unsigned long)packet,
 				VM_PKT_DATA_INBAND,
 				VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED);
+
 	}
 
 	if (ret == 0) {
 		atomic_inc(&net_device->num_outstanding_sends);
-		if (hv_ringbuf_avail_percent(&device->channel->outbound) <
-			RING_AVAIL_PERCENT_LOWATER) {
-			netif_stop_queue(ndev);
-			if (atomic_read(&net_device->
-				num_outstanding_sends) < 1)
-				netif_wake_queue(ndev);
-		}
 	} else if (ret == -EAGAIN) {
 		netif_stop_queue(ndev);
-		if (atomic_read(&net_device->num_outstanding_sends) < 1) {
+		if (atomic_read(&net_device->num_outstanding_sends) < 1)
 			netif_wake_queue(ndev);
-			ret = -ENOSPC;
-		}
 	} else {
 		netdev_err(ndev, "Unable to send packet %p ret %d\n",
 			   packet, ret);
@@ -565,7 +532,7 @@ int netvsc_send(struct hv_device *device,
 }
 
 static void netvsc_send_recv_completion(struct hv_device *device,
-					u64 transaction_id, u32 status)
+					u64 transaction_id)
 {
 	struct nvsp_message recvcompMessage;
 	int retries = 0;
@@ -578,7 +545,9 @@ static void netvsc_send_recv_completion(struct hv_device *device,
 	recvcompMessage.hdr.msg_type =
 				NVSP_MSG1_TYPE_SEND_RNDIS_PKT_COMPLETE;
 
-	recvcompMessage.msg.v1_msg.send_rndis_pkt_complete.status = status;
+	/* FIXME: Pass in the status */
+	recvcompMessage.msg.v1_msg.send_rndis_pkt_complete.status =
+		NVSP_STAT_SUCCESS;
 
 retry_send_cmplt:
 	/* Send the completion */
@@ -612,13 +581,12 @@ retry_send_cmplt:
 static void netvsc_receive_completion(void *context)
 {
 	struct hv_netvsc_packet *packet = context;
-	struct hv_device *device = packet->device;
+	struct hv_device *device = (struct hv_device *)packet->device;
 	struct netvsc_device *net_device;
 	u64 transaction_id = 0;
 	bool fsend_receive_comp = false;
 	unsigned long flags;
 	struct net_device *ndev;
-	u32 status = NVSP_STAT_NONE;
 
 	/*
 	 * Even though it seems logical to do a GetOutboundNetDevice() here to
@@ -633,9 +601,6 @@ static void netvsc_receive_completion(void *context)
 	/* Overloading use of the lock. */
 	spin_lock_irqsave(&net_device->recv_pkt_list_lock, flags);
 
-	if (packet->status != NVSP_STAT_SUCCESS)
-		packet->xfer_page_pkt->status = NVSP_STAT_FAIL;
-
 	packet->xfer_page_pkt->count--;
 
 	/*
@@ -645,7 +610,6 @@ static void netvsc_receive_completion(void *context)
 	if (packet->xfer_page_pkt->count == 0) {
 		fsend_receive_comp = true;
 		transaction_id = packet->completion.recv.recv_completion_tid;
-		status = packet->xfer_page_pkt->status;
 		list_add_tail(&packet->xfer_page_pkt->list_ent,
 			      &net_device->recv_pkt_list);
 
@@ -657,7 +621,7 @@ static void netvsc_receive_completion(void *context)
 
 	/* Send a receive completion for the xfer page packet */
 	if (fsend_receive_comp)
-		netvsc_send_recv_completion(device, transaction_id, status);
+		netvsc_send_recv_completion(device, transaction_id);
 
 }
 
@@ -746,8 +710,7 @@ static void netvsc_receive(struct hv_device *device,
 				       flags);
 
 		netvsc_send_recv_completion(device,
-					    vmxferpage_packet->d.trans_id,
-					    NVSP_STAT_FAIL);
+					    vmxferpage_packet->d.trans_id);
 
 		return;
 	}
@@ -755,7 +718,6 @@ static void netvsc_receive(struct hv_device *device,
 	/* Remove the 1st packet to represent the xfer page packet itself */
 	xferpage_packet = (struct xferpage_packet *)listHead.next;
 	list_del(&xferpage_packet->list_ent);
-	xferpage_packet->status = NVSP_STAT_SUCCESS;
 
 	/* This is how much we can satisfy */
 	xferpage_packet->count = count - 1;
@@ -772,7 +734,6 @@ static void netvsc_receive(struct hv_device *device,
 		list_del(&netvsc_packet->list_ent);
 
 		/* Initialize the netvsc packet */
-		netvsc_packet->status = NVSP_STAT_SUCCESS;
 		netvsc_packet->xfer_page_pkt = xferpage_packet;
 		netvsc_packet->completion.recv.recv_completion =
 					netvsc_receive_completion;
@@ -917,7 +878,9 @@ int netvsc_device_add(struct hv_device *device, void *additional_info)
 	INIT_LIST_HEAD(&net_device->recv_pkt_list);
 
 	for (i = 0; i < NETVSC_RECEIVE_PACKETLIST_COUNT; i++) {
-		packet = kzalloc(sizeof(struct hv_netvsc_packet), GFP_KERNEL);
+		packet = kzalloc(sizeof(struct hv_netvsc_packet) +
+				 (NETVSC_RECEIVE_SG_COUNT *
+				  sizeof(struct hv_page_buffer)), GFP_KERNEL);
 		if (!packet)
 			break;
 

@@ -55,7 +55,6 @@ static unsigned int low_freq;
 static unsigned int hi_freq;
 static unsigned int cur_freq;
 static unsigned int sleep_freq;
-static unsigned long transition_latency;
 
 /*
  * Different models uses different mechanisms to switch the frequency
@@ -335,8 +334,7 @@ static int pmu_set_cpu_speed(int low_speed)
 	return 0;
 }
 
-static int do_set_cpu_speed(struct cpufreq_policy *policy, int speed_mode,
-		int notify)
+static int do_set_cpu_speed(int speed_mode, int notify)
 {
 	struct cpufreq_freqs freqs;
 	unsigned long l3cr;
@@ -344,12 +342,13 @@ static int do_set_cpu_speed(struct cpufreq_policy *policy, int speed_mode,
 
 	freqs.old = cur_freq;
 	freqs.new = (speed_mode == CPUFREQ_HIGH) ? hi_freq : low_freq;
+	freqs.cpu = smp_processor_id();
 
 	if (freqs.old == freqs.new)
 		return 0;
 
 	if (notify)
-		cpufreq_notify_transition(policy, &freqs, CPUFREQ_PRECHANGE);
+		cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
 	if (speed_mode == CPUFREQ_LOW &&
 	    cpu_has_feature(CPU_FTR_L3CR)) {
 		l3cr = _get_L3CR();
@@ -366,7 +365,7 @@ static int do_set_cpu_speed(struct cpufreq_policy *policy, int speed_mode,
 			_set_L3CR(prev_l3cr);
 	}
 	if (notify)
-		cpufreq_notify_transition(policy, &freqs, CPUFREQ_POSTCHANGE);
+		cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
 	cur_freq = (speed_mode == CPUFREQ_HIGH) ? hi_freq : low_freq;
 
 	return 0;
@@ -393,7 +392,7 @@ static int pmac_cpufreq_target(	struct cpufreq_policy *policy,
 			target_freq, relation, &newstate))
 		return -EINVAL;
 
-	rc = do_set_cpu_speed(policy, newstate, 1);
+	rc = do_set_cpu_speed(newstate, 1);
 
 	ppc_proc_freq = cur_freq * 1000ul;
 	return rc;
@@ -404,7 +403,7 @@ static int pmac_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	if (policy->cpu != 0)
 		return -ENODEV;
 
-	policy->cpuinfo.transition_latency	= transition_latency;
+	policy->cpuinfo.transition_latency	= CPUFREQ_ETERNAL;
 	policy->cur = cur_freq;
 
 	cpufreq_frequency_table_get_attr(pmac_cpu_freqs, policy->cpu);
@@ -442,7 +441,7 @@ static int pmac_cpufreq_suspend(struct cpufreq_policy *policy)
 	no_schedule = 1;
 	sleep_freq = cur_freq;
 	if (cur_freq == low_freq && !is_pmu_based)
-		do_set_cpu_speed(policy, CPUFREQ_HIGH, 0);
+		do_set_cpu_speed(CPUFREQ_HIGH, 0);
 	return 0;
 }
 
@@ -458,7 +457,7 @@ static int pmac_cpufreq_resume(struct cpufreq_policy *policy)
 	 * is that we force a switch to whatever it was, which is
 	 * probably high speed due to our suspend() routine
 	 */
-	do_set_cpu_speed(policy, sleep_freq == low_freq ?
+	do_set_cpu_speed(sleep_freq == low_freq ?
 			 CPUFREQ_LOW : CPUFREQ_HIGH, 0);
 
 	ppc_proc_freq = cur_freq * 1000ul;
@@ -477,6 +476,7 @@ static struct cpufreq_driver pmac_cpufreq_driver = {
 	.flags		= CPUFREQ_PM_NO_WARN,
 	.attr		= pmac_cpu_freqs_attr,
 	.name		= "powermac",
+	.owner		= THIS_MODULE,
 };
 
 
@@ -658,14 +658,12 @@ static int __init pmac_cpufreq_setup(void)
 	if (!value)
 		goto out;
 	cur_freq = (*value) / 1000;
-	transition_latency = CPUFREQ_ETERNAL;
 
 	/*  Check for 7447A based MacRISC3 */
 	if (of_machine_is_compatible("MacRISC3") &&
 	    of_get_property(cpunode, "dynamic-power-step", NULL) &&
 	    PVR_VER(mfspr(SPRN_PVR)) == 0x8003) {
 		pmac_cpufreq_init_7447A(cpunode);
-		transition_latency = 8000000;
 	/* Check for other MacRISC3 machines */
 	} else if (of_machine_is_compatible("PowerBook3,4") ||
 		   of_machine_is_compatible("PowerBook3,5") ||

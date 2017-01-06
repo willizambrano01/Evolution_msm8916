@@ -18,17 +18,18 @@
 #include <linux/platform_device.h>
 #include <linux/mtd/physmap.h>
 #include <linux/dm9000.h>
-#include <linux/gpio.h>
 #include <linux/i2c.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/time.h>
 
-#include "common.h"
+#include <mach/common.h>
+#include <mach/hardware.h>
+#include <mach/irqs.h>
+#include <mach/iomux-mx1.h>
+
 #include "devices-imx1.h"
-#include "hardware.h"
-#include "iomux-mx1.h"
 
 static const int apf9328_pins[] __initconst = {
 	/* UART1 */
@@ -86,7 +87,8 @@ static struct resource dm9000_resources[] = {
 		.end    = MX1_CS4_PHYS + 0x00C00003,
 		.flags  = IORESOURCE_MEM,
 	}, {
-		/* irq number is run-time assigned */
+		.start  = IRQ_GPIOB(14),
+		.end    = IRQ_GPIOB(14),
 		.flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_LOWLEVEL,
 	},
 };
@@ -127,8 +129,6 @@ static void __init apf9328_init(void)
 
 	imx1_add_imx_i2c(&apf9328_i2c_data);
 
-	dm9000_resources[2].start = gpio_to_irq(IMX_GPIO_NR(2, 14));
-	dm9000_resources[2].end = gpio_to_irq(IMX_GPIO_NR(2, 14));
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 }
 
@@ -137,13 +137,17 @@ static void __init apf9328_timer_init(void)
 	mx1_clocks_init(32768);
 }
 
+static struct sys_timer apf9328_timer = {
+	.init	= apf9328_timer_init,
+};
+
 MACHINE_START(APF9328, "Armadeus APF9328")
 	/* Maintainer: Gwenhael Goavec-Merou, ARMadeus Systems */
 	.map_io       = mx1_map_io,
 	.init_early   = imx1_init_early,
 	.init_irq     = mx1_init_irq,
 	.handle_irq   = imx1_handle_irq,
-	.init_time	= apf9328_timer_init,
+	.timer        = &apf9328_timer,
 	.init_machine = apf9328_init,
 	.restart	= mxc_restart,
 MACHINE_END

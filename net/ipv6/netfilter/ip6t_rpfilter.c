@@ -67,14 +67,8 @@ static bool rpfilter_lookup_reverse6(const struct sk_buff *skb,
 	if (rt->rt6i_idev->dev == dev || (flags & XT_RPFILTER_LOOSE))
 		ret = true;
  out:
-	ip6_rt_put(rt);
+	dst_release(&rt->dst);
 	return ret;
-}
-
-static bool rpfilter_is_local(const struct sk_buff *skb)
-{
-	const struct rt6_info *rt = (const void *) skb_dst(skb);
-	return rt && (rt->rt6i_flags & RTF_LOCAL);
 }
 
 static bool rpfilter_mt(const struct sk_buff *skb, struct xt_action_param *par)
@@ -84,7 +78,7 @@ static bool rpfilter_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	struct ipv6hdr *iph;
 	bool invert = info->flags & XT_RPFILTER_INVERT;
 
-	if (rpfilter_is_local(skb))
+	if (par->in->flags & IFF_LOOPBACK)
 		return true ^ invert;
 
 	iph = ipv6_hdr(skb);

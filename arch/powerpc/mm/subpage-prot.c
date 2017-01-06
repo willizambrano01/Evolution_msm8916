@@ -95,8 +95,7 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 	struct mm_struct *mm = current->mm;
 	struct subpage_prot_table *spt = &mm->context.spt;
 	u32 **spm, *spp;
-	unsigned long i;
-	size_t nw;
+	int i, nw;
 	unsigned long next, limit;
 
 	down_write(&mm->mmap_sem);
@@ -145,8 +144,7 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 	struct mm_struct *mm = current->mm;
 	struct subpage_prot_table *spt = &mm->context.spt;
 	u32 **spm, *spp;
-	unsigned long i;
-	size_t nw;
+	int i, nw;
 	unsigned long next, limit;
 	int err;
 

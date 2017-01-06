@@ -27,7 +27,6 @@ config OF_SELFTEST
 config OF_FLATTREE
 	bool
 	select DTC
-	select LIBFDT
 
 config OF_EARLY_FLATTREE
 	bool
@@ -52,15 +51,27 @@ config OF_IRQ
 config OF_DEVICE
 	def_bool y
 
+config OF_GPIO
+	def_bool y
+	depends on GPIOLIB && !SPARC
+	help
+	  OpenFirmware GPIO accessors
+
 config OF_I2C
 	def_tristate I2C
-	depends on I2C
+	depends on I2C && !SPARC
 	help
 	  OpenFirmware I2C accessors
 
 config OF_NET
 	depends on NETDEVICES
 	def_bool y
+
+config OF_SPI
+	def_tristate SPI
+	depends on SPI && !SPARC
+	help
+	  OpenFirmware SPI accessors
 
 config OF_MDIO
 	def_tristate PHYLIB
@@ -107,10 +118,9 @@ config OF_BATTERYDATA
 	help
 	  OpenFirmware BatteryData accessors
 
-config OF_RESERVED_MEM
-	depends on OF_EARLY_FLATTREE
-	bool
+config OF_QPNP
+	def_tristate QPNP_BMS
+	depends on QPNP_BMS
 	help
-	  Helpers to allow for reservation of memory regions
-
+	  Say Y here to enable support for QPNP OF Support.
 endmenu # OF

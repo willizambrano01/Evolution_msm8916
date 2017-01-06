@@ -44,7 +44,6 @@ ipt_mangle_out(struct sk_buff *skb, const struct net_device *out)
 	u_int8_t tos;
 	__be32 saddr, daddr;
 	u_int32_t mark;
-	int err;
 
 	/* root is playing with raw sockets. */
 	if (skb->len < sizeof(struct iphdr) ||
@@ -67,11 +66,9 @@ ipt_mangle_out(struct sk_buff *skb, const struct net_device *out)
 		if (iph->saddr != saddr ||
 		    iph->daddr != daddr ||
 		    skb->mark != mark ||
-		    iph->tos != tos) {
-			err = ip_route_me_harder(skb, RTN_UNSPEC);
-			if (err < 0)
-				ret = NF_DROP_ERR(err);
-		}
+		    iph->tos != tos)
+			if (ip_route_me_harder(skb, RTN_UNSPEC))
+				ret = NF_DROP;
 	}
 
 	return ret;
@@ -107,7 +104,9 @@ static int __net_init iptable_mangle_net_init(struct net *net)
 	net->ipv4.iptable_mangle =
 		ipt_register_table(net, &packet_mangler, repl);
 	kfree(repl);
-	return PTR_RET(net->ipv4.iptable_mangle);
+	if (IS_ERR(net->ipv4.iptable_mangle))
+		return PTR_ERR(net->ipv4.iptable_mangle);
+	return 0;
 }
 
 static void __net_exit iptable_mangle_net_exit(struct net *net)
@@ -132,9 +131,13 @@ static int __init iptable_mangle_init(void)
 	mangle_ops = xt_hook_link(&packet_mangler, iptable_mangle_hook);
 	if (IS_ERR(mangle_ops)) {
 		ret = PTR_ERR(mangle_ops);
-		unregister_pernet_subsys(&iptable_mangle_net_ops);
+		goto cleanup_table;
 	}
 
+	return ret;
+
+ cleanup_table:
+	unregister_pernet_subsys(&iptable_mangle_net_ops);
 	return ret;
 }
 

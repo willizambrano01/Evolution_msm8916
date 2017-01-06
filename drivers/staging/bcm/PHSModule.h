@@ -1,7 +1,7 @@
 #ifndef BCM_MINIPORT_PHSMODULE_H
 #define BCM_MINIPORT_PHSMODULE_H
 
-int PHSTransmit(struct bcm_mini_adapter *Adapter,
+int PHSTransmit(PMINI_ADAPTER Adapter,
 					struct sk_buff **pPacket,
 					 USHORT Vcid,
 					 B_UINT16 uiClassifierRuleID,
@@ -9,7 +9,7 @@ int PHSTransmit(struct bcm_mini_adapter *Adapter,
 					 PUINT PacketLen,
 					 UCHAR bEthCSSupport);
 
-int PHSReceive(struct bcm_mini_adapter *Adapter,
+int PHSReceive(PMINI_ADAPTER Adapter,
 					USHORT usVcid,
 					struct sk_buff *packet,
 					UINT *punPacketLen,
@@ -22,15 +22,15 @@ void DumpDataPacketHeader(PUCHAR pPkt);
 
 void DumpFullPacket(UCHAR *pBuf,UINT nPktLen);
 
-void DumpPhsRules(struct bcm_phs_extension *pDeviceExtension);
+void DumpPhsRules(PPHS_DEVICE_EXTENSION pDeviceExtension);
 
 
-int phs_init(struct bcm_phs_extension *pPhsdeviceExtension,struct bcm_mini_adapter *Adapter);
+int phs_init(PPHS_DEVICE_EXTENSION pPhsdeviceExtension,PMINI_ADAPTER Adapter);
 
-int PhsCleanup(struct bcm_phs_extension *pPHSDeviceExt);
+int PhsCleanup(PPHS_DEVICE_EXTENSION pPHSDeviceExt);
 
 //Utility Functions
-ULONG PhsUpdateClassifierRule(void* pvContext,B_UINT16 uiVcid,B_UINT16 uiClsId, struct bcm_phs_rule *psPhsRule,B_UINT8  u8AssociatedPHSI );
+ULONG PhsUpdateClassifierRule(void* pvContext,B_UINT16 uiVcid,B_UINT16 uiClsId,S_PHS_RULE *psPhsRule,B_UINT8  u8AssociatedPHSI );
 
 ULONG PhsDeletePHSRule(void* pvContext,B_UINT16 uiVcid,B_UINT8 u8PHSI);
 
@@ -39,12 +39,12 @@ ULONG PhsDeleteClassifierRule(void* pvContext, B_UINT16 uiVcid ,B_UINT16  uiClsI
 ULONG PhsDeleteSFRules(void* pvContext,B_UINT16 uiVcid) ;
 
 
-BOOLEAN ValidatePHSRule(struct bcm_phs_rule *psPhsRule);
+BOOLEAN ValidatePHSRule(S_PHS_RULE *psPhsRule);
 
-UINT GetServiceFlowEntry(struct bcm_phs_table *psServiceFlowTable,B_UINT16 uiVcid, struct bcm_phs_entry **ppstServiceFlowEntry);
+UINT GetServiceFlowEntry(S_SERVICEFLOW_TABLE *psServiceFlowTable,B_UINT16 uiVcid,S_SERVICEFLOW_ENTRY **ppstServiceFlowEntry);
 
 
-void DumpPhsRules(struct bcm_phs_extension *pDeviceExtension);
+void DumpPhsRules(PPHS_DEVICE_EXTENSION pDeviceExtension);
 
 
 #endif

@@ -21,17 +21,18 @@
 #include <linux/mtd/nand.h>
 #include <linux/gpio.h>
 
+#include <mach/hardware.h>
+#include <mach/irqs.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/time.h>
 #include <asm/mach/map.h>
+#include <mach/common.h>
 #include <asm/page.h>
 #include <asm/setup.h>
+#include <mach/iomux-mx3.h>
 
-#include "common.h"
 #include "devices-imx31.h"
-#include "hardware.h"
-#include "iomux-mx3.h"
 
 /* FPGA defines */
 #define QONG_FPGA_VERSION(major, minor, rev)	\
@@ -49,6 +50,8 @@
 #define QONG_DNET_BASEADDR	\
 	(QONG_FPGA_BASEADDR + QONG_DNET_ID * QONG_FPGA_PERIPH_SIZE)
 #define QONG_DNET_SIZE		0x00001000
+
+#define QONG_FPGA_IRQ		IOMUX_TO_IRQ(MX31_PIN_DTR_DCE1)
 
 static const struct imxuart_platform_data uart_pdata __initconst = {
 	.flags = IMXUART_HAVE_RTSCTS,
@@ -75,7 +78,8 @@ static struct resource dnet_resources[] = {
 		.end	= QONG_DNET_BASEADDR + QONG_DNET_SIZE - 1,
 		.flags	= IORESOURCE_MEM,
 	}, {
-		/* irq number is run-time assigned */
+		.start	= QONG_FPGA_IRQ,
+		.end	= QONG_FPGA_IRQ,
 		.flags	= IORESOURCE_IRQ,
 	},
 };
@@ -91,10 +95,6 @@ static int __init qong_init_dnet(void)
 {
 	int ret;
 
-	dnet_resources[1].start =
-		gpio_to_irq(IOMUX_TO_GPIO(MX31_PIN_DTR_DCE1));
-	dnet_resources[1].end =
-		gpio_to_irq(IOMUX_TO_GPIO(MX31_PIN_DTR_DCE1));
 	ret = platform_device_register(&dnet_device);
 	return ret;
 }
@@ -252,13 +252,17 @@ static void __init qong_init(void)
 	mxc_init_imx_uart();
 	qong_init_nor_mtd();
 	qong_init_fpga();
-	imx31_add_imx2_wdt();
+	imx31_add_imx2_wdt(NULL);
 }
 
 static void __init qong_timer_init(void)
 {
 	mx31_clocks_init(26000000);
 }
+
+static struct sys_timer qong_timer = {
+	.init	= qong_timer_init,
+};
 
 MACHINE_START(QONG, "Dave/DENX QongEVB-LITE")
 	/* Maintainer: DENX Software Engineering GmbH */
@@ -267,7 +271,7 @@ MACHINE_START(QONG, "Dave/DENX QongEVB-LITE")
 	.init_early = imx31_init_early,
 	.init_irq = mx31_init_irq,
 	.handle_irq = imx31_handle_irq,
-	.init_time	= qong_timer_init,
+	.timer = &qong_timer,
 	.init_machine = qong_init,
 	.restart	= mxc_restart,
 MACHINE_END

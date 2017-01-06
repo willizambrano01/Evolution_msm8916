@@ -73,8 +73,7 @@ unsigned long voltdm_get_voltage(struct voltagedomain *voltdm)
 int voltdm_scale(struct voltagedomain *voltdm,
 		 unsigned long target_volt)
 {
-	int ret, i;
-	unsigned long volt = 0;
+	int ret;
 
 	if (!voltdm || IS_ERR(voltdm)) {
 		pr_warning("%s: VDD specified does not exist!\n", __func__);
@@ -87,23 +86,9 @@ int voltdm_scale(struct voltagedomain *voltdm,
 		return -ENODATA;
 	}
 
-	/* Adjust voltage to the exact voltage from the OPP table */
-	for (i = 0; voltdm->volt_data[i].volt_nominal != 0; i++) {
-		if (voltdm->volt_data[i].volt_nominal >= target_volt) {
-			volt = voltdm->volt_data[i].volt_nominal;
-			break;
-		}
-	}
-
-	if (!volt) {
-		pr_warning("%s: not scaling. OPP voltage for %lu, not found.\n",
-			   __func__, target_volt);
-		return -EINVAL;
-	}
-
-	ret = voltdm->scale(voltdm, volt);
+	ret = voltdm->scale(voltdm, target_volt);
 	if (!ret)
-		voltdm->nominal_volt = volt;
+		voltdm->nominal_volt = target_volt;
 
 	return ret;
 }
@@ -195,8 +180,8 @@ struct omap_volt_data *omap_voltage_get_voltdata(struct voltagedomain *voltdm,
 			return &voltdm->volt_data[i];
 	}
 
-	pr_notice("%s: Unable to match the current voltage with the voltage table for vdd_%s\n",
-		  __func__, voltdm->name);
+	pr_notice("%s: Unable to match the current voltage with the voltage"
+		"table for vdd_%s\n", __func__, voltdm->name);
 
 	return ERR_PTR(-ENODATA);
 }
@@ -249,8 +234,8 @@ void omap_change_voltscale_method(struct voltagedomain *voltdm,
 		voltdm->scale = omap_vc_bypass_scale;
 		return;
 	default:
-		pr_warn("%s: Trying to change the method of voltage scaling to an unsupported one!\n",
-			__func__);
+		pr_warning("%s: Trying to change the method of voltage scaling"
+			"to an unsupported one!\n", __func__);
 	}
 }
 
@@ -331,8 +316,8 @@ int voltdm_add_pwrdm(struct voltagedomain *voltdm, struct powerdomain *pwrdm)
 	if (!voltdm || !pwrdm)
 		return -EINVAL;
 
-	pr_debug("voltagedomain: %s: associating powerdomain %s\n",
-		 voltdm->name, pwrdm->name);
+	pr_debug("voltagedomain: associating powerdomain %s with voltagedomain "
+		 "%s\n", pwrdm->name, voltdm->name);
 
 	list_add(&pwrdm->voltdm_node, &voltdm->pwrdm_list);
 

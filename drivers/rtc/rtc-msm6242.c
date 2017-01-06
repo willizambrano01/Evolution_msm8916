@@ -194,28 +194,30 @@ static const struct rtc_class_ops msm6242_rtc_ops = {
 	.set_time	= msm6242_set_time,
 };
 
-static int __init msm6242_rtc_probe(struct platform_device *pdev)
+static int __init msm6242_rtc_probe(struct platform_device *dev)
 {
 	struct resource *res;
 	struct msm6242_priv *priv;
 	struct rtc_device *rtc;
 	int error;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	res = platform_get_resource(dev, IORESOURCE_MEM, 0);
 	if (!res)
 		return -ENODEV;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	priv->regs = devm_ioremap(&pdev->dev, res->start, resource_size(res));
-	if (!priv->regs)
-		return -ENOMEM;
-	platform_set_drvdata(pdev, priv);
+	priv->regs = ioremap(res->start, resource_size(res));
+	if (!priv->regs) {
+		error = -ENOMEM;
+		goto out_free_priv;
+	}
+	platform_set_drvdata(dev, priv);
 
-	rtc = devm_rtc_device_register(&pdev->dev, "rtc-msm6242",
-				&msm6242_rtc_ops, THIS_MODULE);
+	rtc = rtc_device_register("rtc-msm6242", &dev->dev, &msm6242_rtc_ops,
+				  THIS_MODULE);
 	if (IS_ERR(rtc)) {
 		error = PTR_ERR(rtc);
 		goto out_unmap;
@@ -225,12 +227,20 @@ static int __init msm6242_rtc_probe(struct platform_device *pdev)
 	return 0;
 
 out_unmap:
-	platform_set_drvdata(pdev, NULL);
+	platform_set_drvdata(dev, NULL);
+	iounmap(priv->regs);
+out_free_priv:
+	kfree(priv);
 	return error;
 }
 
-static int __exit msm6242_rtc_remove(struct platform_device *pdev)
+static int __exit msm6242_rtc_remove(struct platform_device *dev)
 {
+	struct msm6242_priv *priv = platform_get_drvdata(dev);
+
+	rtc_device_unregister(priv->rtc);
+	iounmap(priv->regs);
+	kfree(priv);
 	return 0;
 }
 
@@ -242,7 +252,18 @@ static struct platform_driver msm6242_rtc_driver = {
 	.remove	= __exit_p(msm6242_rtc_remove),
 };
 
-module_platform_driver_probe(msm6242_rtc_driver, msm6242_rtc_probe);
+static int __init msm6242_rtc_init(void)
+{
+	return platform_driver_probe(&msm6242_rtc_driver, msm6242_rtc_probe);
+}
+
+static void __exit msm6242_rtc_fini(void)
+{
+	platform_driver_unregister(&msm6242_rtc_driver);
+}
+
+module_init(msm6242_rtc_init);
+module_exit(msm6242_rtc_fini);
 
 MODULE_AUTHOR("Geert Uytterhoeven <geert@linux-m68k.org>");
 MODULE_LICENSE("GPL");

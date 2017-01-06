@@ -10,7 +10,6 @@
 
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/sizes.h>
 #include <linux/platform_device.h>
 #include <linux/mtd/partitions.h>
 #include <linux/ata_platform.h>
@@ -18,7 +17,7 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <mach/kirkwood.h>
-#include <linux/platform_data/mmc-mvsdio.h>
+#include <plat/mvsdio.h>
 #include "common.h"
 #include "mpp.h"
 
@@ -103,6 +102,6 @@ MACHINE_START(DB88F6281_BP, "Marvell DB-88F6281-BP Development Board")
 	.map_io		= kirkwood_map_io,
 	.init_early	= kirkwood_init_early,
 	.init_irq	= kirkwood_init_irq,
-	.init_time	= kirkwood_timer_init,
+	.timer		= &kirkwood_timer,
 	.restart	= kirkwood_restart,
 MACHINE_END

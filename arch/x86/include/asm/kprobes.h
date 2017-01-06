@@ -27,7 +27,6 @@
 #include <asm/insn.h>
 
 #define  __ARCH_WANT_KPROBES_INSN_SLOT
-#define  ARCH_SUPPORTS_KPROBES_ON_FTRACE
 
 struct pt_regs;
 struct kprobe;
@@ -77,7 +76,6 @@ struct arch_specific_insn {
 	 * a post_handler or break_handler).
 	 */
 	int boostable;
-	bool if_modifier;
 };
 
 struct arch_optimized_insn {

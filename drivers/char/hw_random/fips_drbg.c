@@ -22,7 +22,7 @@
 #include <linux/io.h>
 #include <linux/err.h>
 #include <linux/types.h>
-#include <linux/msm-bus.h>
+#include <mach/msm_bus.h>
 #include <linux/qrng.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>

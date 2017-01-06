@@ -10,7 +10,7 @@
 #ifndef __ETHER_H
 #define __ETHER_H
 
-#include <asm/quicc_simple.h>
+#include "quicc_simple.h"
 
 /*
  * transmit BD's

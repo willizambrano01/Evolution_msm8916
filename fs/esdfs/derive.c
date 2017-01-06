@@ -52,7 +52,7 @@ struct esdfs_package_list {
 	struct hlist_node package_node;
 	struct hlist_node access_node;
 	char *name;
-	uid_t appid;
+	unsigned long appid;
 	unsigned access;
 #define HAS_SDCARD_RW	(1 << 0)
 #define HAS_MEDIA_RW	(1 << 1)
@@ -89,8 +89,7 @@ static int parse_package_list(char *buffer, unsigned long size)
 {
 	char *next_line = buffer;
 	char *sep, *sepres, *name;
-	uid_t appid;
-	gid_t gid;
+	unsigned long appid, gid;
 	unsigned hash, access;
 	unsigned count = 0, line = 0, pi = 0;
 	struct esdfs_package_list *pl = NULL;
@@ -124,7 +123,7 @@ static int parse_package_list(char *buffer, unsigned long size)
 		sepres = strsep(&sep, " ");
 		if (!sep)
 			goto next;
-		ret = kstrtou32(sepres, 0, &appid);
+		ret = kstrtoul(sepres, 0, &appid);
 		if (ret) {
 			err = ret;
 			goto next;
@@ -143,7 +142,7 @@ static int parse_package_list(char *buffer, unsigned long size)
 		sepres = strsep(&sep, ",");
 		while (sepres) {
 			gid = 0;
-			if (kstrtou32(sepres, 0, &gid) == 0) {
+			if (kstrtoul(sepres, 0, &gid) == 0) {
 				if (gid == AID_SDCARD_RW)
 					access |= HAS_SDCARD_RW;
 				else if (gid == AID_MEDIA_RW)
@@ -151,7 +150,7 @@ static int parse_package_list(char *buffer, unsigned long size)
 			}
 			sepres = strsep(&sep, ",");
 		}
-		pr_debug("esdfs: %s: %s, %u, 0x%02X\n",
+		pr_debug("esdfs: %s: %s, %lu, 0x%02X\n",
 			 __func__, name, appid, access);
 
 		/* Parsed the line OK, so do some sanity checks. */
@@ -188,7 +187,7 @@ next:
 		if (pl[pi].access)
 			hash_add(access_list_hash, &pl[pi].access_node,
 				 pl[pi].appid);
-		pr_debug("esdfs: %s: %s (0x%08x), %u, 0x%02X\n", __func__,
+		pr_debug("esdfs: %s: %s (0x%08x), %lu, 0x%02X\n", __func__,
 			pl[pi].name, hash, pl[pi].appid, pl[pi].access);
 	}
 
@@ -204,8 +203,8 @@ next:
 	return 0;
 }
 
-static ssize_t proc_packages_write(struct file *file, const char __user *chunk,
-			       size_t count, loff_t *offset)
+static int proc_packages_write(struct file *file, const char *chunk,
+				     unsigned long count, void *data)
 {
 	char *buffer;
 	int err;
@@ -248,18 +247,15 @@ static ssize_t proc_packages_write(struct file *file, const char __user *chunk,
 	return count;
 }
 
-static const struct file_operations esdfs_proc_fops = {
-	.write  = proc_packages_write,
-};
-
 int esdfs_init_package_list(void)
 {
 	if (!esdfs_proc_root)
 		esdfs_proc_root = proc_mkdir("fs/esdfs", NULL);
 	if (esdfs_proc_root && !esdfs_proc_packages)
-		esdfs_proc_packages = proc_create("packages", S_IWUSR,
-						  esdfs_proc_root,
-						  &esdfs_proc_fops);
+		esdfs_proc_packages =
+			create_proc_entry("packages", S_IWUSR, esdfs_proc_root);
+	if (esdfs_proc_packages)
+		esdfs_proc_packages->write_proc = proc_packages_write;
 
 	return 0;
 }
@@ -280,6 +276,7 @@ void esdfs_derive_perms(struct dentry *dentry)
 	struct esdfs_inode_info *inode_i = ESDFS_I(dentry->d_inode);
 	bool is_root;
 	struct esdfs_package_list *package;
+	struct hlist_node *tmp;
 	unsigned hash;
 	int ret;
 
@@ -340,7 +337,7 @@ void esdfs_derive_perms(struct dentry *dentry)
 	case ESDFS_TREE_ANDROID_MEDIA:
 		hash = full_name_hash(dentry->d_name.name, dentry->d_name.len);
 		mutex_lock(&package_list_lock);
-		hash_for_each_possible(package_list_hash, package,
+		hash_for_each_possible(package_list_hash, package, tmp,
 				       package_node, hash) {
 			if (!strncmp(package->name, dentry->d_name.name,
 				     dentry->d_name.len)) {
@@ -520,6 +517,7 @@ int esdfs_check_derived_permission(struct inode *inode, int mask)
 {
 	const struct cred *cred;
 	struct esdfs_package_list *package;
+	struct hlist_node *tmp;
 	uid_t appid;
 	unsigned access = 0;
 
@@ -545,10 +543,10 @@ int esdfs_check_derived_permission(struct inode *inode, int mask)
 	 * requests against the list of apps that have been granted sdcard_rw.
 	 */
 	mutex_lock(&package_list_lock);
-	hash_for_each_possible(access_list_hash, package,
+	hash_for_each_possible(access_list_hash, package, tmp,
 			       access_node, appid) {
 		if (package->appid == appid) {
-			pr_debug("esdfs: %s: found appid %u, access: %u\n",
+			pr_debug("esdfs: %s: found appid %lu, access: %u\n",
 				__func__, package->appid,
 				package->access);
 			access = package->access;
@@ -588,7 +586,7 @@ int esdfs_check_derived_permission(struct inode *inode, int mask)
 	       !(mask & ESDFS_MAY_CREATE)))))
 		return 0;
 
-	pr_debug("esdfs: %s: denying access to appid: %u\n", __func__, appid);
+	pr_debug("esdfs: %s: denying access to appid: %d", __func__, appid);
 	return -EACCES;
 }
 
@@ -602,6 +600,7 @@ int esdfs_derive_mkdir_contents(struct dentry *dir_dentry)
 	struct qstr nomedia;
 	struct dentry *lower_dentry;
 	struct path lower_dir_path, lower_path;
+	struct nameidata nd;
 	umode_t mode;
 	int err = 0;
 
@@ -649,10 +648,11 @@ int esdfs_derive_mkdir_contents(struct dentry *dir_dentry)
 	}
 
 	/* Now create the lower file. */
+	nd.path.dentry = lower_dentry;
 	mode = S_IFREG;
 	esdfs_set_lower_mode(ESDFS_SB(dir_dentry->d_sb), &mode);
 	err = vfs_create(lower_dir_path.dentry->d_inode, lower_dentry, mode,
-			 true);
+			 &nd);
 	dput(lower_dentry);
 
 out:

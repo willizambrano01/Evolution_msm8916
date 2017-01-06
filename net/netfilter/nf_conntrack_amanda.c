@@ -2,7 +2,6 @@
  *
  * (C) 2002 by Brian J. Murrell <netfilter@interlinx.bc.ca>
  * based on HW's ip_conntrack_irc.c as well as other modules
- * (C) 2006 Patrick McHardy <kaber@trash.net>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -41,7 +40,6 @@ MODULE_PARM_DESC(ts_algo, "textsearch algorithm to use (default kmp)");
 
 unsigned int (*nf_nat_amanda_hook)(struct sk_buff *skb,
 				   enum ip_conntrack_info ctinfo,
-				   unsigned int protoff,
 				   unsigned int matchoff,
 				   unsigned int matchlen,
 				   struct nf_conntrack_expect *exp)
@@ -54,7 +52,6 @@ enum amanda_strings {
 	SEARCH_DATA,
 	SEARCH_MESG,
 	SEARCH_INDEX,
-	SEARCH_CTL,
 };
 
 static struct {
@@ -81,10 +78,6 @@ static struct {
 	[SEARCH_INDEX] = {
 		.string = "INDEX ",
 		.len	= 6,
-	},
-	[SEARCH_CTL] = {
-		.string = "CTL ",
-		.len	= 4,
 	},
 };
 
@@ -114,7 +107,8 @@ static int amanda_help(struct sk_buff *skb,
 	/* No data? */
 	dataoff = protoff + sizeof(struct udphdr);
 	if (dataoff >= skb->len) {
-		net_err_ratelimited("amanda_help: skblen = %u\n", skb->len);
+		if (net_ratelimit())
+			printk(KERN_ERR "amanda_help: skblen = %u\n", skb->len);
 		return NF_ACCEPT;
 	}
 
@@ -132,7 +126,7 @@ static int amanda_help(struct sk_buff *skb,
 		goto out;
 	stop += start;
 
-	for (i = SEARCH_DATA; i <= SEARCH_CTL; i++) {
+	for (i = SEARCH_DATA; i <= SEARCH_INDEX; i++) {
 		memset(&ts, 0, sizeof(ts));
 		off = skb_find_text(skb, start, stop, search[i].ts, &ts);
 		if (off == UINT_MAX)
@@ -151,7 +145,6 @@ static int amanda_help(struct sk_buff *skb,
 
 		exp = nf_ct_expect_alloc(ct);
 		if (exp == NULL) {
-			nf_ct_helper_log(skb, ct, "cannot alloc expectation");
 			ret = NF_DROP;
 			goto out;
 		}
@@ -163,12 +156,10 @@ static int amanda_help(struct sk_buff *skb,
 
 		nf_nat_amanda = rcu_dereference(nf_nat_amanda_hook);
 		if (nf_nat_amanda && ct->status & IPS_NAT_MASK)
-			ret = nf_nat_amanda(skb, ctinfo, protoff,
-					    off - dataoff, len, exp);
-		else if (nf_ct_expect_related(exp) != 0) {
-			nf_ct_helper_log(skb, ct, "cannot add expectation");
+			ret = nf_nat_amanda(skb, ctinfo, off - dataoff,
+					    len, exp);
+		else if (nf_ct_expect_related(exp) != 0)
 			ret = NF_DROP;
-		}
 		nf_ct_expect_put(exp);
 	}
 

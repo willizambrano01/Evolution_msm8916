@@ -28,7 +28,6 @@
 #include <linux/linkage.h>
 #include <asm/dwarf2.h>
 #include <asm/errno.h>
-#include <asm/asm.h>
 				
 /*
  * computes a partial checksum, e.g. for TCP/UDP fragments
@@ -61,7 +60,7 @@ ENTRY(csum_partial)
 	testl $3, %esi		# Check alignment.
 	jz 2f			# Jump if alignment is ok.
 	testl $1, %esi		# Check alignment.
-	jz 10f			# Jump if alignment is boundary of 2 bytes.
+	jz 10f			# Jump if alignment is boundary of 2bytes.
 
 	# buf is odd
 	dec %ecx
@@ -283,11 +282,15 @@ unsigned int csum_partial_copy_generic (const char *src, char *dst,
 
 #define SRC(y...)			\
 	9999: y;			\
-	_ASM_EXTABLE(9999b, 6001f)
+	.section __ex_table, "a";	\
+	.long 9999b, 6001f	;	\
+	.previous
 
 #define DST(y...)			\
 	9999: y;			\
-	_ASM_EXTABLE(9999b, 6002f)
+	.section __ex_table, "a";	\
+	.long 9999b, 6002f	;	\
+	.previous
 
 #ifndef CONFIG_X86_USE_PPRO_CHECKSUM
 

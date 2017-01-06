@@ -8,8 +8,7 @@
  * warranty of any kind, whether express or implied.
  */
 		.macro  get_irqnr_preamble, base, tmp
-		mov	\base, #0xfe000000
-		orr	\base, \base, #0x00e00000
+		mov	\base, #0xe0000000
 		.endm
 
 		.macro	get_irqnr_and_base, irqnr, irqstat, base, tmp

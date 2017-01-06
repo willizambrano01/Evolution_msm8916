@@ -23,6 +23,8 @@
 #include <dspbridge/devdefs.h>
 #include <dspbridge/drv.h>
 
+extern char *iva_img;
+
 /*
  *  ======== proc_attach ========
  *  Purpose:
@@ -261,7 +263,7 @@ extern int proc_get_processor_id(void *proc, u32 * proc_id);
  *  Returns:
  *      0     :   Success.
  *      -EFAULT :   Invalid processor handle.
- *      -EPERM   :   General failure while retrieving processor trace
+ *      -EPERM   :   General failure while retireving processor trace
  *		      Buffer.
  *  Requires:
  *      pbuf is not NULL

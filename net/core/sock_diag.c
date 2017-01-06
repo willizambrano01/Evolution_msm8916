@@ -4,12 +4,13 @@
 #include <net/netlink.h>
 #include <net/net_namespace.h>
 #include <linux/module.h>
+#include <linux/rtnetlink.h>
 #include <net/sock.h>
 
 #include <linux/inet_diag.h>
 #include <linux/sock_diag.h>
 
-static const struct sock_diag_handler *sock_diag_handlers[AF_MAX];
+static struct sock_diag_handler *sock_diag_handlers[AF_MAX];
 static int (*inet_rcv_compat)(struct sk_buff *skb, struct nlmsghdr *nlh);
 static DEFINE_MUTEX(sock_diag_table_mutex);
 
@@ -34,7 +35,9 @@ EXPORT_SYMBOL_GPL(sock_diag_save_cookie);
 
 int sock_diag_put_meminfo(struct sock *sk, struct sk_buff *skb, int attrtype)
 {
-	u32 mem[SK_MEMINFO_VARS];
+	__u32 *mem;
+
+	mem = RTA_DATA(__RTA_PUT(skb, attrtype, SK_MEMINFO_VARS * sizeof(__u32)));
 
 	mem[SK_MEMINFO_RMEM_ALLOC] = sk_rmem_alloc_get(sk);
 	mem[SK_MEMINFO_RCVBUF] = sk->sk_rcvbuf;
@@ -43,49 +46,13 @@ int sock_diag_put_meminfo(struct sock *sk, struct sk_buff *skb, int attrtype)
 	mem[SK_MEMINFO_FWD_ALLOC] = sk->sk_forward_alloc;
 	mem[SK_MEMINFO_WMEM_QUEUED] = sk->sk_wmem_queued;
 	mem[SK_MEMINFO_OPTMEM] = atomic_read(&sk->sk_omem_alloc);
-	mem[SK_MEMINFO_BACKLOG] = sk->sk_backlog.len;
 
-	return nla_put(skb, attrtype, sizeof(mem), &mem);
+	return 0;
+
+rtattr_failure:
+	return -EMSGSIZE;
 }
 EXPORT_SYMBOL_GPL(sock_diag_put_meminfo);
-
-int sock_diag_put_filterinfo(bool may_report_filterinfo, struct sock *sk,
-			     struct sk_buff *skb, int attrtype)
-{
-	struct nlattr *attr;
-	struct sk_filter *filter;
-	unsigned int len;
-	int err = 0;
-
-	if (!may_report_filterinfo) {
-		nla_reserve(skb, attrtype, 0);
-		return 0;
-	}
-
-	rcu_read_lock();
-
-	filter = rcu_dereference(sk->sk_filter);
-	len = filter ? filter->len * sizeof(struct sock_filter) : 0;
-
-	attr = nla_reserve(skb, attrtype, len);
-	if (attr == NULL) {
-		err = -EMSGSIZE;
-		goto out;
-	}
-
-	if (filter) {
-		struct sock_filter *fb = (struct sock_filter *)nla_data(attr);
-		int i;
-
-		for (i = 0; i < filter->len; i++, fb++)
-			sk_decode_filter(&filter->insns[i], fb);
-	}
-
-out:
-	rcu_read_unlock();
-	return err;
-}
-EXPORT_SYMBOL(sock_diag_put_filterinfo);
 
 void sock_diag_register_inet_compat(int (*fn)(struct sk_buff *skb, struct nlmsghdr *nlh))
 {
@@ -103,7 +70,7 @@ void sock_diag_unregister_inet_compat(int (*fn)(struct sk_buff *skb, struct nlms
 }
 EXPORT_SYMBOL_GPL(sock_diag_unregister_inet_compat);
 
-int sock_diag_register(const struct sock_diag_handler *hndl)
+int sock_diag_register(struct sock_diag_handler *hndl)
 {
 	int err = 0;
 
@@ -121,7 +88,7 @@ int sock_diag_register(const struct sock_diag_handler *hndl)
 }
 EXPORT_SYMBOL_GPL(sock_diag_register);
 
-void sock_diag_unregister(const struct sock_diag_handler *hnld)
+void sock_diag_unregister(struct sock_diag_handler *hnld)
 {
 	int family = hnld->family;
 
@@ -135,11 +102,26 @@ void sock_diag_unregister(const struct sock_diag_handler *hnld)
 }
 EXPORT_SYMBOL_GPL(sock_diag_unregister);
 
+static inline struct sock_diag_handler *sock_diag_lock_handler(int family)
+{
+	if (sock_diag_handlers[family] == NULL)
+		request_module("net-pf-%d-proto-%d-type-%d", PF_NETLINK,
+				NETLINK_SOCK_DIAG, family);
+
+	mutex_lock(&sock_diag_table_mutex);
+	return sock_diag_handlers[family];
+}
+
+static inline void sock_diag_unlock_handler(struct sock_diag_handler *h)
+{
+	mutex_unlock(&sock_diag_table_mutex);
+}
+
 static int __sock_diag_cmd(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
 	int err;
-	struct sock_diag_req *req = nlmsg_data(nlh);
-	const struct sock_diag_handler *hndl;
+	struct sock_diag_req *req = NLMSG_DATA(nlh);
+	struct sock_diag_handler *hndl;
 
 	if (nlmsg_len(nlh) < sizeof(*req))
 		return -EINVAL;
@@ -147,12 +129,7 @@ static int __sock_diag_cmd(struct sk_buff *skb, struct nlmsghdr *nlh)
 	if (req->sdiag_family >= AF_MAX)
 		return -EINVAL;
 
-	if (sock_diag_handlers[req->sdiag_family] == NULL)
-		request_module("net-pf-%d-proto-%d-type-%d", PF_NETLINK,
-				NETLINK_SOCK_DIAG, req->sdiag_family);
-
-	mutex_lock(&sock_diag_table_mutex);
-	hndl = sock_diag_handlers[req->sdiag_family];
+	hndl = sock_diag_lock_handler(req->sdiag_family);
 	if (hndl == NULL)
 		err = -ENOENT;
 	else if (nlh->nlmsg_type == SOCK_DIAG_BY_FAMILY)
@@ -161,7 +138,7 @@ static int __sock_diag_cmd(struct sk_buff *skb, struct nlmsghdr *nlh)
 		err = hndl->destroy(skb, nlh);
 	else
 		err = -EOPNOTSUPP;
-	mutex_unlock(&sock_diag_table_mutex);
+	sock_diag_unlock_handler(hndl);
 
 	return err;
 }
@@ -204,7 +181,7 @@ static void sock_diag_rcv(struct sk_buff *skb)
 
 int sock_diag_destroy(struct sock *sk, int err)
 {
-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
 	if (!sk->sk_prot->diag_destroy)
@@ -214,35 +191,19 @@ int sock_diag_destroy(struct sock *sk, int err)
 }
 EXPORT_SYMBOL_GPL(sock_diag_destroy);
 
-static int __net_init diag_net_init(struct net *net)
-{
-	struct netlink_kernel_cfg cfg = {
-		.input	= sock_diag_rcv,
-	};
-
-	net->diag_nlsk = netlink_kernel_create(net, NETLINK_SOCK_DIAG, &cfg);
-	return net->diag_nlsk == NULL ? -ENOMEM : 0;
-}
-
-static void __net_exit diag_net_exit(struct net *net)
-{
-	netlink_kernel_release(net->diag_nlsk);
-	net->diag_nlsk = NULL;
-}
-
-static struct pernet_operations diag_net_ops = {
-	.init = diag_net_init,
-	.exit = diag_net_exit,
-};
+struct sock *sock_diag_nlsk;
+EXPORT_SYMBOL_GPL(sock_diag_nlsk);
 
 static int __init sock_diag_init(void)
 {
-	return register_pernet_subsys(&diag_net_ops);
+	sock_diag_nlsk = netlink_kernel_create(&init_net, NETLINK_SOCK_DIAG, 0,
+					sock_diag_rcv, NULL, THIS_MODULE);
+	return sock_diag_nlsk == NULL ? -ENOMEM : 0;
 }
 
 static void __exit sock_diag_exit(void)
 {
-	unregister_pernet_subsys(&diag_net_ops);
+	netlink_kernel_release(sock_diag_nlsk);
 }
 
 module_init(sock_diag_init);

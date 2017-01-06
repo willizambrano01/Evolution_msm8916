@@ -28,7 +28,6 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
-#include <linux/jiffies.h>
 
 MODULE_LICENSE("GPL");
 
@@ -41,8 +40,8 @@ enum chips { thmc50, adm1022 };
 static unsigned short adm1022_temp3[16];
 static unsigned int adm1022_temp3_num;
 module_param_array(adm1022_temp3, ushort, &adm1022_temp3_num, 0);
-MODULE_PARM_DESC(adm1022_temp3,
-		 "List of adapter,address pairs to enable 3rd temperature (ADM1022 only)");
+MODULE_PARM_DESC(adm1022_temp3, "List of adapter,address pairs "
+			"to enable 3rd temperature (ADM1022 only)");
 
 /* Many THMC50 constants specified below */
 
@@ -134,7 +133,7 @@ static ssize_t set_analog_out(struct device *dev,
 		return err;
 
 	mutex_lock(&data->update_lock);
-	data->analog_out = clamp_val(tmp, 0, 255);
+	data->analog_out = SENSORS_LIMIT(tmp, 0, 255);
 	i2c_smbus_write_byte_data(client, THMC50_REG_ANALOG_OUT,
 				  data->analog_out);
 
@@ -187,7 +186,7 @@ static ssize_t set_temp_min(struct device *dev, struct device_attribute *attr,
 		return err;
 
 	mutex_lock(&data->update_lock);
-	data->temp_min[nr] = clamp_val(val / 1000, -128, 127);
+	data->temp_min[nr] = SENSORS_LIMIT(val / 1000, -128, 127);
 	i2c_smbus_write_byte_data(client, THMC50_REG_TEMP_MIN[nr],
 				  data->temp_min[nr]);
 	mutex_unlock(&data->update_lock);
@@ -216,7 +215,7 @@ static ssize_t set_temp_max(struct device *dev, struct device_attribute *attr,
 		return err;
 
 	mutex_lock(&data->update_lock);
-	data->temp_max[nr] = clamp_val(val / 1000, -128, 127);
+	data->temp_max[nr] = SENSORS_LIMIT(val / 1000, -128, 127);
 	i2c_smbus_write_byte_data(client, THMC50_REG_TEMP_MAX[nr],
 				  data->temp_max[nr]);
 	mutex_unlock(&data->update_lock);
@@ -312,7 +311,8 @@ static int thmc50_detect(struct i2c_client *client,
 	const char *type_name;
 
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA)) {
-		pr_debug("thmc50: detect failed, smbus byte data not supported!\n");
+		pr_debug("thmc50: detect failed, "
+			 "smbus byte data not supported!\n");
 		return -ENODEV;
 	}
 
@@ -361,10 +361,12 @@ static int thmc50_probe(struct i2c_client *client,
 	struct thmc50_data *data;
 	int err;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct thmc50_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct thmc50_data), GFP_KERNEL);
+	if (!data) {
+		pr_debug("thmc50: detect failed, kzalloc failed!\n");
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	data->type = id->driver_data;
@@ -375,7 +377,7 @@ static int thmc50_probe(struct i2c_client *client,
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&client->dev.kobj, &thmc50_group);
 	if (err)
-		return err;
+		goto exit_free;
 
 	/* Register ADM1022 sysfs hooks */
 	if (data->has_temp3) {
@@ -398,6 +400,9 @@ exit_remove_sysfs:
 		sysfs_remove_group(&client->dev.kobj, &temp3_group);
 exit_remove_sysfs_thmc50:
 	sysfs_remove_group(&client->dev.kobj, &thmc50_group);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -409,6 +414,8 @@ static int thmc50_remove(struct i2c_client *client)
 	sysfs_remove_group(&client->dev.kobj, &thmc50_group);
 	if (data->has_temp3)
 		sysfs_remove_group(&client->dev.kobj, &temp3_group);
+
+	kfree(data);
 
 	return 0;
 }

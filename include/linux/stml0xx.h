@@ -1,3 +1,4 @@
+
 /*
  * Copyright (C) 2010-2014 Motorola, Inc.
  *
@@ -33,30 +34,6 @@
 #include <linux/mmi_hall_notifier.h>
 #endif
 
-/* Log macros */
-#define ENABLE_VERBOSE_LOGGING 0
-
-/* SPI */
-#define SPI_FLASH_CLK_SPD_HZ    4000000
-#define SPI_NORMAL_CLK_SPD_HZ   4000000
-#define SPI_BUFF_SIZE           1152
-#define SPI_RETRIES             5
-#define SPI_RETRY_DELAY         20
-#define SPI_SENSORHUB_TIMEOUT   5000
-#define SPI_BARKER_1            0xF9
-#define SPI_BARKER_2            0xAE
-#define SPI_HEADER_SIZE         6
-#define SPI_CRC_SIZE            2
-#define SPI_WRITE_REG_HDR_SIZE      6
-#define SPI_READ_REG_HDR_SIZE       6
-#define SPI_CRC_LEN                 2
-#define SPI_READ_SENSORS_HDR_SIZE   3
-#define SPI_TX_PAYLOAD_LEN         88
-#define SPI_MSG_SIZE	\
-	(SPI_HEADER_SIZE+SPI_TX_PAYLOAD_LEN+SPI_CRC_SIZE)
-#define SPI_RX_PAYLOAD_LEN	\
-	(SPI_MSG_SIZE - SPI_CRC_SIZE)
-
 enum sh_spi_msg {
 	SPI_MSG_TYPE_READ_REG = 1,
 	SPI_MSG_TYPE_WRITE_REG,
@@ -73,7 +50,6 @@ enum sh_spi_msg {
 #define LOWPOWER_REG                    0x03
 #define INIT_COMPLETE_REG               0x04
 #define ACCEL_ORIENTATION		0x06
-#define ACCEL_SWAP                      0x07
 
 #define STML0XX_PEEKDATA_REG             0x09
 #define STML0XX_PEEKSTATUS_REG           0x0A
@@ -110,9 +86,9 @@ enum sh_spi_msg {
 
 #define MOTION_DATA                     0x2D
 
-#define HEADSET_DATA                    0x2F
-
 #define HEADSET_SETTINGS                0x2E
+
+#define HEADSET_DATA                    0x2F
 
 #define PROX_SETTINGS                   0x33
 
@@ -146,8 +122,6 @@ enum sh_spi_msg {
 #define CAMERA                          0x4C
 #define NFC                             0x4D
 #define SIM                             0x4E
-#define CHOPCHOP                        0x4F
-#define LIFT                            0x51
 
 #define SH_LOG_LEVEL_REG                0x55
 
@@ -238,8 +212,6 @@ enum sh_spi_msg {
 #define WAKE_IRQ_IDX_MODALITY_ACCUM        50
 #define WAKE_IRQ_IDX_MODALITY_ACCUM_MVMT   52
 #define WAKE_IRQ_IDX_LOG_MSG               56
-#define WAKE_IRQ_IDX_STOWED_ALS		(WAKE_IRQ_IDX_LOG_MSG + LOG_MSG_SIZE)
-#define WAKE_IRQ_IDX_GLANCE                (WAKE_IRQ_IDX_STOWED_ALS + 2)
 
 /* stml0xx_readbuff offsets. */
 #define IRQ_WAKE_LO  0
@@ -250,17 +222,44 @@ enum sh_spi_msg {
 #define IRQ_NOWAKE_MED  1
 #define IRQ_NOWAKE_HI   2
 
-#define ALGO_TYPE_OFFSET 7
-#define ACCEL_X_OFFSET 0
-#define ACCEL_Y_OFFSET 2
-#define ACCEL_Z_OFFSET 4
-#define ALS_OFFSET 0
-#define CAMERA_OFFSET 0
-#define SIM_OFFSET 0
-#define LIFT_DISTANCE_OFFSET 0
-#define LIFT_ROTATION_OFFSET 4
-#define LIFT_GRAV_DIFF_OFFSET 8
-#define GLANCE_OFFSET 0
+#define DOCK_STATE	0
+#define PROX_DISTANCE	0
+#define COVER_STATE	0
+#define HEADSET_STATE   0
+#define TOUCH_REASON	1
+#define FLAT_UP		0
+#define FLAT_DOWN	0
+#define STOWED_STATUS	0
+#define NFC_VALUE	0
+#define ALGO_TYPE	7
+#define COMPASS_STATUS	12
+#define DISP_VALUE	0
+#define ACCEL_RD_X	0
+#define ACCEL_RD_Y	2
+#define ACCEL_RD_Z	4
+#define MAG_X		0
+#define MAG_Y		2
+#define MAG_Z		4
+#define MAG_UNCALIB_X   6
+#define MAG_UNCALIB_Y   8
+#define MAG_UNCALIB_Z   10
+#define ORIENT_X	6
+#define ORIENT_Y	8
+#define ORIENT_Z	10
+#define GYRO_RD_X	0
+#define GYRO_RD_Y	2
+#define GYRO_RD_Z	4
+#define GYRO_UNCALIB_X	6
+#define GYRO_UNCALIB_Y	8
+#define GYRO_UNCALIB_Z	10
+#define ALS_VALUE	0
+#define TEMP_VALUE	0
+#define PRESSURE_VALUE	0
+#define GRAV_X		0
+#define GRAV_Y		2
+#define GRAV_Z		4
+#define CAMERA_VALUE	0
+#define SIM_DATA	0
 
 #define STML0XX_LED_MAX_DELAY 0xFFFF
 #define STML0XX_LED_MAX_BRIGHTNESS 0x00FFFFFF
@@ -276,25 +275,6 @@ enum sh_spi_msg {
 
 #define STML0XX_HALL_SOUTH 1
 #define STML0XX_HALL_NORTH 2
-
-/**
- * struct stml0xx_ioctl_work_struct - struct for deferred ioctl data
- * @ws base struct
- * @cmd ioctl number
- * @data ioctl data
- * @data_len length of @data
- * @algo_req_ndx index into @stml0xx_g_algo_requst
- */
-struct stml0xx_ioctl_work_struct {
-	struct work_struct ws;
-	unsigned int cmd;
-	union {
-		unsigned char bytes[32];
-		unsigned short delay;
-	} data;
-	unsigned char data_len;
-	size_t algo_req_ndx;
-};
 
 struct stml0xx_platform_data {
 	int (*init) (void);
@@ -341,8 +321,6 @@ struct stml0xx_platform_data {
 	int headset_button_4_keycode;
 	int accel_orientation_1;
 	int accel_orientation_2;
-	int accel_swap;
-	int cover_detect_polarity;
 };
 
 struct stml0xx_data {
@@ -351,7 +329,6 @@ struct stml0xx_data {
 	struct work_struct clear_interrupt_status_work;
 	struct work_struct initialize_work;
 	struct workqueue_struct *irq_work_queue;
-	struct workqueue_struct *ioctl_work_queue;
 	struct wake_lock wakelock;
 	struct wake_lock wake_sensor_wakelock;
 	struct wake_lock reset_wakelock;
@@ -403,7 +380,6 @@ struct stml0xx_data {
 
 	bool is_suspended;
 	bool pending_wake_work;
-	struct led_classdev led_cdev;
 #ifdef CONFIG_MMI_HALL_NOTIFICATIONS
 	struct mmi_hall_data *hall_data;
 #endif

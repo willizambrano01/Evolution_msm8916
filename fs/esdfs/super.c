@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1998-2014 Erez Zadok
+ * Copyright (c) 1998-2013 Erez Zadok
  * Copyright (c) 2009	   Shrikar Archak
- * Copyright (c) 2003-2014 Stony Brook University
- * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2003-2013 Stony Brook University
+ * Copyright (c) 2003-2013 The Research Foundation of SUNY
  * Copyright (C) 2013-2014 Motorola Mobility, LLC
  *
  * This program is free software; you can redistribute it and/or modify
@@ -17,8 +17,6 @@
  * vfs inode.
  */
 static struct kmem_cache *esdfs_inode_cachep;
-static LIST_HEAD(esdfs_list);
-static DEFINE_SPINLOCK(esdfs_list_lock);
 
 void esdfs_msg(struct super_block *sb, const char *level, const char *fmt, ...)
 {
@@ -30,45 +28,6 @@ void esdfs_msg(struct super_block *sb, const char *level, const char *fmt, ...)
 	vaf.va = &args;
 	printk("%sESDFS-fs (%s): %pV", level, sb->s_id, &vaf);
 	va_end(args);
-}
-
-void esdfs_add_super(struct esdfs_sb_info *sbi, struct super_block *sb)
-{
-	sbi->s_sb = sb;
-	INIT_LIST_HEAD(&sbi->s_list);
-
-	spin_lock(&esdfs_list_lock);
-	list_add_tail(&sbi->s_list, &esdfs_list);
-	spin_unlock(&esdfs_list_lock);
-}
-
-static void esdfs_remove_super(struct esdfs_sb_info *sbi)
-{
-	spin_lock(&esdfs_list_lock);
-	list_del(&sbi->s_list);
-	spin_unlock(&esdfs_list_lock);
-}
-
-void esdfs_drop_shared_icache(struct super_block *sb, struct inode *lower_inode)
-{
-	struct list_head *p;
-	struct esdfs_sb_info *sbi;
-	struct super_block *lower_sb = lower_inode->i_sb;
-
-	spin_lock(&esdfs_list_lock);
-	p = esdfs_list.next;
-	while (p != &esdfs_list) {
-		sbi = list_entry(p, struct esdfs_sb_info, s_list);
-		if (sbi->s_sb == sb || sbi->lower_sb != lower_sb) {
-			p = p->next;
-			continue;
-		}
-		spin_unlock(&esdfs_list_lock);
-		esdfs_drop_sb_icache(sbi->s_sb, lower_inode->i_ino);
-		spin_lock(&esdfs_list_lock);
-		p = p->next;
-	}
-	spin_unlock(&esdfs_list_lock);
 }
 
 /* final actions when unmounting a file system */
@@ -86,8 +45,6 @@ static void esdfs_put_super(struct super_block *sb)
 	esdfs_set_lower_super(sb, NULL);
 	atomic_dec(&s->s_active);
 
-	esdfs_remove_super(spd);
-
 	kfree(spd);
 	sb->s_fs_info = NULL;
 }
@@ -96,10 +53,6 @@ static int esdfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	int err;
 	struct path lower_path;
-	struct inode *inode = dentry->d_inode;
-
-	if (test_opt(ESDFS_SB(inode->i_sb), ACCESS_DISABLE))
-		return -ENOENT;
 
 	esdfs_get_lower_path(dentry, &lower_path);
 	err = vfs_statfs(&lower_path, buf);
@@ -144,7 +97,7 @@ static void esdfs_evict_inode(struct inode *inode)
 	struct inode *lower_inode;
 
 	truncate_inode_pages(&inode->i_data, 0);
-	clear_inode(inode);
+	end_writeback(inode);
 	/*
 	 * Decrement a reference to a lower_inode, which was incremented
 	 * by our read_inode when it was created initially.

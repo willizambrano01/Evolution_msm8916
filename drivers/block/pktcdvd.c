@@ -83,8 +83,7 @@
 
 #define MAX_SPEED 0xffff
 
-#define ZONE(sector, pd) (((sector) + (pd)->offset) & \
-			~(sector_t)((pd)->settings.size - 1))
+#define ZONE(sector, pd) (((sector) + (pd)->offset) & ~((pd)->settings.size - 1))
 
 static DEFINE_MUTEX(pktcdvd_mutex);
 static struct pktcdvd_device *pkt_devs[MAX_WRITERS];
@@ -523,6 +522,38 @@ static void pkt_bio_finished(struct pktcdvd_device *pd)
 	}
 }
 
+static void pkt_bio_destructor(struct bio *bio)
+{
+	kfree(bio->bi_io_vec);
+	kfree(bio);
+}
+
+static struct bio *pkt_bio_alloc(int nr_iovecs)
+{
+	struct bio_vec *bvl = NULL;
+	struct bio *bio;
+
+	bio = kmalloc(sizeof(struct bio), GFP_KERNEL);
+	if (!bio)
+		goto no_bio;
+	bio_init(bio);
+
+	bvl = kcalloc(nr_iovecs, sizeof(struct bio_vec), GFP_KERNEL);
+	if (!bvl)
+		goto no_bvl;
+
+	bio->bi_max_vecs = nr_iovecs;
+	bio->bi_io_vec = bvl;
+	bio->bi_destructor = pkt_bio_destructor;
+
+	return bio;
+
+ no_bvl:
+	kfree(bio);
+ no_bio:
+	return NULL;
+}
+
 /*
  * Allocate a packet_data struct
  */
@@ -536,7 +567,7 @@ static struct packet_data *pkt_alloc_packet_data(int frames)
 		goto no_pkt;
 
 	pkt->frames = frames;
-	pkt->w_bio = bio_kmalloc(GFP_KERNEL, frames);
+	pkt->w_bio = pkt_bio_alloc(frames);
 	if (!pkt->w_bio)
 		goto no_bio;
 
@@ -550,10 +581,9 @@ static struct packet_data *pkt_alloc_packet_data(int frames)
 	bio_list_init(&pkt->orig_bios);
 
 	for (i = 0; i < frames; i++) {
-		struct bio *bio = bio_kmalloc(GFP_KERNEL, 1);
+		struct bio *bio = pkt_bio_alloc(1);
 		if (!bio)
 			goto no_rd_bio;
-
 		pkt->r_bios[i] = bio;
 	}
 
@@ -902,7 +932,7 @@ static void pkt_iosched_process_queue(struct pktcdvd_device *pd)
 			pd->iosched.successive_reads += bio->bi_size >> 10;
 		else {
 			pd->iosched.successive_reads = 0;
-			pd->iosched.last_write = bio_end_sector(bio);
+			pd->iosched.last_write = bio->bi_sector + bio_sectors(bio);
 		}
 		if (pd->iosched.successive_reads >= HI_SPEED_SWITCH) {
 			if (pd->read_speed == pd->write_speed) {
@@ -945,6 +975,31 @@ static int pkt_set_segment_merging(struct pktcdvd_device *pd, struct request_que
 	} else {
 		printk(DRIVER_NAME": cdrom max_phys_segments too small\n");
 		return -EIO;
+	}
+}
+
+/*
+ * Copy CD_FRAMESIZE bytes from src_bio into a destination page
+ */
+static void pkt_copy_bio_data(struct bio *src_bio, int seg, int offs, struct page *dst_page, int dst_offs)
+{
+	unsigned int copy_size = CD_FRAMESIZE;
+
+	while (copy_size > 0) {
+		struct bio_vec *src_bvl = bio_iovec_idx(src_bio, seg);
+		void *vfrom = kmap_atomic(src_bvl->bv_page) +
+			src_bvl->bv_offset + offs;
+		void *vto = page_address(dst_page) + dst_offs;
+		int len = min_t(int, copy_size, src_bvl->bv_len - offs);
+
+		BUG_ON(len < 0);
+		memcpy(vto, vfrom, len);
+		kunmap_atomic(vfrom);
+
+		seg++;
+		offs = 0;
+		dst_offs += len;
+		copy_size -= len;
 	}
 }
 
@@ -1056,17 +1111,21 @@ static void pkt_gather_data(struct pktcdvd_device *pd, struct packet_data *pkt)
 	 * Schedule reads for missing parts of the packet.
 	 */
 	for (f = 0; f < pkt->frames; f++) {
-		int p, offset;
+		struct bio_vec *vec;
 
+		int p, offset;
 		if (written[f])
 			continue;
-
 		bio = pkt->r_bios[f];
-		bio_reset(bio);
+		vec = bio->bi_io_vec;
+		bio_init(bio);
+		bio->bi_max_vecs = 1;
 		bio->bi_sector = pkt->sector + f * (CD_FRAMESIZE >> 9);
 		bio->bi_bdev = pd->bdev;
 		bio->bi_end_io = pkt_end_io_read;
 		bio->bi_private = pkt;
+		bio->bi_io_vec = vec;
+		bio->bi_destructor = pkt_bio_destructor;
 
 		p = (f * CD_FRAMESIZE) / PAGE_SIZE;
 		offset = (f * CD_FRAMESIZE) % PAGE_SIZE;
@@ -1157,15 +1216,16 @@ static int pkt_start_recovery(struct packet_data *pkt)
 	new_sector = new_block * (CD_FRAMESIZE >> 9);
 	pkt->sector = new_sector;
 
-	bio_reset(pkt->bio);
-	pkt->bio->bi_bdev = pd->bdev;
-	pkt->bio->bi_rw = REQ_WRITE;
 	pkt->bio->bi_sector = new_sector;
-	pkt->bio->bi_size = pkt->frames * CD_FRAMESIZE;
-	pkt->bio->bi_vcnt = pkt->frames;
+	pkt->bio->bi_next = NULL;
+	pkt->bio->bi_flags = 1 << BIO_UPTODATE;
+	pkt->bio->bi_idx = 0;
 
-	pkt->bio->bi_end_io = pkt_end_io_packet_write;
-	pkt->bio->bi_private = pkt;
+	BUG_ON(pkt->bio->bi_rw != REQ_WRITE);
+	BUG_ON(pkt->bio->bi_vcnt != pkt->frames);
+	BUG_ON(pkt->bio->bi_size != pkt->frames * CD_FRAMESIZE);
+	BUG_ON(pkt->bio->bi_end_io != pkt_end_io_packet_write);
+	BUG_ON(pkt->bio->bi_private != pkt);
 
 	drop_super(sb);
 	return 1;
@@ -1300,35 +1360,55 @@ try_next_bio:
  */
 static void pkt_start_write(struct pktcdvd_device *pd, struct packet_data *pkt)
 {
+	struct bio *bio;
 	int f;
+	int frames_write;
 	struct bio_vec *bvec = pkt->w_bio->bi_io_vec;
 
-	bio_reset(pkt->w_bio);
-	pkt->w_bio->bi_sector = pkt->sector;
-	pkt->w_bio->bi_bdev = pd->bdev;
-	pkt->w_bio->bi_end_io = pkt_end_io_packet_write;
-	pkt->w_bio->bi_private = pkt;
-
-	/* XXX: locking? */
 	for (f = 0; f < pkt->frames; f++) {
 		bvec[f].bv_page = pkt->pages[(f * CD_FRAMESIZE) / PAGE_SIZE];
 		bvec[f].bv_offset = (f * CD_FRAMESIZE) % PAGE_SIZE;
-		if (!bio_add_page(pkt->w_bio, bvec[f].bv_page, CD_FRAMESIZE, bvec[f].bv_offset))
-			BUG();
 	}
-	VPRINTK(DRIVER_NAME": vcnt=%d\n", pkt->w_bio->bi_vcnt);
 
 	/*
 	 * Fill-in bvec with data from orig_bios.
 	 */
+	frames_write = 0;
 	spin_lock(&pkt->lock);
-	bio_copy_data(pkt->w_bio, pkt->orig_bios.head);
+	bio_list_for_each(bio, &pkt->orig_bios) {
+		int segment = bio->bi_idx;
+		int src_offs = 0;
+		int first_frame = (bio->bi_sector - pkt->sector) / (CD_FRAMESIZE >> 9);
+		int num_frames = bio->bi_size / CD_FRAMESIZE;
+		BUG_ON(first_frame < 0);
+		BUG_ON(first_frame + num_frames > pkt->frames);
+		for (f = first_frame; f < first_frame + num_frames; f++) {
+			struct bio_vec *src_bvl = bio_iovec_idx(bio, segment);
 
+			while (src_offs >= src_bvl->bv_len) {
+				src_offs -= src_bvl->bv_len;
+				segment++;
+				BUG_ON(segment >= bio->bi_vcnt);
+				src_bvl = bio_iovec_idx(bio, segment);
+			}
+
+			if (src_bvl->bv_len - src_offs >= CD_FRAMESIZE) {
+				bvec[f].bv_page = src_bvl->bv_page;
+				bvec[f].bv_offset = src_bvl->bv_offset + src_offs;
+			} else {
+				pkt_copy_bio_data(bio, segment, src_offs,
+						  bvec[f].bv_page, bvec[f].bv_offset);
+			}
+			src_offs += CD_FRAMESIZE;
+			frames_write++;
+		}
+	}
 	pkt_set_state(pkt, PACKET_WRITE_WAIT_STATE);
 	spin_unlock(&pkt->lock);
 
 	VPRINTK("pkt_start_write: Writing %d frames for zone %llx\n",
-		pkt->write_size, (unsigned long long)pkt->sector);
+		frames_write, (unsigned long long)pkt->sector);
+	BUG_ON(frames_write != pkt->write_size);
 
 	if (test_bit(PACKET_MERGE_SEGS, &pd->flags) || (pkt->write_size < pkt->frames)) {
 		pkt_make_local_copy(pkt, bvec);
@@ -1338,6 +1418,19 @@ static void pkt_start_write(struct pktcdvd_device *pd, struct packet_data *pkt)
 	}
 
 	/* Start the write request */
+	bio_init(pkt->w_bio);
+	pkt->w_bio->bi_max_vecs = PACKET_MAX_SIZE;
+	pkt->w_bio->bi_sector = pkt->sector;
+	pkt->w_bio->bi_bdev = pd->bdev;
+	pkt->w_bio->bi_end_io = pkt_end_io_packet_write;
+	pkt->w_bio->bi_private = pkt;
+	pkt->w_bio->bi_io_vec = bvec;
+	pkt->w_bio->bi_destructor = pkt_bio_destructor;
+	for (f = 0; f < pkt->frames; f++)
+		if (!bio_add_page(pkt->w_bio, bvec[f].bv_page, CD_FRAMESIZE, bvec[f].bv_offset))
+			BUG();
+	VPRINTK(DRIVER_NAME": vcnt=%d\n", pkt->w_bio->bi_vcnt);
+
 	atomic_set(&pkt->io_wait, 1);
 	pkt->w_bio->bi_rw = WRITE;
 	pkt_queue_bio(pd, pkt->w_bio);
@@ -2321,9 +2414,10 @@ out:
 	return ret;
 }
 
-static void pkt_close(struct gendisk *disk, fmode_t mode)
+static int pkt_close(struct gendisk *disk, fmode_t mode)
 {
 	struct pktcdvd_device *pd = disk->private_data;
+	int ret = 0;
 
 	mutex_lock(&pktcdvd_mutex);
 	mutex_lock(&ctl_mutex);
@@ -2335,6 +2429,7 @@ static void pkt_close(struct gendisk *disk, fmode_t mode)
 	}
 	mutex_unlock(&ctl_mutex);
 	mutex_unlock(&pktcdvd_mutex);
+	return ret;
 }
 
 
@@ -2376,7 +2471,7 @@ static void pkt_make_request(struct request_queue *q, struct bio *bio)
 		cloned_bio->bi_bdev = pd->bdev;
 		cloned_bio->bi_private = psd;
 		cloned_bio->bi_end_io = pkt_end_io_read_cloned;
-		pd->stats.secs_r += bio_sectors(bio);
+		pd->stats.secs_r += bio->bi_size >> 9;
 		pkt_queue_bio(pd, cloned_bio);
 		return;
 	}
@@ -2397,7 +2492,7 @@ static void pkt_make_request(struct request_queue *q, struct bio *bio)
 	zone = ZONE(bio->bi_sector, pd);
 	VPRINTK("pkt_make_request: start = %6llx stop = %6llx\n",
 		(unsigned long long)bio->bi_sector,
-		(unsigned long long)bio_end_sector(bio));
+		(unsigned long long)(bio->bi_sector + bio_sectors(bio)));
 
 	/* Check if we have to split the bio */
 	{
@@ -2405,7 +2500,7 @@ static void pkt_make_request(struct request_queue *q, struct bio *bio)
 		sector_t last_zone;
 		int first_sectors;
 
-		last_zone = ZONE(bio_end_sector(bio) - 1, pd);
+		last_zone = ZONE(bio->bi_sector + bio_sectors(bio) - 1, pd);
 		if (last_zone != zone) {
 			BUG_ON(last_zone != zone + pd->settings.size);
 			first_sectors = last_zone - bio->bi_sector;
@@ -2591,7 +2686,7 @@ static int pkt_seq_show(struct seq_file *m, void *p)
 
 static int pkt_seq_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, pkt_seq_show, PDE_DATA(inode));
+	return single_open(file, pkt_seq_show, PDE(inode)->data);
 }
 
 static const struct file_operations pkt_proc_fops = {

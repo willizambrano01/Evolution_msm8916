@@ -32,10 +32,11 @@
 
 #include <asm/assembler.h>
 
-#include "soc.h"
+#include <mach/hardware.h>
+
 #include "iomap.h"
-#include "prm2xxx.h"
-#include "cm2xxx.h"
+#include "prm2xxx_3xxx.h"
+#include "cm2xxx_3xxx.h"
 #include "sdrc.h"
 
 	.text

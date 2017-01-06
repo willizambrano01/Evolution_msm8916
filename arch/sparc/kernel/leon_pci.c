@@ -29,8 +29,6 @@ void leon_pci_init(struct platform_device *ofdev, struct leon_pci_info *info)
 	pci_add_resource_offset(&resources, &info->io_space,
 				info->io_space.start - 0x1000);
 	pci_add_resource(&resources, &info->mem_space);
-	info->busn.flags = IORESOURCE_BUS;
-	pci_add_resource(&resources, &info->busn);
 
 	root_bus = pci_scan_root_bus(&ofdev->dev, 0, info->ops, info,
 				     &resources);
@@ -45,7 +43,7 @@ void leon_pci_init(struct platform_device *ofdev, struct leon_pci_info *info)
 	}
 }
 
-void pcibios_fixup_bus(struct pci_bus *pbus)
+void __devinit pcibios_fixup_bus(struct pci_bus *pbus)
 {
 	struct pci_dev *dev;
 	int i, has_io, has_mem;
@@ -93,6 +91,14 @@ void pcibios_fixup_bus(struct pci_bus *pbus)
 	}
 }
 
+/*
+ * Other archs parse arguments here.
+ */
+char * __devinit pcibios_setup(char *str)
+{
+	return str;
+}
+
 resource_size_t pcibios_align_resource(void *data, const struct resource *res,
 				resource_size_t size, resource_size_t align)
 {
@@ -102,6 +108,15 @@ resource_size_t pcibios_align_resource(void *data, const struct resource *res,
 int pcibios_enable_device(struct pci_dev *dev, int mask)
 {
 	return pci_enable_resources(dev, mask);
+}
+
+void __devinit pcibios_update_irq(struct pci_dev *dev, int irq)
+{
+#ifdef CONFIG_PCI_DEBUG
+	printk(KERN_DEBUG "LEONPCI: Assigning IRQ %02d to %s\n", irq,
+		pci_name(dev));
+#endif
+	pci_write_config_byte(dev, PCI_INTERRUPT_LINE, irq);
 }
 
 /* in/out routines taken from pcic.c

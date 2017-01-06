@@ -128,6 +128,7 @@ static int x25_asy_change_mtu(struct net_device *dev, int newmtu)
 	rbuff = kmalloc(len + 4, GFP_ATOMIC);
 
 	if (xbuff == NULL || rbuff == NULL) {
+		netdev_warn(dev, "unable to grow X.25 buffers, MTU change cancelled\n");
 		kfree(xbuff);
 		kfree(rbuff);
 		return -ENOMEM;
@@ -230,7 +231,7 @@ static void x25_asy_encaps(struct x25_asy *sl, unsigned char *icp, int len)
 	}
 
 	p = icp;
-	count = x25_asy_esc(p, sl->xbuff, len);
+	count = x25_asy_esc(p, (unsigned char *) sl->xbuff, len);
 
 	/* Order of next two lines is *very* important.
 	 * When we are sending a little amount of data,

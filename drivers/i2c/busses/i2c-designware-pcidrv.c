@@ -207,46 +207,69 @@ static u32 i2c_dw_get_clk_rate_khz(struct dw_i2c_dev *dev)
 	return dev->controller->clk_khz;
 }
 
-static int i2c_dw_pci_probe(struct pci_dev *pdev,
-			    const struct pci_device_id *id)
+static int __devinit i2c_dw_pci_probe(struct pci_dev *pdev,
+const struct pci_device_id *id)
 {
 	struct dw_i2c_dev *dev;
 	struct i2c_adapter *adap;
+	unsigned long start, len;
+	void __iomem *base;
 	int r;
 	struct  dw_pci_controller *controller;
 
 	if (id->driver_data >= ARRAY_SIZE(dw_pci_controllers)) {
-		dev_err(&pdev->dev, "%s: invalid driver data %ld\n", __func__,
+		printk(KERN_ERR "dw_i2c_pci_probe: invalid driver data %ld\n",
 			id->driver_data);
 		return -EINVAL;
 	}
 
 	controller = &dw_pci_controllers[id->driver_data];
 
-	r = pcim_enable_device(pdev);
+	r = pci_enable_device(pdev);
 	if (r) {
 		dev_err(&pdev->dev, "Failed to enable I2C PCI device (%d)\n",
 			r);
-		return r;
+		goto exit;
 	}
 
-	r = pcim_iomap_regions(pdev, 1 << 0, pci_name(pdev));
+	/* Determine the address of the I2C area */
+	start = pci_resource_start(pdev, 0);
+	len = pci_resource_len(pdev, 0);
+	if (!start || len == 0) {
+		dev_err(&pdev->dev, "base address not set\n");
+		r = -ENODEV;
+		goto exit;
+	}
+
+	r = pci_request_region(pdev, 0, DRIVER_NAME);
 	if (r) {
-		dev_err(&pdev->dev, "I/O memory remapping failed\n");
-		return r;
+		dev_err(&pdev->dev, "failed to request I2C region "
+			"0x%lx-0x%lx\n", start,
+			(unsigned long)pci_resource_end(pdev, 0));
+		goto exit;
 	}
 
-	dev = devm_kzalloc(&pdev->dev, sizeof(struct dw_i2c_dev), GFP_KERNEL);
-	if (!dev)
-		return -ENOMEM;
+	base = ioremap_nocache(start, len);
+	if (!base) {
+		dev_err(&pdev->dev, "I/O memory remapping failed\n");
+		r = -ENOMEM;
+		goto err_release_region;
+	}
+
+
+	dev = kzalloc(sizeof(struct dw_i2c_dev), GFP_KERNEL);
+	if (!dev) {
+		r = -ENOMEM;
+		goto err_release_region;
+	}
 
 	init_completion(&dev->cmd_complete);
 	mutex_init(&dev->lock);
 	dev->clk = NULL;
 	dev->controller = controller;
 	dev->get_clk_rate_khz = i2c_dw_get_clk_rate_khz;
-	dev->base = pcim_iomap_table(pdev)[0];
-	dev->dev = &pdev->dev;
+	dev->base = base;
+	dev->dev = get_device(&pdev->dev);
 	dev->functionality =
 		I2C_FUNC_I2C |
 		I2C_FUNC_SMBUS_BYTE |
@@ -261,7 +284,7 @@ static int i2c_dw_pci_probe(struct pci_dev *pdev,
 	dev->rx_fifo_depth = controller->rx_fifo_depth;
 	r = i2c_dw_init(dev);
 	if (r)
-		return r;
+		goto err_iounmap;
 
 	adap = &dev->adapter;
 	i2c_set_adapdata(adap, dev);
@@ -273,11 +296,10 @@ static int i2c_dw_pci_probe(struct pci_dev *pdev,
 	snprintf(adap->name, sizeof(adap->name), "i2c-designware-pci-%d",
 		adap->nr);
 
-	r = devm_request_irq(&pdev->dev, pdev->irq, i2c_dw_isr, IRQF_SHARED,
-			adap->name, dev);
+	r = request_irq(pdev->irq, i2c_dw_isr, IRQF_SHARED, adap->name, dev);
 	if (r) {
 		dev_err(&pdev->dev, "failure requesting irq %i\n", dev->irq);
-		return r;
+		goto err_iounmap;
 	}
 
 	i2c_dw_disable_int(dev);
@@ -285,17 +307,28 @@ static int i2c_dw_pci_probe(struct pci_dev *pdev,
 	r = i2c_add_numbered_adapter(adap);
 	if (r) {
 		dev_err(&pdev->dev, "failure adding adapter\n");
-		return r;
+		goto err_free_irq;
 	}
 
-	pm_runtime_set_autosuspend_delay(&pdev->dev, 1000);
-	pm_runtime_use_autosuspend(&pdev->dev);
+	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_allow(&pdev->dev);
 
 	return 0;
+
+err_free_irq:
+	free_irq(pdev->irq, dev);
+err_iounmap:
+	iounmap(dev->base);
+	pci_set_drvdata(pdev, NULL);
+	put_device(&pdev->dev);
+	kfree(dev);
+err_release_region:
+	pci_release_region(pdev, 0);
+exit:
+	return r;
 }
 
-static void i2c_dw_pci_remove(struct pci_dev *pdev)
+static void __devexit i2c_dw_pci_remove(struct pci_dev *pdev)
 {
 	struct dw_i2c_dev *dev = pci_get_drvdata(pdev);
 
@@ -303,7 +336,13 @@ static void i2c_dw_pci_remove(struct pci_dev *pdev)
 	pm_runtime_forbid(&pdev->dev);
 	pm_runtime_get_noresume(&pdev->dev);
 
+	pci_set_drvdata(pdev, NULL);
 	i2c_del_adapter(&dev->adapter);
+	put_device(&pdev->dev);
+
+	free_irq(dev->irq, dev);
+	kfree(dev);
+	pci_release_region(pdev, 0);
 }
 
 /* work with hotplug and coldplug */
@@ -329,13 +368,23 @@ static struct pci_driver dw_i2c_driver = {
 	.name		= DRIVER_NAME,
 	.id_table	= i2_designware_pci_ids,
 	.probe		= i2c_dw_pci_probe,
-	.remove		= i2c_dw_pci_remove,
+	.remove		= __devexit_p(i2c_dw_pci_remove),
 	.driver         = {
 		.pm     = &i2c_dw_pm_ops,
 	},
 };
 
-module_pci_driver(dw_i2c_driver);
+static int __init dw_i2c_init_driver(void)
+{
+	return  pci_register_driver(&dw_i2c_driver);
+}
+module_init(dw_i2c_init_driver);
+
+static void __exit dw_i2c_exit_driver(void)
+{
+	pci_unregister_driver(&dw_i2c_driver);
+}
+module_exit(dw_i2c_exit_driver);
 
 MODULE_AUTHOR("Baruch Siach <baruch@tkos.co.il>");
 MODULE_DESCRIPTION("Synopsys DesignWare PCI I2C bus adapter");

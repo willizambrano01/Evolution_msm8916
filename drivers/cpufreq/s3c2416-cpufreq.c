@@ -153,7 +153,7 @@ static int s3c2416_cpufreq_enter_dvs(struct s3c2416_data *s3c_freq, int idx)
 	if (s3c_freq->vddarm) {
 		dvfs = &s3c2416_dvfs_table[idx];
 
-		pr_debug("cpufreq: setting regulator to %d-%d\n",
+		pr_debug("cpufreq: setting regultor to %d-%d\n",
 			 dvfs->vddarm_min, dvfs->vddarm_max);
 		ret = regulator_set_voltage(s3c_freq->vddarm,
 					    dvfs->vddarm_min,
@@ -186,7 +186,7 @@ static int s3c2416_cpufreq_leave_dvs(struct s3c2416_data *s3c_freq, int idx)
 	if (s3c_freq->vddarm) {
 		dvfs = &s3c2416_dvfs_table[idx];
 
-		pr_debug("cpufreq: setting regulator to %d-%d\n",
+		pr_debug("cpufreq: setting regultor to %d-%d\n",
 			 dvfs->vddarm_min, dvfs->vddarm_max);
 		ret = regulator_set_voltage(s3c_freq->vddarm,
 					    dvfs->vddarm_min,
@@ -231,7 +231,7 @@ static int s3c2416_cpufreq_set_target(struct cpufreq_policy *policy,
 				      unsigned int relation)
 {
 	struct s3c2416_data *s3c_freq = &s3c2416_cpufreq;
-	unsigned int new_freq;
+	struct cpufreq_freqs freqs;
 	int idx, ret, to_dvs = 0;
 	unsigned int i;
 
@@ -244,7 +244,7 @@ static int s3c2416_cpufreq_set_target(struct cpufreq_policy *policy,
 	if (ret != 0)
 		goto out;
 
-	idx = s3c_freq->freq_table[i].driver_data;
+	idx = s3c_freq->freq_table[i].index;
 
 	if (idx == SOURCE_HCLK)
 		to_dvs = 1;
@@ -256,13 +256,25 @@ static int s3c2416_cpufreq_set_target(struct cpufreq_policy *policy,
 		goto out;
 	}
 
+	freqs.cpu = 0;
+	freqs.flags = 0;
+	freqs.old = s3c_freq->is_dvs ? FREQ_DVS
+				     : clk_get_rate(s3c_freq->armclk) / 1000;
+
 	/* When leavin dvs mode, always switch the armdiv to the hclk rate
 	 * The S3C2416 has stability issues when switching directly to
 	 * higher frequencies.
 	 */
-	new_freq = (s3c_freq->is_dvs && !to_dvs)
+	freqs.new = (s3c_freq->is_dvs && !to_dvs)
 				? clk_get_rate(s3c_freq->hclk) / 1000
 				: s3c_freq->freq_table[i].frequency;
+
+	pr_debug("cpufreq: Transition %d-%dkHz\n", freqs.old, freqs.new);
+
+	if (!to_dvs && freqs.old == freqs.new)
+		goto out;
+
+	cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
 
 	if (to_dvs) {
 		pr_debug("cpufreq: enter dvs\n");
@@ -271,9 +283,11 @@ static int s3c2416_cpufreq_set_target(struct cpufreq_policy *policy,
 		pr_debug("cpufreq: leave dvs\n");
 		ret = s3c2416_cpufreq_leave_dvs(s3c_freq, idx);
 	} else {
-		pr_debug("cpufreq: change armdiv to %dkHz\n", new_freq);
-		ret = s3c2416_cpufreq_set_armdiv(s3c_freq, new_freq);
+		pr_debug("cpufreq: change armdiv to %dkHz\n", freqs.new);
+		ret = s3c2416_cpufreq_set_armdiv(s3c_freq, freqs.new);
 	}
+
+	cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
 
 out:
 	mutex_unlock(&cpufreq_lock);
@@ -511,6 +525,7 @@ static struct freq_attr *s3c2416_cpufreq_attr[] = {
 };
 
 static struct cpufreq_driver s3c2416_cpufreq_driver = {
+	.owner		= THIS_MODULE,
 	.flags          = 0,
 	.verify		= s3c2416_cpufreq_verify_speed,
 	.target		= s3c2416_cpufreq_set_target,

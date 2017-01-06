@@ -17,6 +17,8 @@
 
 static int ima_audit;
 
+#ifdef CONFIG_IMA_AUDIT
+
 /* ima_audit_setup - enable informational auditing messages */
 static int __init ima_audit_setup(char *str)
 {
@@ -27,6 +29,7 @@ static int __init ima_audit_setup(char *str)
 	return 1;
 }
 __setup("ima_audit=", ima_audit_setup);
+#endif
 
 void integrity_audit_msg(int audit_msgno, struct inode *inode,
 			 const unsigned char *fname, const char *op,
@@ -39,9 +42,8 @@ void integrity_audit_msg(int audit_msgno, struct inode *inode,
 
 	ab = audit_log_start(current->audit_context, GFP_KERNEL, audit_msgno);
 	audit_log_format(ab, "pid=%d uid=%u auid=%u ses=%u",
-			 current->pid,
-			 from_kuid(&init_user_ns, current_cred()->uid),
-			 from_kuid(&init_user_ns, audit_get_loginuid(current)),
+			 current->pid, current_cred()->uid,
+			 audit_get_loginuid(current),
 			 audit_get_sessionid(current));
 	audit_log_task_context(ab);
 	audit_log_format(ab, " op=");

@@ -30,10 +30,11 @@
 #include <linux/debugfs.h>
 #include <linux/syscore_ops.h>
 #include <linux/cpu.h>
-#include <soc/qcom/spm.h>
-#include <soc/qcom/pm.h>
-#include <soc/qcom/krait-regulator-pmic.h>
 #include <mach/msm_iomap.h>
+#include "krait-regulator-pmic.h"
+
+#include "spm.h"
+#include "pm.h"
 
 /*
  *                   supply
@@ -157,7 +158,6 @@
 #define MSM_MDD_BASE_PHYS	0xf908a800
 
 #define KPSS_VERSION_2P0	0x20000000
-#define KPSS_VERSION_2P2	0x20020000
 
 /**
  * struct pmic_gang_vreg -
@@ -192,12 +192,7 @@ struct pmic_gang_vreg {
 	void __iomem		*apcs_gcc_base;
 	bool			manage_phases;
 	int			pfm_threshold;
-	bool			force_auto_mode;
 	int			efuse_phase_scaling_factor;
-	int			cores_per_phase;
-	int			*phase_coeff_threshold;
-	int			*valid_phases;
-	int			num_phase_entries;
 };
 
 static struct pmic_gang_vreg *the_gang;
@@ -213,9 +208,7 @@ enum krait_supply_mode {
 struct krait_power_vreg {
 	struct list_head		link;
 	struct regulator_desc		desc;
-	struct regulator_desc		adj_desc;
 	struct regulator_dev		*rdev;
-	struct regulator_dev		*adj_rdev;
 	const char			*name;
 	struct pmic_gang_vreg		*pvreg;
 	int				uV;
@@ -235,8 +228,6 @@ struct krait_power_vreg {
 	bool				reg_en;
 	int				online_at_probe;
 	bool				force_bhs;
-	bool				adj;
-	int				coeff1_reduction;
 };
 
 DEFINE_PER_CPU(struct krait_power_vreg *, krait_vregs);
@@ -366,24 +357,20 @@ static int get_coeff2(int krait_uV, int phase_scaling_factor)
 	return  coeff2;
 }
 
-static int get_coeff1(int actual_uV, int requested_uV, int load, int reduction)
+static int get_coeff1(int actual_uV, int requested_uV, int load)
 {
 	int ratio = actual_uV * 1000 / requested_uV;
 	int coeff1 = 330 * load + (load * 673 * ratio / 1000);
 
-	coeff1 = reduction * coeff1 / 100;
-
 	return coeff1;
 }
 
-#define NON_ACTIVE_REDUCTION_PERCENTAGE	100
 static int get_coeff_total(struct krait_power_vreg *from)
 {
 	int coeff_total = 0;
 	struct krait_power_vreg *kvreg;
 	struct pmic_gang_vreg *pvreg = from->pvreg;
 	int phase_scaling_factor = PHASE_SCALING_REF;
-	int coeff1_reduction;
 
 	if (use_efuse_phase_scaling_factor)
 		phase_scaling_factor = pvreg->efuse_phase_scaling_factor;
@@ -391,37 +378,28 @@ static int get_coeff_total(struct krait_power_vreg *from)
 	list_for_each_entry(kvreg, &pvreg->krait_power_vregs, link) {
 		if (!kvreg->reg_en)
 			continue;
-		if (kvreg->adj)
-			coeff1_reduction = kvreg->coeff1_reduction;
-		else
-			coeff1_reduction = NON_ACTIVE_REDUCTION_PERCENTAGE;
 
 		if (kvreg->mode == LDO_MODE) {
 			kvreg->coeff1 =
 				get_coeff1(kvreg->uV - kvreg->ldo_delta_uV,
-							kvreg->uV, kvreg->load,
-							coeff1_reduction);
+							kvreg->uV, kvreg->load);
 			kvreg->coeff2 =
 				get_coeff2(kvreg->uV - kvreg->ldo_delta_uV,
 							phase_scaling_factor);
 		} else {
 			kvreg->coeff1 =
 				get_coeff1(pvreg->pmic_vmax_uV,
-							kvreg->uV, kvreg->load,
-							coeff1_reduction);
+							kvreg->uV, kvreg->load);
 			kvreg->coeff2 = get_coeff2(pvreg->pmic_vmax_uV,
 							phase_scaling_factor);
 		}
-		pr_debug("%s coeff1=%d coeff2=%d\n", kvreg->name,
-						kvreg->coeff1, kvreg->coeff2);
 		coeff_total += kvreg->coeff1 + kvreg->coeff2;
 	}
 
 	return coeff_total;
 }
 
-static int set_pmic_gang_phases(struct pmic_gang_vreg *pvreg,
-		struct krait_power_vreg *from, int phase_count)
+static int set_pmic_gang_phases(struct pmic_gang_vreg *pvreg, int phase_count)
 {
 	pr_debug("programming phase_count = %d\n", phase_count);
 	if (pvreg->use_phase_switching)
@@ -429,8 +407,7 @@ static int set_pmic_gang_phases(struct pmic_gang_vreg *pvreg,
 		 * note the PMIC sets the phase count to one more than
 		 * the value in the register - hence subtract 1 from it
 		 */
-		return msm_spm_apcs_set_phase(from->cpu_num,
-						phase_count - 1);
+		return msm_spm_apcs_set_phase(phase_count - 1);
 	else
 		return 0;
 }
@@ -477,16 +454,14 @@ static bool enable_phase_management(struct pmic_gang_vreg *pvreg)
 
 #define PMIC_FTS_MODE_PFM	0x00
 #define PMIC_FTS_MODE_PWM	0x80
-#define PMIC_FTS_MODE_AUTO	0x40
 #define ONE_PHASE_COEFF		1000000
 #define TWO_PHASE_COEFF		2000000
 
 #define PWM_SETTLING_TIME_US		50
-#define PHASE_SETTLING_TIME_US		100
+#define PHASE_SETTLING_TIME_US		50
 static unsigned int pmic_gang_set_phases(struct krait_power_vreg *from,
 				int coeff_total)
 {
-	int i;
 	struct pmic_gang_vreg *pvreg = from->pvreg;
 	int phase_count;
 	int rc = 0;
@@ -502,77 +477,50 @@ static unsigned int pmic_gang_set_phases(struct krait_power_vreg *from,
 			return 0;
 	}
 
-	if (!pvreg->force_auto_mode) {
-		/* First check if the coeff is low for PFM mode */
-		if (load_total <= pvreg->pfm_threshold
-				&& n_online == 1
-				&& krait_pmic_is_ready()) {
-			if (!pvreg->pfm_mode) {
-				rc = msm_spm_enable_fts_lpm(from->cpu_num,
-							PMIC_FTS_MODE_PFM);
-				if (rc) {
-					pr_err("%s PFM en failed load_t %d rc = %d\n",
-						from->name, load_total, rc);
-					return rc;
-				}
-				krait_pmic_post_pfm_entry();
-				pvreg->pfm_mode = true;
+	/* First check if the coeff is low for PFM mode */
+	if (load_total <= pvreg->pfm_threshold
+			&& n_online == 1
+			&& krait_pmic_is_ready()) {
+		if (!pvreg->pfm_mode) {
+			rc = msm_spm_enable_fts_lpm(PMIC_FTS_MODE_PFM);
+			if (rc) {
+				pr_err("%s PFM en failed load_t %d rc = %d\n",
+					from->name, load_total, rc);
+				return rc;
 			}
+			krait_pmic_post_pfm_entry();
+			pvreg->pfm_mode = true;
+		}
+		return rc;
+	}
+
+	/* coeff is high switch to PWM mode before changing phases */
+	if (pvreg->pfm_mode) {
+		rc = msm_spm_enable_fts_lpm(PMIC_FTS_MODE_PWM);
+		if (rc) {
+			pr_err("%s PFM exit failed load %d rc = %d\n",
+				from->name, coeff_total, rc);
 			return rc;
 		}
-
-		/* coeff is high switch to PWM mode before changing phases */
-		if (pvreg->pfm_mode) {
-			rc = msm_spm_enable_fts_lpm(from->cpu_num,
-						PMIC_FTS_MODE_PWM);
-			if (rc) {
-				pr_err("%s PFM exit failed load %d rc = %d\n",
-					from->name, coeff_total, rc);
-				return rc;
-			}
-			pvreg->pfm_mode = false;
-			krait_pmic_post_pwm_entry();
-			udelay(PWM_SETTLING_TIME_US);
-		}
+		pvreg->pfm_mode = false;
+		krait_pmic_post_pwm_entry();
+		udelay(PWM_SETTLING_TIME_US);
 	}
 
-	phase_count = pvreg->valid_phases[pvreg->num_phase_entries - 1];
-	for (i = 0; i < pvreg->num_phase_entries; i++) {
-		if (coeff_total < pvreg->phase_coeff_threshold[i]) {
-			phase_count = pvreg->valid_phases[i];
-			break;
-		}
-	}
+	/* calculate phases */
+	if (coeff_total < ONE_PHASE_COEFF)
+		phase_count = 1;
+	else if (coeff_total < TWO_PHASE_COEFF)
+		phase_count = 2;
+	else
+		phase_count = 4;
 
-	/*
-	 * don't increase the phase count higher than that required
-	 * by the number of online CPUs
-	 */
-	if (phase_count > DIV_ROUND_UP(n_online, pvreg->cores_per_phase))
-		phase_count = DIV_ROUND_UP(n_online, pvreg->cores_per_phase);
+	/* don't increase the phase count higher than number of online cpus */
+	if (phase_count > n_online)
+		phase_count = n_online;
 
 	if (phase_count != pvreg->pmic_phase_count) {
-		if (pvreg->force_auto_mode && phase_count > 1) {
-			/* Disable Auto Mode prior to setting phase count > 1 */
-			rc = msm_spm_enable_fts_lpm(from->cpu_num,
-						PMIC_FTS_MODE_PWM);
-			if (rc) {
-				dev_err(&from->rdev->dev,
-					"failed to force PWM, rc=%d\n", rc);
-				return rc;
-			}
-			/* complete the writes before switching phases */
-			mb();
-		}
-
-		if (phase_count >= 2) {
-			rc = krait_pmic_pre_multiphase_enable();
-			if (rc < 0) {
-				pr_err("%s failed to run pre multiphase steps %d rc = %d\n",
-				from->name, phase_count, rc);
-			}
-		}
-		rc = set_pmic_gang_phases(pvreg, from, phase_count);
+		rc = set_pmic_gang_phases(pvreg, phase_count);
 		if (rc < 0) {
 			pr_err("%s failed set phase %d rc = %d\n",
 				from->name, phase_count, rc);
@@ -589,18 +537,6 @@ static unsigned int pmic_gang_set_phases(struct krait_power_vreg *from,
 		if (phase_count > pvreg->pmic_phase_count)
 			udelay(PHASE_SETTLING_TIME_US);
 
-		if (pvreg->force_auto_mode && phase_count == 1) {
-			/* Enable Auto Mode after setting phase count = 1 */
-			rc = msm_spm_enable_fts_lpm(from->cpu_num,
-						PMIC_FTS_MODE_AUTO);
-			if (rc) {
-				dev_err(&from->rdev->dev,
-					"failed to force AUTO, rc=%d\n", rc);
-				return rc;
-			}
-			/* complete the writes before any other access */
-			mb();
-		}
 		pvreg->pmic_phase_count = phase_count;
 	}
 
@@ -1255,113 +1191,14 @@ static void glb_init(void __iomem *apcs_gcc_base)
 	pr_debug("version= 0x%x\n", version);
 
 	/* configure bi-modal switch */
-	if (version >= KPSS_VERSION_2P2)
-		writel_relaxed(0x0010736E, apcs_gcc_base + PWR_GATE_CONFIG);
-	else if (version > KPSS_VERSION_2P0)
+	if (version > KPSS_VERSION_2P0)
 		writel_relaxed(0x0308736E, apcs_gcc_base + PWR_GATE_CONFIG);
 	else
 		writel_relaxed(0x0008736E, apcs_gcc_base + PWR_GATE_CONFIG);
 }
 
-static int krait_adj_enable(struct regulator_dev *rdev)
+static int __devinit krait_power_probe(struct platform_device *pdev)
 {
-	struct krait_power_vreg *kvreg = rdev_get_drvdata(rdev);
-	struct pmic_gang_vreg *pvreg = kvreg->pvreg;
-
-	mutex_lock(&pvreg->krait_power_vregs_lock);
-	kvreg->adj = true;
-	_get_optimum_mode(rdev, 0, 0, kvreg->load);
-	mutex_unlock(&pvreg->krait_power_vregs_lock);
-	return 0;
-}
-
-static int krait_adj_disable(struct regulator_dev *rdev)
-{
-	struct krait_power_vreg *kvreg = rdev_get_drvdata(rdev);
-	struct pmic_gang_vreg *pvreg = kvreg->pvreg;
-
-	mutex_lock(&pvreg->krait_power_vregs_lock);
-	kvreg->adj = false;
-	_get_optimum_mode(rdev, 0, 0, kvreg->load);
-	mutex_unlock(&pvreg->krait_power_vregs_lock);
-	return 0;
-}
-
-static int krait_adj_is_enabled(struct regulator_dev *rdev)
-{
-	struct krait_power_vreg *kvreg = rdev_get_drvdata(rdev);
-
-	return kvreg->adj;
-}
-
-static struct regulator_ops krait_adj_ops = {
-	.enable			= krait_adj_enable,
-	.disable		= krait_adj_disable,
-	.is_enabled		= krait_adj_is_enabled,
-};
-
-#define DEFAULT_REDUCTION_PERCENTAGE	75
-static int krait_adj_init(struct krait_power_vreg *kvreg,
-						struct platform_device *pdev,
-						struct device_node *adj_node)
-{
-	struct regulator_init_data *init_data;
-	struct regulator_config reg_config = {};
-	int rc;
-	int coeff1_reduction;
-
-	if (kvreg->adj_rdev) {
-		dev_err(&pdev->dev, "Only one coeff1 adjustment regulator node allowed.\n");
-		return -EINVAL;
-	}
-
-	init_data = of_get_regulator_init_data(&pdev->dev, adj_node);
-	if (!init_data) {
-		dev_err(&pdev->dev, "init data required.\n");
-		return -EINVAL;
-	}
-
-	if (!init_data->constraints.name) {
-		dev_err(&pdev->dev,
-			"regulator name must be specified in constraints.\n");
-		return -EINVAL;
-	}
-
-	init_data->constraints.valid_ops_mask |= REGULATOR_CHANGE_STATUS;
-	init_data->constraints.input_uV = init_data->constraints.max_uV;
-	rc = of_property_read_u32(pdev->dev.of_node,
-				"qcom,coeff1-reduction",
-				&coeff1_reduction);
-	if (rc) {
-		dev_err(&pdev->dev,
-			"qcom,coeff1-reduction missing in %s assuming %d\n",
-			adj_node->name,
-			DEFAULT_REDUCTION_PERCENTAGE);
-		coeff1_reduction = DEFAULT_REDUCTION_PERCENTAGE;
-	}
-
-	kvreg->coeff1_reduction = coeff1_reduction;
-	kvreg->adj_desc.name = init_data->constraints.name;
-	kvreg->adj_desc.ops = &krait_adj_ops;
-	kvreg->adj_desc.type = REGULATOR_VOLTAGE;
-	kvreg->adj_desc.owner = THIS_MODULE;
-
-	reg_config.dev = &pdev->dev;
-	reg_config.init_data = init_data;
-	reg_config.driver_data = kvreg;
-	reg_config.of_node = adj_node;
-	kvreg->adj_rdev = regulator_register(&kvreg->adj_desc, &reg_config);
-	if (IS_ERR(kvreg->adj_rdev)) {
-		rc = PTR_ERR(kvreg->rdev);
-		pr_err("regulator_register failed, rc=%d.\n", rc);
-		return rc;
-	}
-	return 0;
-}
-
-static int krait_power_probe(struct platform_device *pdev)
-{
-	struct regulator_config reg_config = {};
 	struct krait_power_vreg *kvreg;
 	struct resource *res, *res_mdd;
 	struct regulator_init_data *init_data = pdev->dev.platform_data;
@@ -1370,7 +1207,6 @@ static int krait_power_probe(struct platform_device *pdev)
 	int ldo_delta_uV;
 	int cpu_num;
 	bool ldo_disable = false;
-	struct device_node *child;
 
 	if (pdev->dev.of_node) {
 		/* Get init_data from device tree. */
@@ -1522,15 +1358,6 @@ static int krait_power_probe(struct platform_device *pdev)
 	list_add_tail(&kvreg->link, &the_gang->krait_power_vregs);
 	mutex_unlock(&the_gang->krait_power_vregs_lock);
 
-	for_each_child_of_node(pdev->dev.of_node, child) {
-		rc = krait_adj_init(kvreg, pdev, child);
-		if (rc) {
-			dev_err(&pdev->dev, "Couldn't add child nodes, rc=%d\n",
-					rc);
-			goto out;
-		}
-	}
-
 	online_at_probe(kvreg);
 	kvreg_ldo_voltage_init(kvreg);
 
@@ -1539,11 +1366,8 @@ static int krait_power_probe(struct platform_device *pdev)
 
 	per_cpu(krait_vregs, cpu_num) = kvreg;
 
-	reg_config.dev = &pdev->dev;
-	reg_config.init_data = init_data;
-	reg_config.driver_data = kvreg;
-	reg_config.of_node = pdev->dev.of_node;
-	kvreg->rdev = regulator_register(&kvreg->desc, &reg_config);
+	kvreg->rdev = regulator_register(&kvreg->desc, &pdev->dev, init_data,
+					 kvreg, pdev->dev.of_node);
 	if (IS_ERR(kvreg->rdev)) {
 		rc = PTR_ERR(kvreg->rdev);
 		pr_err("regulator_register failed, rc=%d.\n", rc);
@@ -1562,7 +1386,7 @@ out:
 	return rc;
 }
 
-static int krait_power_remove(struct platform_device *pdev)
+static int __devexit krait_power_remove(struct platform_device *pdev)
 {
 	struct krait_power_vreg *kvreg = platform_get_drvdata(pdev);
 	struct pmic_gang_vreg *pvreg = kvreg->pvreg;
@@ -1576,14 +1400,14 @@ static int krait_power_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct of_device_id krait_power_match_table[] = {
+static struct of_device_id krait_power_match_table[] __initdata = {
 	{ .compatible = "qcom,krait-regulator", },
 	{}
 };
 
 static struct platform_driver krait_power_driver = {
 	.probe	= krait_power_probe,
-	.remove	= krait_power_remove,
+	.remove	= __devexit_p(krait_power_remove),
 	.driver	= {
 		.name		= KRAIT_REGULATOR_DRIVER_NAME,
 		.of_match_table	= krait_power_match_table,
@@ -1591,7 +1415,7 @@ static struct platform_driver krait_power_driver = {
 	},
 };
 
-static struct of_device_id krait_pdn_match_table[] = {
+static struct of_device_id krait_pdn_match_table[] __initdata = {
 	{ .compatible = "qcom,krait-pdn", },
 	{}
 };
@@ -1616,7 +1440,7 @@ static struct syscore_ops boot_cpu_mdd_ops = {
 	.resume		= boot_cpu_mdd_on,
 };
 
-static int krait_pdn_phase_scaling_init(struct pmic_gang_vreg *pvreg,
+static int __devinit krait_pdn_phase_scaling_init(struct pmic_gang_vreg *pvreg,
 				struct platform_device *pdev)
 {
 	struct resource *res;
@@ -1704,7 +1528,7 @@ static int krait_pdn_phase_scaling_init(struct pmic_gang_vreg *pvreg,
 	return 0;
 }
 
-static int krait_pdn_probe(struct platform_device *pdev)
+static int __devinit krait_pdn_probe(struct platform_device *pdev)
 {
 	int rc;
 	bool use_phase_switching = false;
@@ -1713,13 +1537,6 @@ static int krait_pdn_probe(struct platform_device *pdev)
 	struct device_node *node = dev->of_node;
 	struct pmic_gang_vreg *pvreg;
 	struct resource *res;
-	int cores_per_phase;
-	int *valid_phases;
-	int *phase_coeff_threshold;
-	int num_phase_entries;
-	int valid_phase_len, phase_coeff_threshold_entries;
-	bool force_auto_mode;
-	int i;
 
 	if (!dev->of_node) {
 		dev_err(dev, "device tree information missing\n");
@@ -1729,90 +1546,17 @@ static int krait_pdn_probe(struct platform_device *pdev)
 	use_phase_switching = of_property_read_bool(node,
 						"qcom,use-phase-switching");
 
-	force_auto_mode = of_property_read_bool(pdev->dev.of_node,
-				"qcom,force-auto-mode");
-
-	if (!force_auto_mode) {
-		rc = of_property_read_u32(node, "qcom,pfm-threshold",
-						&pfm_threshold);
-		if (rc < 0) {
-			dev_err(dev, "pfm-threshold missing rc=%d\n", rc);
-			return -EINVAL;
-		}
-	}
-
-	rc = of_property_read_u32(node, "qcom,cores-per-phase",
-			&cores_per_phase);
+	rc = of_property_read_u32(node, "qcom,pfm-threshold", &pfm_threshold);
 	if (rc < 0) {
-		dev_err(dev, "cores-per-phase missing rc=%d\n", rc);
+		dev_err(dev, "pfm-threshold missing rc=%d, pfm disabled\n", rc);
 		return -EINVAL;
-	}
-
-	if (!of_find_property(node, "qcom,valid-phases", &valid_phase_len)) {
-		dev_err(dev, "valid-phases missing rc=%d\n", rc);
-		return -EINVAL;
-	}
-
-	if (!of_find_property(node, "qcom,phase-coeff-threshold",
-				&phase_coeff_threshold_entries)) {
-		dev_err(dev, "phase-coeff-threshold missing rc=%d\n", rc);
-		return -EINVAL;
-	}
-
-	if (valid_phase_len != phase_coeff_threshold_entries) {
-		dev_err(dev, "length mismatch rc=%d\n", rc);
-		return -EINVAL;
-	}
-
-	num_phase_entries = valid_phase_len / sizeof(u32);
-
-	valid_phases = devm_kzalloc(&pdev->dev, num_phase_entries * sizeof(int),
-								GFP_KERNEL);
-	if (!valid_phases) {
-		pr_err("kzalloc for valid-phases failed.\n");
-		return -ENOMEM;
-	}
-
-	rc = of_property_read_u32_array(node, "qcom,valid-phases", valid_phases,
-							num_phase_entries);
-	if (rc < 0) {
-		dev_err(dev, "Couldn't get valid-phases array rc=%d\n", rc);
-		return -EINVAL;
-	}
-
-	phase_coeff_threshold = devm_kzalloc(&pdev->dev,
-						num_phase_entries * sizeof(int),
-						GFP_KERNEL);
-	if (!phase_coeff_threshold) {
-		pr_err("kzalloc for phase-coeff-threshold failed.\n");
-		return -ENOMEM;
-	}
-
-	rc = of_property_read_u32_array(node, "qcom,phase-coeff-threshold",
-							phase_coeff_threshold,
-							num_phase_entries);
-	if (rc < 0) {
-		dev_err(dev, "Couldn't get phase-coeff-threshold array rc=%d\n",
-									rc);
-		return -EINVAL;
-	}
-
-	for (i = 0; i < num_phase_entries - 1; i++) {
-		if (phase_coeff_threshold[i] > phase_coeff_threshold[i + 1]) {
-			dev_err(dev, "phase-coeff-threshold entries not in increasing order");
-			return -EINVAL;
-		}
-		if (valid_phases[i] > valid_phases[i + 1]) {
-			dev_err(dev, "valid-phases entries not in increasing order");
-			return -EINVAL;
-		}
 	}
 
 	pvreg = devm_kzalloc(&pdev->dev,
 			sizeof(struct pmic_gang_vreg), GFP_KERNEL);
 	if (!pvreg) {
-		pr_err("kzalloc for pmic_gang_vreg failed.\n");
-		return -ENOMEM;
+		pr_err("kzalloc failed.\n");
+		return 0;
 	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "apcs_gcc");
@@ -1838,11 +1582,6 @@ static int krait_pdn_probe(struct platform_device *pdev)
 	pvreg->pmic_min_uV_for_retention = INT_MAX;
 	pvreg->use_phase_switching = use_phase_switching;
 	pvreg->pfm_threshold = pfm_threshold;
-	pvreg->cores_per_phase = cores_per_phase;
-	pvreg->valid_phases = valid_phases;
-	pvreg->phase_coeff_threshold = phase_coeff_threshold;
-	pvreg->num_phase_entries = num_phase_entries;
-	pvreg->force_auto_mode = force_auto_mode;
 
 	mutex_init(&pvreg->krait_power_vregs_lock);
 	INIT_LIST_HEAD(&pvreg->krait_power_vregs);
@@ -1866,7 +1605,7 @@ static int krait_pdn_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int krait_pdn_remove(struct platform_device *pdev)
+static int __devexit krait_pdn_remove(struct platform_device *pdev)
 {
 	the_gang = NULL;
 	debugfs_remove_recursive(dent);
@@ -1875,7 +1614,7 @@ static int krait_pdn_remove(struct platform_device *pdev)
 
 static struct platform_driver krait_pdn_driver = {
 	.probe	= krait_pdn_probe,
-	.remove	= krait_pdn_remove,
+	.remove	= __devexit_p(krait_pdn_remove),
 	.driver	= {
 		.name		= KRAIT_PDN_DRIVER_NAME,
 		.of_match_table	= krait_pdn_match_table,

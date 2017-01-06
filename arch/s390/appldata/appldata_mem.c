@@ -1,8 +1,10 @@
 /*
+ * arch/s390/appldata/appldata_mem.c
+ *
  * Data gathering module for Linux-VM Monitor Stream, Stage 1.
  * Collects data related to memory management.
  *
- * Copyright IBM Corp. 2003, 2006
+ * Copyright (C) 2003,2006 IBM Corporation, IBM Deutschland Entwicklung GmbH.
  *
  * Author: Gerald Schaefer <gerald.schaefer@de.ibm.com>
  */
@@ -108,7 +110,7 @@ static void appldata_get_mem_data(void *data)
 	mem_data->totalswap = P2K(val.totalswap);
 	mem_data->freeswap  = P2K(val.freeswap);
 
-	mem_data->timestamp = get_tod_clock();
+	mem_data->timestamp = get_clock();
 	mem_data->sync_count_2++;
 }
 

@@ -228,6 +228,13 @@ rtc_rw_fail:
 }
 
 static int
+qpnp_rtc_set_time_mmi_cfc_fixup(struct device *dev, struct rtc_time *tm)
+{
+	dev_dbg(dev, "Pretend RTC write succeeded.\n");
+	return 0;
+}
+
+static int
 qpnp_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	int rc;
@@ -462,7 +469,23 @@ rtc_alarm_handled:
 	return IRQ_HANDLED;
 }
 
-static int qpnp_rtc_probe(struct spmi_device *spmi)
+static void __devinit qpnp_rtc_mmi_fixup(struct qpnp_rtc *rtc)
+{
+	struct device_node *np = of_find_node_by_path("/chosen");
+	bool factory;
+
+	factory = of_property_read_bool(np, "mmi,factory-cable");
+
+	/* If in factory mode, enable RTC writes always */
+	if (np && factory) {
+		rtc->rtc_write_enable = true;
+		qpnp_rtc_ops.set_time = qpnp_rtc_set_time_mmi_cfc_fixup;
+	}
+
+	of_node_put(np);
+}
+
+static int __devinit qpnp_rtc_probe(struct spmi_device *spmi)
 {
 	int rc;
 	u8 subtype;
@@ -582,6 +605,9 @@ static int qpnp_rtc_probe(struct spmi_device *spmi)
 	if (rtc_dd->rtc_write_enable == true)
 		qpnp_rtc_ops.set_time = qpnp_rtc_set_time;
 
+	/* Special handling for factory mode */
+	qpnp_rtc_mmi_fixup(rtc_dd);
+
 	dev_set_drvdata(&spmi->dev, rtc_dd);
 
 	/* Register the RTC device */
@@ -618,7 +644,7 @@ fail_rtc_enable:
 	return rc;
 }
 
-static int qpnp_rtc_remove(struct spmi_device *spmi)
+static int __devexit qpnp_rtc_remove(struct spmi_device *spmi)
 {
 	struct qpnp_rtc *rtc_dd = dev_get_drvdata(&spmi->dev);
 
@@ -636,19 +662,9 @@ static void qpnp_rtc_shutdown(struct spmi_device *spmi)
 	u8 reg;
 	int rc;
 	unsigned long irq_flags;
-	struct qpnp_rtc *rtc_dd;
-	bool rtc_alarm_powerup;
+	struct qpnp_rtc *rtc_dd = dev_get_drvdata(&spmi->dev);
+	bool rtc_alarm_powerup = rtc_dd->rtc_alarm_powerup;
 
-	if (!spmi) {
-		pr_err("qpnp-rtc: spmi device not found\n");
-		return;
-	}
-	rtc_dd = dev_get_drvdata(&spmi->dev);
-	if (!rtc_dd) {
-		pr_err("qpnp-rtc: rtc driver data not found\n");
-		return;
-	}
-	rtc_alarm_powerup = rtc_dd->rtc_alarm_powerup;
 	if (!rtc_alarm_powerup && !poweron_alarm) {
 		spin_lock_irqsave(&rtc_dd->alarm_ctrl_lock, irq_flags);
 		dev_dbg(&spmi->dev, "Disabling alarm interrupts\n");
@@ -684,7 +700,7 @@ static struct of_device_id spmi_match_table[] = {
 
 static struct spmi_driver qpnp_rtc_driver = {
 	.probe          = qpnp_rtc_probe,
-	.remove         = qpnp_rtc_remove,
+	.remove         = __devexit_p(qpnp_rtc_remove),
 	.shutdown       = qpnp_rtc_shutdown,
 	.driver = {
 		.name   = "qcom,qpnp-rtc",

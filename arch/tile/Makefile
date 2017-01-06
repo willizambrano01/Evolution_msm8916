@@ -38,12 +38,7 @@ LIBGCC_PATH     := \
   $(shell $(CC) $(KBUILD_CFLAGS) $(KCFLAGS) -print-libgcc-file-name)
 
 # Provide the path to use for "make defconfig".
-# We default to the newer TILE-Gx architecture if only "tile" is given.
-ifeq ($(ARCH),tile)
-        KBUILD_DEFCONFIG := tilegx_defconfig
-else
-        KBUILD_DEFCONFIG := $(ARCH)_defconfig
-endif
+KBUILD_DEFCONFIG := $(ARCH)_defconfig
 
 # Used as a file extension when useful, e.g. head_$(BITS).o
 # Not needed for (e.g.) "$(CC) -m32" since the compiler automatically
@@ -62,8 +57,6 @@ libs-y		+= $(LIBGCC_PATH)
 
 # See arch/tile/Kbuild for content of core part of the kernel
 core-y		+= arch/tile/
-
-core-$(CONFIG_TILE_GXIO) += arch/tile/gxio/
 
 ifdef TILERA_ROOT
 INSTALL_PATH ?= $(TILERA_ROOT)/tile/boot

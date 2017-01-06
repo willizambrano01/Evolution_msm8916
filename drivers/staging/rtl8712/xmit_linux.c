@@ -29,12 +29,14 @@
 #define _XMIT_OSDEP_C_
 
 #include <linux/usb.h>
-#include <linux/ip.h>
-#include <linux/if_ether.h>
 
 #include "osdep_service.h"
 #include "drv_types.h"
 
+
+#include "if_ether.h"
+#include "ip.h"
+#include "rtl871x_byteorder.h"
 #include "wifi.h"
 #include "mlme_osdep.h"
 #include "xmit_osdep.h"
@@ -134,7 +136,8 @@ int r8712_xmit_resource_alloc(struct _adapter *padapter,
 	for (i = 0; i < 8; i++) {
 		pxmitbuf->pxmit_urb[i] = usb_alloc_urb(0, GFP_KERNEL);
 		if (pxmitbuf->pxmit_urb[i] == NULL) {
-			netdev_err(padapter->pnetdev, "pxmitbuf->pxmit_urb[i] == NULL\n");
+			printk(KERN_ERR "r8712u: pxmitbuf->pxmit_urb[i]"
+			    " == NULL");
 			return _FAIL;
 		}
 	}

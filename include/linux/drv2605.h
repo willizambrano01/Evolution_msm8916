@@ -76,7 +76,7 @@
 #define DIAG_BAD            (1 << 3)
 
 #define DEV_ID_MASK (7 << 5)
-#define DRV2605 (3 << 5)
+#define DRV2605 (5 << 5)
 #define DRV2604 (4 << 5)
 
 /*
@@ -312,7 +312,6 @@
 */
 #define AUTOCAL_MEM_INTERFACE_REG   0x1E
 
-#define AUTOCAL_OTP_STATUS          (1 << 2)
 #define AUTOCAL_TIME_150MS          (0 << 4)
 #define AUTOCAL_TIME_250MS          (1 << 4)
 #define AUTOCAL_TIME_500MS          (2 << 4)
@@ -340,11 +339,7 @@ struct drv260x_platform_data {
 	int default_effect;
 	int rated_voltage;
 	int overdrive_voltage;
-	int rtp_overdrive_voltage;
 	int effects_library;
-	int disable_calibration;
 	struct regulator *vibrator_vdd;
-	struct regulator *static_vdd;
-	unsigned char *calibration_data;
 };
 #endif				/* __KERNEL__ */

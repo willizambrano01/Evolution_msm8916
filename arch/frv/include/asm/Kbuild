@@ -1,5 +1,4 @@
+include include/asm-generic/Kbuild.asm
 
-generic-y += clkdev.h
-generic-y += exec.h
-generic-y += mcs_spinlock.h
-generic-y += trace_clock.h
+header-y += registers.h
+header-y += termios.h

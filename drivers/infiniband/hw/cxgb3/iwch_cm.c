@@ -128,8 +128,9 @@ static void stop_ep_timer(struct iwch_ep *ep)
 {
 	PDBG("%s ep %p\n", __func__, ep);
 	if (!timer_pending(&ep->timer)) {
-		WARN(1, "%s timer stopped when its not running!  ep %p state %u\n",
+		printk(KERN_ERR "%s timer stopped when its not running!  ep %p state %u\n",
 			__func__, ep, ep->com.state);
+		WARN_ON(1);
 		return;
 	}
 	del_timer_sync(&ep->timer);
@@ -1373,7 +1374,7 @@ static int pass_accept_req(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
 		goto reject;
 	}
 	dst = &rt->dst;
-	l2t = t3_l2t_get(tdev, dst, NULL, &req->peer_ip);
+	l2t = t3_l2t_get(tdev, dst, NULL);
 	if (!l2t) {
 		printk(KERN_ERR MOD "%s - failed to allocate l2t entry!\n",
 		       __func__);
@@ -1679,7 +1680,7 @@ static int close_con_rpl(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
  * T3A does 3 things when a TERM is received:
  * 1) send up a CPL_RDMA_TERMINATE message with the TERM packet
  * 2) generate an async event on the QP with the TERMINATE opcode
- * 3) post a TERMINATE opcode cqe into the associated CQ.
+ * 3) post a TERMINATE opcde cqe into the associated CQ.
  *
  * For (1), we save the message in the qp for later consumer consumption.
  * For (2), we move the QP into TERMINATE, post a QP event and disconnect.
@@ -1755,8 +1756,9 @@ static void ep_timeout(unsigned long arg)
 		__state_set(&ep->com, ABORTING);
 		break;
 	default:
-		WARN(1, "%s unexpected state ep %p state %u\n",
+		printk(KERN_ERR "%s unexpected state ep %p state %u\n",
 			__func__, ep, ep->com.state);
+		WARN_ON(1);
 		abort = 0;
 	}
 	spin_unlock_irqrestore(&ep->com.lock, flags);
@@ -1940,8 +1942,7 @@ int iwch_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		goto fail3;
 	}
 	ep->dst = &rt->dst;
-	ep->l2t = t3_l2t_get(ep->com.tdev, ep->dst, NULL,
-			     &cm_id->remote_addr.sin_addr.s_addr);
+	ep->l2t = t3_l2t_get(ep->com.tdev, ep->dst, NULL);
 	if (!ep->l2t) {
 		printk(KERN_ERR MOD "%s - cannot alloc l2e.\n", __func__);
 		err = -ENOMEM;

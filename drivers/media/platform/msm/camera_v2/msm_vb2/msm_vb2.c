@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,10 +20,6 @@ static int msm_vb2_queue_setup(struct vb2_queue *q,
 	int i;
 	struct msm_v4l2_format_data *data = q->drv_priv;
 
-	if (!data) {
-		pr_err("%s: drv_priv NULL\n", __func__);
-		return -EINVAL;
-	}
 	if (data->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		if (WARN_ON(data->num_planes > VIDEO_MAX_PLANES))
 			return -EINVAL;

@@ -21,13 +21,14 @@
 #include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/irq.h>
-#include <linux/irqdomain.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/time.h>
 #include <asm/memory.h>
 #include <asm/mach/map.h>
+#include <mach/common.h>
+#include <mach/iomux-mx3.h>
 
 #ifdef CONFIG_MACH_MX31ADS_WM1133_EV1
 #include <linux/mfd/wm8350/audio.h>
@@ -35,10 +36,7 @@
 #include <linux/mfd/wm8350/pmic.h>
 #endif
 
-#include "common.h"
 #include "devices-imx31.h"
-#include "hardware.h"
-#include "iomux-mx3.h"
 
 /* Base address of PBC controller */
 #define PBC_BASE_ADDRESS	MX31_CS4_BASE_ADDR_VIRT
@@ -64,17 +62,19 @@
 #define PBC_INTSTATUS_REG	(PBC_INTSTATUS + PBC_BASE_ADDRESS)
 #define PBC_INTMASK_SET_REG	(PBC_INTMASK_SET + PBC_BASE_ADDRESS)
 #define PBC_INTMASK_CLEAR_REG	(PBC_INTMASK_CLEAR + PBC_BASE_ADDRESS)
+#define EXPIO_PARENT_INT	IOMUX_TO_IRQ(MX31_PIN_GPIO1_4)
 
-#define EXPIO_INT_XUART_INTA	10
-#define EXPIO_INT_XUART_INTB	11
+#define MXC_EXP_IO_BASE		MXC_BOARD_IRQ_START
+#define MXC_IRQ_TO_EXPIO(irq)	((irq) - MXC_EXP_IO_BASE)
+
+#define EXPIO_INT_XUART_INTA	(MXC_EXP_IO_BASE + 10)
+#define EXPIO_INT_XUART_INTB	(MXC_EXP_IO_BASE + 11)
 
 #define MXC_MAX_EXP_IO_LINES	16
 
 /* CS8900 */
-#define EXPIO_INT_ENET_INT	8
+#define EXPIO_INT_ENET_INT	(MXC_EXP_IO_BASE + 8)
 #define CS4_CS8900_MMIO_START	0x20000
-
-static struct irq_domain *domain;
 
 /*
  * The serial port definition structure.
@@ -83,6 +83,7 @@ static struct plat_serial8250_port serial_platform_data[] = {
 	{
 		.membase  = (void *)(PBC_BASE_ADDRESS + PBC_SC16C652_UARTA),
 		.mapbase  = (unsigned long)(MX31_CS4_BASE_ADDR + PBC_SC16C652_UARTA),
+		.irq      = EXPIO_INT_XUART_INTA,
 		.uartclk  = 14745600,
 		.regshift = 0,
 		.iotype   = UPIO_MEM,
@@ -90,6 +91,7 @@ static struct plat_serial8250_port serial_platform_data[] = {
 	}, {
 		.membase  = (void *)(PBC_BASE_ADDRESS + PBC_SC16C652_UARTB),
 		.mapbase  = (unsigned long)(MX31_CS4_BASE_ADDR + PBC_SC16C652_UARTB),
+		.irq      = EXPIO_INT_XUART_INTB,
 		.uartclk  = 14745600,
 		.regshift = 0,
 		.iotype   = UPIO_MEM,
@@ -106,9 +108,9 @@ static struct platform_device serial_device = {
 	},
 };
 
-static struct resource mx31ads_cs8900_resources[] __initdata = {
+static const struct resource mx31ads_cs8900_resources[] __initconst = {
 	DEFINE_RES_MEM(MX31_CS4_BASE_ADDR + CS4_CS8900_MMIO_START, SZ_64K),
-	DEFINE_RES_IRQ(-1),
+	DEFINE_RES_IRQ(EXPIO_INT_ENET_INT),
 };
 
 static const struct platform_device_info mx31ads_cs8900_devinfo __initconst = {
@@ -120,19 +122,11 @@ static const struct platform_device_info mx31ads_cs8900_devinfo __initconst = {
 
 static int __init mxc_init_extuart(void)
 {
-	serial_platform_data[0].irq = irq_find_mapping(domain,
-						       EXPIO_INT_XUART_INTA);
-	serial_platform_data[1].irq = irq_find_mapping(domain,
-						       EXPIO_INT_XUART_INTB);
 	return platform_device_register(&serial_device);
 }
 
 static void __init mxc_init_ext_ethernet(void)
 {
-	mx31ads_cs8900_resources[1].start =
-			irq_find_mapping(domain, EXPIO_INT_ENET_INT);
-	mx31ads_cs8900_resources[1].end =
-			irq_find_mapping(domain, EXPIO_INT_ENET_INT);
 	platform_device_register_full(
 		(struct platform_device_info *)&mx31ads_cs8900_devinfo);
 }
@@ -163,12 +157,12 @@ static void mx31ads_expio_irq_handler(u32 irq, struct irq_desc *desc)
 	imr_val = __raw_readw(PBC_INTMASK_SET_REG);
 	int_valid = __raw_readw(PBC_INTSTATUS_REG) & imr_val;
 
-	expio_irq = 0;
+	expio_irq = MXC_EXP_IO_BASE;
 	for (; int_valid != 0; int_valid >>= 1, expio_irq++) {
 		if ((int_valid & 1) == 0)
 			continue;
 
-		generic_handle_irq(irq_find_mapping(domain, expio_irq));
+		generic_handle_irq(expio_irq);
 	}
 }
 
@@ -178,7 +172,7 @@ static void mx31ads_expio_irq_handler(u32 irq, struct irq_desc *desc)
  */
 static void expio_mask_irq(struct irq_data *d)
 {
-	u32 expio = d->hwirq;
+	u32 expio = MXC_IRQ_TO_EXPIO(d->irq);
 	/* mask the interrupt */
 	__raw_writew(1 << expio, PBC_INTMASK_CLEAR_REG);
 	__raw_readw(PBC_INTMASK_CLEAR_REG);
@@ -190,7 +184,7 @@ static void expio_mask_irq(struct irq_data *d)
  */
 static void expio_ack_irq(struct irq_data *d)
 {
-	u32 expio = d->hwirq;
+	u32 expio = MXC_IRQ_TO_EXPIO(d->irq);
 	/* clear the interrupt status */
 	__raw_writew(1 << expio, PBC_INTSTATUS_REG);
 }
@@ -201,7 +195,7 @@ static void expio_ack_irq(struct irq_data *d)
  */
 static void expio_unmask_irq(struct irq_data *d)
 {
-	u32 expio = d->hwirq;
+	u32 expio = MXC_IRQ_TO_EXPIO(d->irq);
 	/* unmask the interrupt */
 	__raw_writew(1 << expio, PBC_INTMASK_SET_REG);
 }
@@ -215,8 +209,7 @@ static struct irq_chip expio_irq_chip = {
 
 static void __init mx31ads_init_expio(void)
 {
-	int irq_base;
-	int i, irq;
+	int i;
 
 	printk(KERN_INFO "MX31ADS EXPIO(CPLD) hardware\n");
 
@@ -228,21 +221,13 @@ static void __init mx31ads_init_expio(void)
 	/* disable the interrupt and clear the status */
 	__raw_writew(0xFFFF, PBC_INTMASK_CLEAR_REG);
 	__raw_writew(0xFFFF, PBC_INTSTATUS_REG);
-
-	irq_base = irq_alloc_descs(-1, 0, MXC_MAX_EXP_IO_LINES, numa_node_id());
-	WARN_ON(irq_base < 0);
-
-	domain = irq_domain_add_legacy(NULL, MXC_MAX_EXP_IO_LINES, irq_base, 0,
-				       &irq_domain_simple_ops, NULL);
-	WARN_ON(!domain);
-
-	for (i = irq_base; i < irq_base + MXC_MAX_EXP_IO_LINES; i++) {
+	for (i = MXC_EXP_IO_BASE; i < (MXC_EXP_IO_BASE + MXC_MAX_EXP_IO_LINES);
+	     i++) {
 		irq_set_chip_and_handler(i, &expio_irq_chip, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID);
 	}
-	irq = gpio_to_irq(IOMUX_TO_GPIO(MX31_PIN_GPIO1_4));
-	irq_set_irq_type(irq, IRQ_TYPE_LEVEL_HIGH);
-	irq_set_chained_handler(irq, mx31ads_expio_irq_handler);
+	irq_set_irq_type(EXPIO_PARENT_INT, IRQ_TYPE_LEVEL_HIGH);
+	irq_set_chained_handler(EXPIO_PARENT_INT, mx31ads_expio_irq_handler);
 }
 
 #ifdef CONFIG_MACH_MX31ADS_WM1133_EV1
@@ -494,6 +479,7 @@ static int mx31_wm8350_init(struct wm8350 *wm8350)
 
 static struct wm8350_platform_data __initdata mx31_wm8350_pdata = {
 	.init = mx31_wm8350_init,
+	.irq_base = MXC_BOARD_IRQ_START + MXC_MAX_EXP_IO_LINES,
 };
 #endif
 
@@ -502,17 +488,13 @@ static struct i2c_board_info __initdata mx31ads_i2c1_devices[] = {
 	{
 		I2C_BOARD_INFO("wm8350", 0x1a),
 		.platform_data = &mx31_wm8350_pdata,
-		/* irq number is run-time assigned */
+		.irq = IOMUX_TO_IRQ(MX31_PIN_GPIO1_3),
 	},
 #endif
 };
 
 static void __init mxc_init_i2c(void)
 {
-#ifdef CONFIG_MACH_MX31ADS_WM1133_EV1
-	mx31ads_i2c1_devices[0].irq =
-			gpio_to_irq(IOMUX_TO_GPIO(MX31_PIN_GPIO1_3));
-#endif
 	i2c_register_board_info(1, mx31ads_i2c1_devices,
 				ARRAY_SIZE(mx31ads_i2c1_devices));
 
@@ -541,7 +523,7 @@ static void __init mxc_init_audio(void)
  */
 static struct map_desc mx31ads_io_desc[] __initdata = {
 	{
-		.virtual	= (unsigned long)MX31_CS4_BASE_ADDR_VIRT,
+		.virtual	= MX31_CS4_BASE_ADDR_VIRT,
 		.pfn		= __phys_to_pfn(MX31_CS4_BASE_ADDR),
 		.length		= CS4_CS8900_MMIO_START,
 		.type		= MT_DEVICE
@@ -576,6 +558,10 @@ static void __init mx31ads_timer_init(void)
 	mx31_clocks_init(26000000);
 }
 
+static struct sys_timer mx31ads_timer = {
+	.init	= mx31ads_timer_init,
+};
+
 MACHINE_START(MX31ADS, "Freescale MX31ADS")
 	/* Maintainer: Freescale Semiconductor, Inc. */
 	.atag_offset = 0x100,
@@ -583,7 +569,7 @@ MACHINE_START(MX31ADS, "Freescale MX31ADS")
 	.init_early = imx31_init_early,
 	.init_irq = mx31ads_init_irq,
 	.handle_irq = imx31_handle_irq,
-	.init_time	= mx31ads_timer_init,
+	.timer = &mx31ads_timer,
 	.init_machine = mx31ads_init,
 	.restart	= mxc_restart,
 MACHINE_END

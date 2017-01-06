@@ -252,8 +252,8 @@ int cpci_led_off(struct slot* slot)
 
 int __ref cpci_configure_slot(struct slot *slot)
 {
-	struct pci_dev *dev;
 	struct pci_bus *parent;
+	int fn;
 
 	dbg("%s - enter", __func__);
 
@@ -282,17 +282,45 @@ int __ref cpci_configure_slot(struct slot *slot)
 	}
 	parent = slot->dev->bus;
 
-	list_for_each_entry(dev, &parent->devices, bus_list)
-		if (PCI_SLOT(dev->devfn) != PCI_SLOT(slot->devfn))
+	for (fn = 0; fn < 8; fn++) {
+		struct pci_dev *dev;
+
+		dev = pci_get_slot(parent, PCI_DEVFN(PCI_SLOT(slot->devfn), fn));
+		if (!dev)
 			continue;
 		if ((dev->hdr_type == PCI_HEADER_TYPE_BRIDGE) ||
-		    (dev->hdr_type == PCI_HEADER_TYPE_CARDBUS))
-			pci_hp_add_bridge(dev);
+		    (dev->hdr_type == PCI_HEADER_TYPE_CARDBUS)) {
+			/* Find an unused bus number for the new bridge */
+			struct pci_bus *child;
+			unsigned char busnr, start = parent->secondary;
+			unsigned char end = parent->subordinate;
 
+			for (busnr = start; busnr <= end; busnr++) {
+				if (!pci_find_bus(pci_domain_nr(parent),
+						  busnr))
+					break;
+			}
+			if (busnr >= end) {
+				err("No free bus for hot-added bridge\n");
+				pci_dev_put(dev);
+				continue;
+			}
+			child = pci_add_new_bus(parent, dev, busnr);
+			if (!child) {
+				err("Cannot add new bus for %s\n",
+				    pci_name(dev));
+				pci_dev_put(dev);
+				continue;
+			}
+			child->subordinate = pci_do_scan_bus(child);
+			pci_bus_size_bridges(child);
+		}
+		pci_dev_put(dev);
+	}
 
-	pci_assign_unassigned_bridge_resources(parent->self);
-
+	pci_bus_assign_resources(parent);
 	pci_bus_add_devices(parent);
+	pci_enable_bridges(parent);
 
 	dbg("%s - exit", __func__);
 	return 0;
@@ -300,7 +328,8 @@ int __ref cpci_configure_slot(struct slot *slot)
 
 int cpci_unconfigure_slot(struct slot* slot)
 {
-	struct pci_dev *dev, *temp;
+	int i;
+	struct pci_dev *dev;
 
 	dbg("%s - enter", __func__);
 	if (!slot->dev) {
@@ -308,12 +337,13 @@ int cpci_unconfigure_slot(struct slot* slot)
 		return -ENODEV;
 	}
 
-	list_for_each_entry_safe(dev, temp, &slot->bus->devices, bus_list) {
-		if (PCI_SLOT(dev->devfn) != PCI_SLOT(slot->devfn))
-			continue;
-		pci_dev_get(dev);
-		pci_stop_and_remove_bus_device(dev);
-		pci_dev_put(dev);
+	for (i = 0; i < 8; i++) {
+		dev = pci_get_slot(slot->bus,
+				    PCI_DEVFN(PCI_SLOT(slot->devfn), i));
+		if (dev) {
+			pci_stop_and_remove_bus_device(dev);
+			pci_dev_put(dev);
+		}
 	}
 	pci_dev_put(slot->dev);
 	slot->dev = NULL;

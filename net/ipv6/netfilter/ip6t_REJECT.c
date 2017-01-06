@@ -7,8 +7,6 @@
  * Authors:
  *	Yasuyuki Kozakai	<yasuyuki.kozakai@toshiba.co.jp>
  *
- * Copyright (c) 2005-2007 Patrick McHardy <kaber@trash.net>
- *
  * Based on net/ipv4/netfilter/ipt_REJECT.c
  *
  * This program is free software; you can redistribute it and/or
@@ -116,7 +114,8 @@ static void send_reset(struct net *net, struct sk_buff *oldskb)
 			 GFP_ATOMIC);
 
 	if (!nskb) {
-		net_dbg_ratelimited("cannot alloc skb\n");
+		if (net_ratelimit())
+			pr_debug("cannot alloc skb\n");
 		dst_release(dst);
 		return;
 	}
@@ -128,13 +127,12 @@ static void send_reset(struct net *net, struct sk_buff *oldskb)
 	skb_put(nskb, sizeof(struct ipv6hdr));
 	skb_reset_network_header(nskb);
 	ip6h = ipv6_hdr(nskb);
-	ip6_flow_hdr(ip6h, tclass, 0);
+	*(__be32 *)ip6h =  htonl(0x60000000 | (tclass << 20));
 	ip6h->hop_limit = ip6_dst_hoplimit(dst);
 	ip6h->nexthdr = IPPROTO_TCP;
 	ip6h->saddr = oip6h->daddr;
 	ip6h->daddr = oip6h->saddr;
 
-	skb_reset_transport_header(nskb);
 	tcph = (struct tcphdr *)skb_put(nskb, sizeof(struct tcphdr));
 	/* Truncate to length (no data) */
 	tcph->doff = sizeof(struct tcphdr)/4;
@@ -180,6 +178,15 @@ send_unreach(struct net *net, struct sk_buff *skb_in, unsigned char code,
 		skb_in->dev = net->loopback_dev;
 
 	icmpv6_send(skb_in, ICMPV6_DEST_UNREACH, code, 0);
+#ifdef CONFIG_IP6_NF_TARGET_REJECT_SKERR
+	if (skb_in->sk) {
+		icmpv6_err_convert(ICMPV6_DEST_UNREACH, code,
+				   &skb_in->sk->sk_err);
+		skb_in->sk->sk_error_report(skb_in->sk);
+		pr_debug("ip6t_REJECT: sk_err=%d for skb=%p sk=%p\n",
+			skb_in->sk->sk_err, skb_in, skb_in->sk);
+	}
+#endif
 }
 
 static unsigned int
@@ -212,7 +219,8 @@ reject_tg6(struct sk_buff *skb, const struct xt_action_param *par)
 		send_reset(net, skb);
 		break;
 	default:
-		net_info_ratelimited("case %u not handled yet\n", reject->with);
+		if (net_ratelimit())
+			pr_info("case %u not handled yet\n", reject->with);
 		break;
 	}
 

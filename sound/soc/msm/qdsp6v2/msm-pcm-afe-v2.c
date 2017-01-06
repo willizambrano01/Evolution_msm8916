@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
 *
 * This program is free software; you can redistribute it and/or modify
 * it under the terms of the GNU General Public License version 2 and
@@ -30,15 +30,16 @@
 #include <sound/control.h>
 #include <sound/q6adm-v2.h>
 #include <asm/dma.h>
+#include <linux/memory_alloc.h>
 #include "msm-pcm-afe-v2.h"
 
 #define MIN_PLAYBACK_PERIOD_SIZE (128 * 2)
 #define MAX_PLAYBACK_PERIOD_SIZE (128 * 2 * 2 * 6)
 #define MIN_PLAYBACK_NUM_PERIODS (4)
-#define MAX_PLAYBACK_NUM_PERIODS (384)
+#define MAX_PLAYBACK_NUM_PERIODS (768)
 
 #define MIN_CAPTURE_PERIOD_SIZE (128 * 2)
-#define MAX_CAPTURE_PERIOD_SIZE (192 * 2 * 2 * 8 * 4)
+#define MAX_CAPTURE_PERIOD_SIZE (128 * 2 * 2 * 6 * 4)
 #define MIN_CAPTURE_NUM_PERIODS (4)
 #define MAX_CAPTURE_NUM_PERIODS (384)
 
@@ -381,7 +382,7 @@ static int msm_afe_open(struct snd_pcm_substream *substream)
 		pr_err("Failed to allocate memory for msm_audio\n");
 		return -ENOMEM;
 	} else
-		pr_debug("prtd %pK\n", prtd);
+		pr_debug("prtd %x\n", (unsigned int)prtd);
 
 	mutex_init(&prtd->lock);
 	spin_lock_init(&prtd->dsp_lock);
@@ -600,7 +601,7 @@ static int msm_afe_hw_params(struct snd_pcm_substream *substream,
 		return -ENOMEM;
 	}
 
-	pr_debug("%s:buf = %pK\n", __func__, buf);
+	pr_debug("%s:buf = %p\n", __func__, buf);
 	dma_buf->dev.type = SNDRV_DMA_TYPE_DEV;
 	dma_buf->dev.dev = substream->pcm->card->dev;
 	dma_buf->private_data = NULL;
@@ -676,8 +677,10 @@ static struct snd_soc_platform_driver msm_soc_platform = {
 	.probe		= msm_afe_afe_probe,
 };
 
-static int msm_afe_probe(struct platform_device *pdev)
+static __devinit int msm_afe_probe(struct platform_device *pdev)
 {
+	if (pdev->dev.of_node)
+		dev_set_name(&pdev->dev, "%s", "msm-pcm-afe");
 
 	pr_debug("%s: dev name %s\n", __func__, dev_name(&pdev->dev));
 	return snd_soc_register_platform(&pdev->dev,
@@ -703,7 +706,7 @@ static struct platform_driver msm_afe_driver = {
 		.of_match_table = msm_pcm_afe_dt_match,
 	},
 	.probe = msm_afe_probe,
-	.remove = msm_afe_remove,
+	.remove = __devexit_p(msm_afe_remove),
 };
 
 static int __init msm_soc_platform_init(void)

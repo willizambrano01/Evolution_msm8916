@@ -25,7 +25,17 @@
    SOFTWARE IS DISCLAIMED.
 */
 
+#include <linux/module.h>
+#include <linux/interrupt.h>
+#include <linux/slab.h>
+
+#include <linux/socket.h>
+#include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <linux/skbuff.h>
+#include <linux/wait.h>
+
+#include <asm/unaligned.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
@@ -119,7 +129,7 @@ static void bnep_net_timeout(struct net_device *dev)
 }
 
 #ifdef CONFIG_BT_BNEP_MC_FILTER
-static int bnep_net_mc_filter(struct sk_buff *skb, struct bnep_session *s)
+static inline int bnep_net_mc_filter(struct sk_buff *skb, struct bnep_session *s)
 {
 	struct ethhdr *eh = (void *) skb->data;
 
@@ -131,12 +141,12 @@ static int bnep_net_mc_filter(struct sk_buff *skb, struct bnep_session *s)
 
 #ifdef CONFIG_BT_BNEP_PROTO_FILTER
 /* Determine ether protocol. Based on eth_type_trans. */
-static u16 bnep_net_eth_proto(struct sk_buff *skb)
+static inline u16 bnep_net_eth_proto(struct sk_buff *skb)
 {
 	struct ethhdr *eh = (void *) skb->data;
 	u16 proto = ntohs(eh->h_proto);
 
-	if (proto >= ETH_P_802_3_MIN)
+	if (proto >= 1536)
 		return proto;
 
 	if (get_unaligned((__be16 *) skb->data) == htons(0xFFFF))
@@ -145,7 +155,7 @@ static u16 bnep_net_eth_proto(struct sk_buff *skb)
 	return ETH_P_802_2;
 }
 
-static int bnep_net_proto_filter(struct sk_buff *skb, struct bnep_session *s)
+static inline int bnep_net_proto_filter(struct sk_buff *skb, struct bnep_session *s)
 {
 	u16 proto = bnep_net_eth_proto(skb);
 	struct bnep_proto_filter *f = s->proto_filter;
@@ -156,7 +166,7 @@ static int bnep_net_proto_filter(struct sk_buff *skb, struct bnep_session *s)
 			return 0;
 	}
 
-	BT_DBG("BNEP: filtered skb %pK, proto 0x%.4x", skb, proto);
+	BT_DBG("BNEP: filtered skb %p, proto 0x%.4x", skb, proto);
 	return 1;
 }
 #endif
@@ -167,7 +177,7 @@ static netdev_tx_t bnep_net_xmit(struct sk_buff *skb,
 	struct bnep_session *s = netdev_priv(dev);
 	struct sock *sk = s->sock->sk;
 
-	BT_DBG("skb %pK, dev %pK", skb, dev);
+	BT_DBG("skb %p, dev %p", skb, dev);
 
 #ifdef CONFIG_BT_BNEP_MC_FILTER
 	if (bnep_net_mc_filter(skb, s)) {

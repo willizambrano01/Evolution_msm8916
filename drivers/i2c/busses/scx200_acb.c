@@ -23,8 +23,6 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -38,6 +36,8 @@
 #include <linux/io.h>
 
 #include <linux/scx200.h>
+
+#define NAME "scx200_acb"
 
 MODULE_AUTHOR("Christer Weinigel <wingel@nano-system.com>");
 MODULE_DESCRIPTION("NatSemi SCx200 ACCESS.bus Driver");
@@ -389,7 +389,7 @@ static const struct i2c_algorithm scx200_acb_algorithm = {
 static struct scx200_acb_iface *scx200_acb_list;
 static DEFINE_MUTEX(scx200_acb_list_mutex);
 
-static int scx200_acb_probe(struct scx200_acb_iface *iface)
+static __devinit int scx200_acb_probe(struct scx200_acb_iface *iface)
 {
 	u8 val;
 
@@ -398,7 +398,7 @@ static int scx200_acb_probe(struct scx200_acb_iface *iface)
 	outb(0x70, ACBCTL2);
 
 	if (inb(ACBCTL2) != 0x70) {
-		pr_debug("ACBCTL2 readback failed\n");
+		pr_debug(NAME ": ACBCTL2 readback failed\n");
 		return -ENXIO;
 	}
 
@@ -406,7 +406,8 @@ static int scx200_acb_probe(struct scx200_acb_iface *iface)
 
 	val = inb(ACBCTL1);
 	if (val) {
-		pr_debug("disabled, but ACBCTL1=0x%02x\n", val);
+		pr_debug(NAME ": disabled, but ACBCTL1=0x%02x\n",
+			val);
 		return -ENXIO;
 	}
 
@@ -416,15 +417,15 @@ static int scx200_acb_probe(struct scx200_acb_iface *iface)
 
 	val = inb(ACBCTL1);
 	if ((val & ACBCTL1_NMINTE) != ACBCTL1_NMINTE) {
-		pr_debug("enabled, but NMINTE won't be set, ACBCTL1=0x%02x\n",
-			 val);
+		pr_debug(NAME ": enabled, but NMINTE won't be set, "
+			 "ACBCTL1=0x%02x\n", val);
 		return -ENXIO;
 	}
 
 	return 0;
 }
 
-static struct scx200_acb_iface *scx200_create_iface(const char *text,
+static __devinit struct scx200_acb_iface *scx200_create_iface(const char *text,
 		struct device *dev, int index)
 {
 	struct scx200_acb_iface *iface;
@@ -432,7 +433,7 @@ static struct scx200_acb_iface *scx200_create_iface(const char *text,
 
 	iface = kzalloc(sizeof(*iface), GFP_KERNEL);
 	if (!iface) {
-		pr_err("can't allocate memory\n");
+		printk(KERN_ERR NAME ": can't allocate memory\n");
 		return NULL;
 	}
 
@@ -449,7 +450,7 @@ static struct scx200_acb_iface *scx200_create_iface(const char *text,
 	return iface;
 }
 
-static int scx200_acb_create(struct scx200_acb_iface *iface)
+static int __devinit scx200_acb_create(struct scx200_acb_iface *iface)
 {
 	struct i2c_adapter *adapter;
 	int rc;
@@ -458,14 +459,14 @@ static int scx200_acb_create(struct scx200_acb_iface *iface)
 
 	rc = scx200_acb_probe(iface);
 	if (rc) {
-		pr_warn("probe failed\n");
+		printk(KERN_WARNING NAME ": probe failed\n");
 		return rc;
 	}
 
 	scx200_acb_reset(iface);
 
 	if (i2c_add_adapter(adapter) < 0) {
-		pr_err("failed to register\n");
+		printk(KERN_ERR NAME ": failed to register\n");
 		return -ENODEV;
 	}
 
@@ -480,7 +481,7 @@ static int scx200_acb_create(struct scx200_acb_iface *iface)
 	return 0;
 }
 
-static struct scx200_acb_iface *scx200_create_dev(const char *text,
+static struct scx200_acb_iface * __devinit scx200_create_dev(const char *text,
 		unsigned long base, int index, struct device *dev)
 {
 	struct scx200_acb_iface *iface;
@@ -492,7 +493,8 @@ static struct scx200_acb_iface *scx200_create_dev(const char *text,
 		return NULL;
 
 	if (!request_region(base, 8, iface->adapter.name)) {
-		pr_err("can't allocate io 0x%lx-0x%lx\n", base, base + 8 - 1);
+		printk(KERN_ERR NAME ": can't allocate io 0x%lx-0x%lx\n",
+		       base, base + 8 - 1);
 		goto errout_free;
 	}
 
@@ -508,7 +510,7 @@ static struct scx200_acb_iface *scx200_create_dev(const char *text,
 	return NULL;
 }
 
-static int scx200_probe(struct platform_device *pdev)
+static int __devinit scx200_probe(struct platform_device *pdev)
 {
 	struct scx200_acb_iface *iface;
 	struct resource *res;
@@ -530,18 +532,19 @@ static int scx200_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void scx200_cleanup_iface(struct scx200_acb_iface *iface)
+static void __devexit scx200_cleanup_iface(struct scx200_acb_iface *iface)
 {
 	i2c_del_adapter(&iface->adapter);
 	release_region(iface->base, 8);
 	kfree(iface);
 }
 
-static int scx200_remove(struct platform_device *pdev)
+static int __devexit scx200_remove(struct platform_device *pdev)
 {
 	struct scx200_acb_iface *iface;
 
 	iface = platform_get_drvdata(pdev);
+	platform_set_drvdata(pdev, NULL);
 	scx200_cleanup_iface(iface);
 
 	return 0;
@@ -553,7 +556,7 @@ static struct platform_driver scx200_pci_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe = scx200_probe,
-	.remove = scx200_remove,
+	.remove = __devexit_p(scx200_remove),
 };
 
 static DEFINE_PCI_DEVICE_TABLE(scx200_isa) = {
@@ -580,7 +583,7 @@ static __init void scx200_scan_isa(void)
 
 static int __init scx200_acb_init(void)
 {
-	pr_debug("NatSemi SCx200 ACCESS.bus Driver\n");
+	pr_debug(NAME ": NatSemi SCx200 ACCESS.bus Driver\n");
 
 	/* First scan for ISA-based devices */
 	scx200_scan_isa();	/* XXX: should we care about errors? */

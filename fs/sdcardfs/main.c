@@ -242,10 +242,10 @@ static int sdcardfs_read_super(struct super_block *sb, const char *dev_name,
 		goto out_sput;
 	}
 	sb->s_root = d_make_root(inode);
-	if (!sb->s_root) {
-		err = -ENOMEM;
+ 	if (!sb->s_root) {
+ 		err = -ENOMEM;
 		goto out_iput;
-	}
+ 	}
 	d_set_d_op(sb->s_root, &sdcardfs_ci_dops);
 
 	/* link the upper and lower dentries */
@@ -312,7 +312,7 @@ static struct dentry *mount_nodev_with_options(struct file_system_type *fs_type,
 
 {
 	int error;
-	struct super_block *s = sget(fs_type, NULL, set_anon_super, flags, NULL);
+	struct super_block *s = sget(fs_type, NULL, set_anon_super, NULL);
 
 	if (IS_ERR(s))
 		return ERR_CAST(s);

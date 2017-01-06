@@ -13,6 +13,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/power.h>
 
+#ifdef EVENT_POWER_TRACING_DEPRECATED
+EXPORT_TRACEPOINT_SYMBOL_GPL(power_start);
+#endif
 EXPORT_TRACEPOINT_SYMBOL_GPL(cpu_idle);
-EXPORT_TRACEPOINT_SYMBOL(core_ctl_set_busy);
-EXPORT_TRACEPOINT_SYMBOL(core_ctl_eval_need);
+

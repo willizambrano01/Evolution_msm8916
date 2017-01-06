@@ -37,7 +37,6 @@
  * critical data
  */
 
-#define PACA_EXGDBELL PACA_EXGEN
 
 /* We are out of SPRGs so we save some things in the PACA. The normal
  * exception frame is smaller than the CRIT or MC one though
@@ -46,9 +45,8 @@
 #define EX_CR		(1 * 8)
 #define EX_R10		(2 * 8)
 #define EX_R11		(3 * 8)
-#define EX_R13		(4 * 8)
-#define EX_R14		(5 * 8)
-#define EX_R15		(6 * 8)
+#define EX_R14		(4 * 8)
+#define EX_R15		(5 * 8)
 
 /*
  * The TLB miss exception uses different slots.

@@ -31,7 +31,6 @@
 #include <linux/regulator/machine.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/reboot.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -42,10 +41,10 @@
 #include <mach/pxa27x.h>
 #include <mach/pxa27x-udc.h>
 #include <mach/reset.h>
-#include <linux/platform_data/irda-pxaficp.h>
-#include <linux/platform_data/mmc-pxamci.h>
-#include <linux/platform_data/usb-ohci-pxa27x.h>
-#include <linux/platform_data/video-pxafb.h>
+#include <mach/irda.h>
+#include <mach/mmc.h>
+#include <mach/ohci.h>
+#include <mach/pxafb.h>
 #include <mach/spitz.h>
 #include <mach/sharpsl_pm.h>
 #include <mach/smemc.h>
@@ -733,7 +732,7 @@ static inline void spitz_lcd_init(void) {}
 #endif
 
 /******************************************************************************
- * NAND Flash
+ * Framebuffer
  ******************************************************************************/
 #if defined(CONFIG_MTD_NAND_SHARPSL) || defined(CONFIG_MTD_NAND_SHARPSL_MODULE)
 static struct mtd_partition spitz_nand_partitions[] = {
@@ -859,7 +858,7 @@ static inline void spitz_nor_init(void) {}
 #endif
 
 /******************************************************************************
- * I2C devices
+ * GPIO expander
  ******************************************************************************/
 #if defined(CONFIG_I2C_PXA) || defined(CONFIG_I2C_PXA_MODULE)
 static struct pca953x_platform_data akita_pca953x_pdata = {
@@ -878,7 +877,9 @@ static struct i2c_board_info spitz_i2c_devs[] = {
 };
 
 static struct regulator_consumer_supply isl6271a_consumers[] = {
-	REGULATOR_SUPPLY("vcc_core", NULL),
+	{
+		.supply	= "vcc_core",
+	}
 };
 
 static struct regulator_init_data isl6271a_info[] = {
@@ -925,10 +926,10 @@ static inline void spitz_i2c_init(void) {}
  ******************************************************************************/
 static void spitz_poweroff(void)
 {
-	pxa_restart(REBOOT_GPIO, NULL);
+	pxa_restart('g', NULL);
 }
 
-static void spitz_restart(enum reboot_mode mode, const char *cmd)
+static void spitz_restart(char mode, const char *cmd)
 {
 	uint32_t msc0 = __raw_readl(MSC0);
 	/* Bootloader magic for a reboot */
@@ -987,7 +988,7 @@ MACHINE_START(SPITZ, "SHARP Spitz")
 	.init_irq	= pxa27x_init_irq,
 	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.restart	= spitz_restart,
 MACHINE_END
 #endif
@@ -1001,7 +1002,7 @@ MACHINE_START(BORZOI, "SHARP Borzoi")
 	.init_irq	= pxa27x_init_irq,
 	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.restart	= spitz_restart,
 MACHINE_END
 #endif
@@ -1015,7 +1016,7 @@ MACHINE_START(AKITA, "SHARP Akita")
 	.init_irq	= pxa27x_init_irq,
 	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.restart	= spitz_restart,
 MACHINE_END
 #endif

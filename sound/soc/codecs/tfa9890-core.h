@@ -10,6 +10,11 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+ * 02111-1307, USA
  */
 
 #ifndef __TFA9890_CORE_H__
@@ -147,15 +152,6 @@
 #define TFA9890_I2S_CHS12		(0x3 << 3)
 #define TFA9890_DOLS_DATAO		(0x7)
 #define TFA9890_DORS_DATAO		(0x7 << 3)
-#define TFA9890_I2SREG_CHSA_MSK (0x3 << 6)
-#define TFA9890_I2SREG_CHSA_VAL (0x2 << 6)
-#define TFA9890_SYS_CTRL2_REG_DCFG_MSK	(0x7800)
-#define TFA9890_SYS_CTRL2_REG_DCFG_VAL	(0x3800)
-#define TFA9890_SYS_CTRL2_REG_SPKR_MSK	(0x3 << 9)
-#define TFA9890_SYS_CTRL_CFE_MSK (0x1 << 2)
-#define TFA9890_BAT_CTL_BSSBY_MSK (0x1 << 15)
-#define TFA9890_SYS_CTRL_DCA_MSK (0x1 << 4)
-
 
 /* enable I2S left channel input */
 #define TFA9890_I2S_LEFT_IN		(0x1 << 3)
@@ -165,8 +161,7 @@
 #define TFA9890_DOLS_GAIN		(0x1)
 /* route gain info on datao pin on right channel */
 #define TFA9890_DORS_GAIN		(0x1 << 3)
-/* select gain input channel for stereo config */
-#define TFA9890_GAIN_IN			(0x1 << 5)
+
 
 
 /* Mute States */
@@ -202,8 +197,6 @@
 #define TFA9890_N1B12_VER1_VAL		0x0002
 #define TFA9890_N1B12_VER2_VAL		0x4c64
 #define TFA9890_N1B12_VER3_VAL		0xa000
-
-int tfa9890_stereo_sync_set_mute(int mute);
 
 struct tfa9890_regs {
 	int reg;

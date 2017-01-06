@@ -142,19 +142,24 @@ EXPORT_SYMBOL(dm_exception_store_type_unregister);
 static int set_chunk_size(struct dm_exception_store *store,
 			  const char *chunk_size_arg, char **error)
 {
-	unsigned chunk_size;
+	unsigned long chunk_size_ulong;
+	char *value;
 
-	if (kstrtouint(chunk_size_arg, 10, &chunk_size)) {
+	chunk_size_ulong = simple_strtoul(chunk_size_arg, &value, 10);
+	if (*chunk_size_arg == '\0' || *value != '\0' ||
+	    chunk_size_ulong > UINT_MAX) {
 		*error = "Invalid chunk size";
 		return -EINVAL;
 	}
 
-	if (!chunk_size) {
+	if (!chunk_size_ulong) {
 		store->chunk_size = store->chunk_mask = store->chunk_shift = 0;
 		return 0;
 	}
 
-	return dm_exception_store_set_chunk_size(store, chunk_size, error);
+	return dm_exception_store_set_chunk_size(store,
+						 (unsigned) chunk_size_ulong,
+						 error);
 }
 
 int dm_exception_store_set_chunk_size(struct dm_exception_store *store,

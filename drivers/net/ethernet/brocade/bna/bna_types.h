@@ -23,7 +23,11 @@
 #include "bfa_cee.h"
 #include "bfa_msgq.h"
 
-/* Forward declarations */
+/**
+ *
+ * Forward declarations
+ *
+ */
 
 struct bna_mcam_handle;
 struct bna_txq;
@@ -36,7 +40,11 @@ struct bna_enet;
 struct bna;
 struct bnad;
 
-/* Enums, primitive data types */
+/**
+ *
+ * Enums, primitive data types
+ *
+ */
 
 enum bna_status {
 	BNA_STATUS_T_DISABLED	= 0,
@@ -323,7 +331,11 @@ struct bna_attr {
 	int			max_rit_size;
 };
 
-/* IOCEth */
+/**
+ *
+ * IOCEth
+ *
+ */
 
 struct bna_ioceth {
 	bfa_fsm_t		fsm;
@@ -339,7 +351,11 @@ struct bna_ioceth {
 	struct bna *bna;
 };
 
-/* Enet */
+/**
+ *
+ * Enet
+ *
+ */
 
 /* Pause configuration */
 struct bna_pause_config {
@@ -374,7 +390,11 @@ struct bna_enet {
 	struct bna *bna;
 };
 
-/* Ethport */
+/**
+ *
+ * Ethport
+ *
+ */
 
 struct bna_ethport {
 	bfa_fsm_t		fsm;
@@ -399,7 +419,11 @@ struct bna_ethport {
 	struct bna *bna;
 };
 
-/* Interrupt Block */
+/**
+ *
+ * Interrupt Block
+ *
+ */
 
 /* Doorbell structure */
 struct bna_ib_dbell {
@@ -423,14 +447,17 @@ struct bna_ib {
 	int			interpkt_timeo;
 };
 
-/* Tx object */
+/**
+ *
+ * Tx object
+ *
+ */
 
 /* Tx datapath control structure */
 #define BNA_Q_NAME_SIZE		16
 struct bna_tcb {
 	/* Fast path */
 	void			**sw_qpt;
-	void			*sw_q;
 	void			*unmap_q;
 	u32		producer_index;
 	u32		consumer_index;
@@ -438,6 +465,8 @@ struct bna_tcb {
 	u32		q_depth;
 	void __iomem   *q_dbell;
 	struct bna_ib_dbell *i_dbell;
+	int			page_idx;
+	int			page_count;
 	/* Control path */
 	struct bna_txq *txq;
 	struct bnad *bnad;
@@ -556,18 +585,23 @@ struct bna_tx_mod {
 	struct bna *bna;
 };
 
-/* Rx object */
+/**
+ *
+ * Rx object
+ *
+ */
 
 /* Rx datapath control structure */
 struct bna_rcb {
 	/* Fast path */
 	void			**sw_qpt;
-	void			*sw_q;
 	void			*unmap_q;
 	u32		producer_index;
 	u32		consumer_index;
 	u32		q_depth;
 	void __iomem   *q_dbell;
+	int			page_idx;
+	int			page_count;
 	/* Control path */
 	struct bna_rxq *rxq;
 	struct bna_ccb *ccb;
@@ -624,7 +658,6 @@ struct bna_pkt_rate {
 struct bna_ccb {
 	/* Fast path */
 	void			**sw_qpt;
-	void			*sw_q;
 	u32		producer_index;
 	volatile u32	*hw_producer_index;
 	u32		q_depth;
@@ -632,6 +665,8 @@ struct bna_ccb {
 	struct bna_rcb *rcb[2];
 	void			*ctrl; /* For bnad */
 	struct bna_pkt_rate pkt_rate;
+	int			page_idx;
+	int			page_count;
 
 	/* Control path */
 	struct bna_cq *cq;
@@ -863,7 +898,11 @@ struct bna_rx_mod {
 	u32		rid_mask;
 };
 
-/* CAM */
+/**
+ *
+ * CAM
+ *
+ */
 
 struct bna_ucam_mod {
 	struct bna_mac *ucmac;		/* BFI_MAX_UCMAC entries */
@@ -888,7 +927,11 @@ struct bna_mcam_mod {
 	struct bna *bna;
 };
 
-/* Statistics */
+/**
+ *
+ * Statistics
+ *
+ */
 
 struct bna_stats {
 	struct bna_dma_addr	hw_stats_dma;
@@ -906,7 +949,11 @@ struct bna_stats_mod {
 	struct bfi_enet_stats_req stats_clr;
 };
 
-/* BNA */
+/**
+ *
+ * BNA
+ *
+ */
 
 struct bna {
 	struct bna_ident ident;

@@ -35,17 +35,13 @@
 #include <asm/vdso_datapage.h>
 #include <asm/vio.h>
 #include <asm/mmu.h>
-#include <asm/machdep.h>
 
-
-/*
- * This isn't a module but we expose that to userspace
- * via /proc so leave the definitions here
- */
 #define MODULE_VERS "1.9"
 #define MODULE_NAME "lparcfg"
 
 /* #define LPARCFG_DEBUG */
+
+static struct proc_dir_entry *proc_ppc64_lparcfg;
 
 /*
  * Track sum of all purrs across all processors. This is used to further
@@ -305,7 +301,6 @@ static void parse_system_parameter_string(struct seq_file *m)
 				__pa(rtas_data_buf),
 				RTAS_DATA_BUF_SIZE);
 	memcpy(local_buffer, rtas_data_buf, SPLPAR_MAXLENGTH);
-	local_buffer[SPLPAR_MAXLENGTH - 1] = '\0';
 	spin_unlock(&rtas_data_buf_lock);
 
 	if (call_status != 0) {
@@ -424,8 +419,7 @@ static void parse_em_data(struct seq_file *m)
 {
 	unsigned long retbuf[PLPAR_HCALL_BUFSIZE];
 
-	if (firmware_has_feature(FW_FEATURE_LPAR) &&
-	    plpar_hcall(H_GET_EM_PARMS, retbuf) == H_SUCCESS)
+	if (plpar_hcall(H_GET_EM_PARMS, retbuf) == H_SUCCESS)
 		seq_printf(m, "power_mode_data=%016lx\n", retbuf[0]);
 }
 
@@ -684,6 +678,7 @@ static int lparcfg_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations lparcfg_fops = {
+	.owner		= THIS_MODULE,
 	.read		= seq_read,
 	.write		= lparcfg_write,
 	.open		= lparcfg_open,
@@ -693,16 +688,31 @@ static const struct file_operations lparcfg_fops = {
 
 static int __init lparcfg_init(void)
 {
+	struct proc_dir_entry *ent;
 	umode_t mode = S_IRUSR | S_IRGRP | S_IROTH;
 
 	/* Allow writing if we have FW_FEATURE_SPLPAR */
 	if (firmware_has_feature(FW_FEATURE_SPLPAR))
 		mode |= S_IWUSR;
 
-	if (!proc_create("powerpc/lparcfg", mode, NULL, &lparcfg_fops)) {
+	ent = proc_create("powerpc/lparcfg", mode, NULL, &lparcfg_fops);
+	if (!ent) {
 		printk(KERN_ERR "Failed to create powerpc/lparcfg\n");
 		return -EIO;
 	}
+
+	proc_ppc64_lparcfg = ent;
 	return 0;
 }
-machine_device_initcall(pseries, lparcfg_init);
+
+static void __exit lparcfg_cleanup(void)
+{
+	if (proc_ppc64_lparcfg)
+		remove_proc_entry("lparcfg", proc_ppc64_lparcfg->parent);
+}
+
+module_init(lparcfg_init);
+module_exit(lparcfg_cleanup);
+MODULE_DESCRIPTION("Interface for LPAR configuration data");
+MODULE_AUTHOR("Dave Engebretsen");
+MODULE_LICENSE("GPL");

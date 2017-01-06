@@ -378,7 +378,18 @@ static struct platform_driver charlcd_driver = {
 	.remove = __exit_p(charlcd_remove),
 };
 
-module_platform_driver_probe(charlcd_driver, charlcd_probe);
+static int __init charlcd_init(void)
+{
+	return platform_driver_probe(&charlcd_driver, charlcd_probe);
+}
+
+static void __exit charlcd_exit(void)
+{
+	platform_driver_unregister(&charlcd_driver);
+}
+
+module_init(charlcd_init);
+module_exit(charlcd_exit);
 
 MODULE_AUTHOR("Linus Walleij <triad@df.lth.se>");
 MODULE_DESCRIPTION("ARM Character LCD Driver");

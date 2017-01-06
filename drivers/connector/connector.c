@@ -1,5 +1,5 @@
 /*
- *	connector.c
+ * 	connector.c
  *
  * 2004+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
  * All rights reserved.
@@ -23,7 +23,7 @@
 #include <linux/module.h>
 #include <linux/list.h>
 #include <linux/skbuff.h>
-#include <net/netlink.h>
+#include <linux/netlink.h>
 #include <linux/moduleparam.h>
 #include <linux/connector.h>
 #include <linux/slab.h>
@@ -95,25 +95,25 @@ int cn_netlink_send(struct cn_msg *msg, u32 __group, gfp_t gfp_mask)
 	if (!netlink_has_listeners(dev->nls, group))
 		return -ESRCH;
 
-	size = sizeof(*msg) + msg->len;
+	size = NLMSG_SPACE(sizeof(*msg) + msg->len);
 
-	skb = nlmsg_new(size, gfp_mask);
+	skb = alloc_skb(size, gfp_mask);
 	if (!skb)
 		return -ENOMEM;
 
-	nlh = nlmsg_put(skb, 0, msg->seq, NLMSG_DONE, size, 0);
-	if (!nlh) {
-		kfree_skb(skb);
-		return -EMSGSIZE;
-	}
+	nlh = NLMSG_PUT(skb, 0, msg->seq, NLMSG_DONE, size - sizeof(*nlh));
 
-	data = nlmsg_data(nlh);
+	data = NLMSG_DATA(nlh);
 
 	memcpy(data, msg, sizeof(*data) + msg->len);
 
 	NETLINK_CB(skb).dst_group = group;
 
 	return netlink_broadcast(dev->nls, skb, 0, group, gfp_mask);
+
+nlmsg_failure:
+	kfree_skb(skb);
+	return -EINVAL;
 }
 EXPORT_SYMBOL_GPL(cn_netlink_send);
 
@@ -124,7 +124,7 @@ static int cn_call_callback(struct sk_buff *skb)
 {
 	struct cn_callback_entry *i, *cbq = NULL;
 	struct cn_dev *dev = &cdev;
-	struct cn_msg *msg = nlmsg_data(nlmsg_hdr(skb));
+	struct cn_msg *msg = NLMSG_DATA(nlmsg_hdr(skb));
 	struct netlink_skb_parms *nsp = &NETLINK_CB(skb);
 	int err = -ENODEV;
 
@@ -157,18 +157,17 @@ static int cn_call_callback(struct sk_buff *skb)
 static void cn_rx_skb(struct sk_buff *__skb)
 {
 	struct nlmsghdr *nlh;
+	int err;
 	struct sk_buff *skb;
-	int len, err;
 
 	skb = skb_get(__skb);
 
-	if (skb->len >= NLMSG_HDRLEN) {
+	if (skb->len >= NLMSG_SPACE(0)) {
 		nlh = nlmsg_hdr(skb);
-		len = nlmsg_len(nlh);
 
-		if (len < (int)sizeof(struct cn_msg) ||
+		if (nlh->nlmsg_len < sizeof(struct cn_msg) ||
 		    skb->len < nlh->nlmsg_len ||
-		    len > CONNECTOR_MAX_MSG_SIZE) {
+		    nlh->nlmsg_len > CONNECTOR_MAX_MSG_SIZE) {
 			kfree_skb(skb);
 			return;
 		}
@@ -186,8 +185,7 @@ static void cn_rx_skb(struct sk_buff *__skb)
  * May sleep.
  */
 int cn_add_callback(struct cb_id *id, const char *name,
-		    void (*callback)(struct cn_msg *,
-				     struct netlink_skb_parms *))
+		    void (*callback)(struct cn_msg *, struct netlink_skb_parms *))
 {
 	int err;
 	struct cn_dev *dev = &cdev;
@@ -253,19 +251,15 @@ static const struct file_operations cn_file_ops = {
 	.release = single_release
 };
 
-static struct cn_dev cdev = {
-	.input   = cn_rx_skb,
-};
-
-static int cn_init(void)
+static int __devinit cn_init(void)
 {
 	struct cn_dev *dev = &cdev;
-	struct netlink_kernel_cfg cfg = {
-		.groups	= CN_NETLINK_USERS + 0xf,
-		.input	= dev->input,
-	};
 
-	dev->nls = netlink_kernel_create(&init_net, NETLINK_CONNECTOR, &cfg);
+	dev->input = cn_rx_skb;
+
+	dev->nls = netlink_kernel_create(&init_net, NETLINK_CONNECTOR,
+					 CN_NETLINK_USERS + 0xf,
+					 dev->input, NULL, THIS_MODULE);
 	if (!dev->nls)
 		return -EIO;
 
@@ -277,18 +271,18 @@ static int cn_init(void)
 
 	cn_already_initialized = 1;
 
-	proc_create("connector", S_IRUGO, init_net.proc_net, &cn_file_ops);
+	proc_net_fops_create(&init_net, "connector", S_IRUGO, &cn_file_ops);
 
 	return 0;
 }
 
-static void cn_fini(void)
+static void __devexit cn_fini(void)
 {
 	struct cn_dev *dev = &cdev;
 
 	cn_already_initialized = 0;
 
-	remove_proc_entry("connector", init_net.proc_net);
+	proc_net_remove(&init_net, "connector");
 
 	cn_queue_free_dev(dev->cbdev);
 	netlink_kernel_release(dev->nls);

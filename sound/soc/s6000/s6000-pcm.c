@@ -128,9 +128,7 @@ static irqreturn_t s6000_pcm_irq(int irq, void *data)
 		    substream->runtime &&
 		    snd_pcm_running(substream)) {
 			dev_dbg(pcm->dev, "xrun\n");
-			snd_pcm_stream_lock(substream);
 			snd_pcm_stop(substream, SNDRV_PCM_STATE_XRUN);
-			snd_pcm_stream_unlock(substream);
 			ret = IRQ_HANDLED;
 		}
 
@@ -502,12 +500,12 @@ static struct snd_soc_platform_driver s6000_soc_platform = {
 	.pcm_free = 	s6000_pcm_free,
 };
 
-static int s6000_soc_platform_probe(struct platform_device *pdev)
+static int __devinit s6000_soc_platform_probe(struct platform_device *pdev)
 {
 	return snd_soc_register_platform(&pdev->dev, &s6000_soc_platform);
 }
 
-static int s6000_soc_platform_remove(struct platform_device *pdev)
+static int __devexit s6000_soc_platform_remove(struct platform_device *pdev)
 {
 	snd_soc_unregister_platform(&pdev->dev);
 	return 0;
@@ -520,7 +518,7 @@ static struct platform_driver s6000_pcm_driver = {
 	},
 
 	.probe = s6000_soc_platform_probe,
-	.remove = s6000_soc_platform_remove,
+	.remove = __devexit_p(s6000_soc_platform_remove),
 };
 
 module_platform_driver(s6000_pcm_driver);

@@ -20,12 +20,24 @@
 #include <linux/unistd.h>
 #include <linux/stddef.h>
 #include <linux/personality.h>
+#include <linux/freezer.h>
 #include <linux/tracehook.h>
 #include <asm/cacheflush.h>
 #include <asm/ucontext.h>
 #include <asm/uaccess.h>
 
 #define DEBUG_SIG 0
+
+#define _BLOCKABLE (~(sigmask(SIGKILL) | sigmask(SIGSTOP)))
+
+asmlinkage int
+sys_sigaltstack(const stack_t __user *uss, stack_t __user *uoss,
+		unsigned long r2, unsigned long r3, unsigned long r4,
+		unsigned long r5, unsigned long r6, struct pt_regs *regs)
+{
+	return do_sigaltstack(uss, uoss, regs->spu);
+}
+
 
 /*
  * Do a signal return; undo the signal stack.
@@ -99,12 +111,16 @@ sys_rt_sigreturn(unsigned long r0, unsigned long r1,
 	if (__copy_from_user(&set, &frame->uc.uc_sigmask, sizeof(set)))
 		goto badframe;
 
-	set_current_blocked(&set);
+	sigdelsetmask(&set, ~_BLOCKABLE);
+	spin_lock_irq(&current->sighand->siglock);
+	current->blocked = set;
+	recalc_sigpending();
+	spin_unlock_irq(&current->sighand->siglock);
 
 	if (restore_sigcontext(regs, &frame->uc.uc_mcontext, &result))
 		goto badframe;
 
-	if (restore_altstack(&frame->uc.uc_stack))
+	if (do_sigaltstack(&frame->uc.uc_stack, NULL, regs->spu) == -EFAULT)
 		goto badframe;
 
 	return result;
@@ -204,7 +220,10 @@ static int setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 	/* Create the ucontext.  */
 	err |= __put_user(0, &frame->uc.uc_flags);
 	err |= __put_user(0, &frame->uc.uc_link);
-	err |= __save_altstack(&frame->uc.uc_stack, regs->spu);
+	err |= __put_user(current->sas_ss_sp, &frame->uc.uc_stack.ss_sp);
+	err |= __put_user(sas_ss_flags(regs->spu),
+			  &frame->uc.uc_stack.ss_flags);
+	err |= __put_user(current->sas_ss_size, &frame->uc.uc_stack.ss_size);
 	err |= setup_sigcontext(&frame->uc.uc_mcontext, regs, set->sig[0]);
 	err |= __copy_to_user(&frame->uc.uc_sigmask, set, sizeof(*set));
 	if (err)
@@ -251,9 +270,9 @@ static int prev_insn(struct pt_regs *regs)
  * OK, we're invoking a handler
  */
 
-static void
+static int
 handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
-	      struct pt_regs *regs)
+	      sigset_t *oldset, struct pt_regs *regs)
 {
 	/* Are we from a system call? */
 	if (regs->syscall_nr >= 0) {
@@ -273,15 +292,21 @@ handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
 			case -ERESTARTNOINTR:
 				regs->r0 = regs->orig_r0;
 				if (prev_insn(regs) < 0)
-					return;
+					return -EFAULT;
 		}
 	}
 
 	/* Set up the stack frame */
-	if (setup_rt_frame(sig, ka, info, sigmask_to_save(), regs))
-		return;
+	if (setup_rt_frame(sig, ka, info, oldset, regs))
+		return -EFAULT;
 
-	signal_delivered(sig, info, ka, regs, 0);
+	spin_lock_irq(&current->sighand->siglock);
+	sigorsets(&current->blocked,&current->blocked,&ka->sa.sa_mask);
+	if (!(ka->sa.sa_flags & SA_NODEFER))
+		sigaddset(&current->blocked,sig);
+	recalc_sigpending();
+	spin_unlock_irq(&current->sighand->siglock);
+	return 0;
 }
 
 /*
@@ -294,6 +319,7 @@ static void do_signal(struct pt_regs *regs)
 	siginfo_t info;
 	int signr;
 	struct k_sigaction ka;
+	sigset_t *oldset;
 
 	/*
 	 * We want the common case to go fast, which
@@ -304,6 +330,14 @@ static void do_signal(struct pt_regs *regs)
 	if (!user_mode(regs))
 		return;
 
+	if (try_to_freeze()) 
+		goto no_signal;
+
+	if (test_thread_flag(TIF_RESTORE_SIGMASK))
+		oldset = &current->saved_sigmask;
+	else
+		oldset = &current->blocked;
+
 	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 	if (signr > 0) {
 		/* Re-enable any watchpoints before delivering the
@@ -313,11 +347,13 @@ static void do_signal(struct pt_regs *regs)
 		 */
 
 		/* Whee!  Actually deliver the signal.  */
-		handle_signal(signr, &ka, &info, regs);
+		if (handle_signal(signr, &ka, &info, oldset, regs) == 0)
+			clear_thread_flag(TIF_RESTORE_SIGMASK);
 
 		return;
 	}
 
+ no_signal:
 	/* Did we come from a system call? */
 	if (regs->syscall_nr >= 0) {
 		/* Restart the system call - no handlers present */
@@ -332,7 +368,10 @@ static void do_signal(struct pt_regs *regs)
 			prev_insn(regs);
 		}
 	}
-	restore_saved_sigmask();
+	if (test_thread_flag(TIF_RESTORE_SIGMASK)) {
+		clear_thread_flag(TIF_RESTORE_SIGMASK);
+		sigprocmask(SIG_SETMASK, &current->saved_sigmask, NULL);
+	}
 }
 
 /*
@@ -352,5 +391,9 @@ void do_notify_resume(struct pt_regs *regs, __u32 thread_info_flags)
 	if (thread_info_flags & _TIF_NOTIFY_RESUME) {
 		clear_thread_flag(TIF_NOTIFY_RESUME);
 		tracehook_notify_resume(regs);
+		if (current->replacement_session_keyring)
+			key_replace_session_keyring();
 	}
+
+	clear_thread_flag(TIF_IRET);
 }

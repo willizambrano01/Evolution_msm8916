@@ -198,7 +198,17 @@ void __cpuinit online_secondary(void)
 
 	notify_cpu_starting(smp_processor_id());
 
+	/*
+	 * We need to hold call_lock, so there is no inconsistency
+	 * between the time smp_call_function() determines number of
+	 * IPI recipients, and the time when the determination is made
+	 * for which cpus receive the IPI. Holding this
+	 * lock helps us to not include this cpu in a currently in progress
+	 * smp_call_function().
+	 */
+	ipi_call_lock();
 	set_cpu_online(smp_processor_id(), 1);
+	ipi_call_unlock();
 	__get_cpu_var(cpu_state) = CPU_ONLINE;
 
 	/* Set up tile-specific state for this cpu. */
@@ -207,10 +217,12 @@ void __cpuinit online_secondary(void)
 	/* Set up tile-timer clock-event device on this cpu */
 	setup_tile_timer();
 
-	cpu_startup_entry(CPUHP_ONLINE);
+	preempt_enable();
+
+	cpu_idle();
 }
 
-int __cpuinit __cpu_up(unsigned int cpu, struct task_struct *tidle)
+int __cpuinit __cpu_up(unsigned int cpu)
 {
 	/* Wait 5s total for all CPUs for them to come online */
 	static int timeout;

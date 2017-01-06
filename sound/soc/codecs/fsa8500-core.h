@@ -59,16 +59,7 @@
 #define FSA8500_MAX_REGISTER_VAL	0x17
 
 /* Reset bits */
-#define FSA8500_RESET_GLOBAL		0x01
-#define FSA8500_RESET_DETECT		0x02
-#define FSA8500_RESET			(FSA8500_RESET_GLOBAL| \
-					FSA8500_RESET_DETECT)
-
-/* Disable UART detection bit */
-#define FSA8500_UART_OFF		0x08
-
-/* Disable UART detection bit */
-#define FSA8500_LINT_OFF		0x02
+#define FSA8500_RESET			0x03
 
 /* amp states */
 #define FSA8500_AMP_DISABLED		0
@@ -77,9 +68,6 @@
 /* mic states */
 #define FSA8500_MIC_DISABLED		0
 #define FSA8500_MIC_ENABLED		1
-
-/* number supported keys */
-#define FSA8500_NUM_KEYS		7
 
 extern int fsa8500_hs_detect(struct snd_soc_codec *codec);
 

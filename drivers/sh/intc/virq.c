@@ -219,13 +219,11 @@ restart:
 		if (radix_tree_deref_retry(entry))
 			goto restart;
 
-		irq = irq_alloc_desc(numa_node_id());
+		irq = create_irq();
 		if (unlikely(irq < 0)) {
 			pr_err("no more free IRQs, bailing..\n");
 			break;
 		}
-
-		activate_irq(irq);
 
 		pr_info("Setting up a chained VIRQ from %d -> %d\n",
 			irq, entry->pirq);

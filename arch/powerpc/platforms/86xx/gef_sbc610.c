@@ -73,14 +73,19 @@ static void __init gef_sbc610_init_irq(void)
 static void __init gef_sbc610_setup_arch(void)
 {
 	struct device_node *regs;
+#ifdef CONFIG_PCI
+	struct device_node *np;
+
+	for_each_compatible_node(np, "pci", "fsl,mpc8641-pcie") {
+		fsl_add_bridge(np, 1);
+	}
+#endif
 
 	printk(KERN_INFO "GE Intelligent Platforms SBC610 6U VPX SBC\n");
 
 #ifdef CONFIG_SMP
 	mpc86xx_smp_init();
 #endif
-
-	fsl_pci_assign_primary();
 
 	/* Remap basic board registers */
 	regs = of_find_compatible_node(NULL, NULL, "gef,fpga-regs");
@@ -136,7 +141,7 @@ static void gef_sbc610_show_cpuinfo(struct seq_file *m)
 	seq_printf(m, "SVR\t\t: 0x%x\n", svid);
 }
 
-static void gef_sbc610_nec_fixup(struct pci_dev *pdev)
+static void __init gef_sbc610_nec_fixup(struct pci_dev *pdev)
 {
 	unsigned int val;
 
@@ -193,7 +198,6 @@ static long __init mpc86xx_time_init(void)
 static __initdata struct of_device_id of_bus_ids[] = {
 	{ .compatible = "simple-bus", },
 	{ .compatible = "gianfar", },
-	{ .compatible = "fsl,mpc8641-pcie", },
 	{},
 };
 
@@ -204,7 +208,7 @@ static int __init declare_of_platform_devices(void)
 
 	return 0;
 }
-machine_arch_initcall(gef_sbc610, declare_of_platform_devices);
+machine_device_initcall(gef_sbc610, declare_of_platform_devices);
 
 define_machine(gef_sbc610) {
 	.name			= "GE SBC610",

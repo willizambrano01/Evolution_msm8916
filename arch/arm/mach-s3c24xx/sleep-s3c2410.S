@@ -31,9 +31,8 @@
 
 #include <mach/regs-gpio.h>
 #include <mach/regs-clock.h>
+#include <mach/regs-mem.h>
 #include <plat/regs-serial.h>
-
-#include "regs-mem.h"
 
 	/* s3c2410_cpu_suspend
 	 *

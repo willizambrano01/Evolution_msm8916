@@ -21,8 +21,8 @@
 #include <linux/uaccess.h>
 #include <linux/user.h>
 #include <linux/proc_fs.h>
-#include <linux/export.h>
 #include <linux/seq_file.h>
+#include <linux/export.h>
 
 #include <asm/cp15.h>
 #include <asm/cputype.h>
@@ -250,11 +250,11 @@ static void vfp_panic(char *reason, u32 inst)
 {
 	int i;
 
-	pr_err("VFP: Error: %s\n", reason);
-	pr_err("VFP: EXC 0x%08x SCR 0x%08x INST 0x%08x\n",
+	printk(KERN_ERR "VFP: Error: %s\n", reason);
+	printk(KERN_ERR "VFP: EXC 0x%08x SCR 0x%08x INST 0x%08x\n",
 		fmrx(FPEXC), fmrx(FPSCR), inst);
 	for (i = 0; i < 32; i += 2)
-		pr_err("VFP: s%2u: 0x%08x s%2u: 0x%08x\n",
+		printk(KERN_ERR "VFP: s%2u: 0x%08x s%2u: 0x%08x\n",
 		       i, vfp_get_float(i), i+1, vfp_get_float(i+1));
 }
 
@@ -462,7 +462,7 @@ int vfp_pm_suspend(void)
 
 	/* if vfp is on, then save state for resumption */
 	if (fpexc & FPEXC_EN) {
-		pr_debug("%s: saving vfp state\n", __func__);
+		printk(KERN_DEBUG "%s: saving vfp state\n", __func__);
 		vfp_save_state(&ti->vfpstate, fpexc);
 
 		/* disable, just in case */
@@ -637,39 +637,6 @@ int vfp_restore_user_hwstate(struct user_vfp __user *ufp,
 	return err ? -EFAULT : 0;
 }
 
-/*
- * VFP hardware can lose all context when a CPU goes offline.
- * As we will be running in SMP mode with CPU hotplug, we will save the
- * hardware state at every thread switch.  We clear our held state when
- * a CPU has been killed, indicating that the VFP hardware doesn't contain
- * a threads VFP state.  When a CPU starts up, we re-enable access to the
- * VFP hardware.
- *
- * Both CPU_DYING and CPU_STARTING are called on the CPU which
- * is being offlined/onlined.
- */
-static int vfp_hotplug(struct notifier_block *b, unsigned long action,
-	void *hcpu)
-{
-	if (action == CPU_DYING || action == CPU_DYING_FROZEN) {
-		vfp_force_reload((long)hcpu, current_thread_info());
-	} else if (action == CPU_STARTING || action == CPU_STARTING_FROZEN)
-		vfp_enable(NULL);
-	return NOTIFY_OK;
-}
-
-#ifdef CONFIG_PROC_FS
-static int vfp_bounce_show(struct seq_file *m, void *v)
-{
-	seq_printf(m, "%llu\n", atomic64_read(&vfp_bounce_count));
-	return 0;
-}
-
-static int vfp_bounce_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, vfp_bounce_show, NULL);
-}
-
 #ifdef CONFIG_KERNEL_MODE_NEON
 
 /*
@@ -716,6 +683,39 @@ EXPORT_SYMBOL(kernel_neon_end);
 
 #endif /* CONFIG_KERNEL_MODE_NEON */
 
+/*
+ * VFP hardware can lose all context when a CPU goes offline.
+ * As we will be running in SMP mode with CPU hotplug, we will save the
+ * hardware state at every thread switch.  We clear our held state when
+ * a CPU has been killed, indicating that the VFP hardware doesn't contain
+ * a threads VFP state.  When a CPU starts up, we re-enable access to the
+ * VFP hardware.
+ *
+ * Both CPU_DYING and CPU_STARTING are called on the CPU which
+ * is being offlined/onlined.
+ */
+static int vfp_hotplug(struct notifier_block *b, unsigned long action,
+	void *hcpu)
+{
+	if (action == CPU_DYING || action == CPU_DYING_FROZEN) {
+		vfp_force_reload((long)hcpu, current_thread_info());
+	} else if (action == CPU_STARTING || action == CPU_STARTING_FROZEN)
+		vfp_enable(NULL);
+	return NOTIFY_OK;
+}
+
+#ifdef CONFIG_PROC_FS
+static int vfp_bounce_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%llu\n", atomic64_read(&vfp_bounce_count));
+	return 0;
+}
+
+static int vfp_bounce_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, vfp_bounce_show, NULL);
+}
+
 static const struct file_operations vfp_bounce_fops = {
 	.open		= vfp_bounce_open,
 	.read		= seq_read,
@@ -731,6 +731,9 @@ static int __init vfp_init(void)
 {
 	unsigned int vfpsid;
 	unsigned int cpu_arch = cpu_architecture();
+#ifdef CONFIG_PROC_FS
+	static struct proc_dir_entry *procfs_entry;
+#endif
 	if (cpu_arch >= CPU_ARCH_ARMv6)
 		on_each_cpu(vfp_enable, NULL, 1);
 
@@ -745,16 +748,16 @@ static int __init vfp_init(void)
 	barrier();
 	vfp_vector = vfp_null_entry;
 
-	pr_info("VFP support v0.3: ");
+	printk(KERN_INFO "VFP support v0.3: ");
 	if (VFP_arch)
-		pr_cont("not present\n");
+		printk("not present\n");
 	else if (vfpsid & FPSID_NODOUBLE) {
-		pr_cont("no double precision support\n");
+		printk("no double precision support\n");
 	} else {
 		hotcpu_notifier(vfp_hotplug, 0);
 
 		VFP_arch = (vfpsid & FPSID_ARCH_MASK) >> FPSID_ARCH_BIT;  /* Extract the architecture version */
-		pr_cont("implementor %02x architecture %d part %02x variant %x rev %x\n",
+		printk("implementor %02x architecture %d part %02x variant %x rev %x\n",
 			(vfpsid & FPSID_IMPLEMENTER_MASK) >> FPSID_IMPLEMENTER_BIT,
 			(vfpsid & FPSID_ARCH_MASK) >> FPSID_ARCH_BIT,
 			(vfpsid & FPSID_PART_MASK) >> FPSID_PART_BIT,
@@ -805,20 +808,14 @@ static int __init vfp_init(void)
 		}
 	}
 
-	return 0;
-}
-
-static int __init vfp_procfs_init(void)
-{
 #ifdef CONFIG_PROC_FS
-	static struct proc_dir_entry *procfs_entry;
 	procfs_entry = proc_create("cpu/vfp_bounce", S_IRUGO, NULL,
 			&vfp_bounce_fops);
 	if (!procfs_entry)
 		pr_err("Failed to create procfs node for VFP bounce reporting\n");
 #endif
+
 	return 0;
 }
 
-arch_initcall(vfp_init);
-late_initcall(vfp_procfs_init);
+core_initcall(vfp_init);

@@ -2,7 +2,6 @@
 #define _ASM_IA64_HUGETLB_H
 
 #include <asm/page.h>
-#include <asm-generic/hugetlb.h>
 
 
 void hugetlb_free_pgd_range(struct mmu_gather *tlb, unsigned long addr,
@@ -75,10 +74,6 @@ static inline int arch_prepare_hugepage(struct page *page)
 }
 
 static inline void arch_release_hugepage(struct page *page)
-{
-}
-
-static inline void arch_clear_hugepage_flags(struct page *page)
 {
 }
 

@@ -15,7 +15,7 @@
 
 #include <linux/device.h>
 #include <linux/notifier.h>
-#include <linux/pm_opp.h>
+#include <linux/opp.h>
 
 #define DEVFREQ_NAME_LEN 16
 
@@ -57,6 +57,20 @@ struct devfreq_dev_status {
 #define DEVFREQ_FLAG_WAKEUP_MAXFREQ		0x8
 
 /**
+ * struct devfreq_governor_data - mapping to per device governor data
+ * @name:		The name of the governor.
+ * @data:		Private data for the governor.
+ *
+ * Devices may pass in an array of this structure to allow governors
+ * to get the correct data pointer when they are enabled after
+ * the devfreq_add_device() call.
+ */
+struct devfreq_governor_data {
+	const char *name;
+	void *data;
+};
+
+/**
  * struct devfreq_dev_profile - Devfreq's user device profile
  * @initial_freq:	The operating frequency when devfreq_add_device() is
  *			called.
@@ -79,6 +93,11 @@ struct devfreq_dev_status {
  *			this is the time to unregister it.
  * @freq_table:	Optional list of frequencies to support statistics.
  * @max_state:	The size of freq_table.
+ * @governor_data:	Optional array of private data for governors.
+ *			This is used to set devfreq->data correctly
+ *			when a governor is enabled via sysfs or other
+ *			mechanisms after the devfreq_add_device() call.
+ * @num_governor_data:  Number of elements in governor_data.
  */
 struct devfreq_dev_profile {
 	unsigned long initial_freq;
@@ -92,6 +111,8 @@ struct devfreq_dev_profile {
 
 	unsigned int *freq_table;
 	unsigned int max_state;
+	const struct devfreq_governor_data *governor_data;
+	unsigned int num_governor_data;
 };
 
 /**
@@ -197,7 +218,7 @@ extern int devfreq_register_opp_notifier(struct device *dev,
 extern int devfreq_unregister_opp_notifier(struct device *dev,
 					   struct devfreq *devfreq);
 
-#if IS_ENABLED(CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND)
+#ifdef CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND
 /**
  * struct devfreq_simple_ondemand_data - void *data fed to struct devfreq
  *	and devfreq_add_device
@@ -222,7 +243,7 @@ struct devfreq_simple_ondemand_data {
 #endif
 
 #else /* !CONFIG_PM_DEVFREQ */
-static inline struct devfreq *devfreq_add_device(struct device *dev,
+static struct devfreq *devfreq_add_device(struct device *dev,
 					  struct devfreq_dev_profile *profile,
 					  const char *governor_name,
 					  void *data)
@@ -230,34 +251,34 @@ static inline struct devfreq *devfreq_add_device(struct device *dev,
 	return NULL;
 }
 
-static inline int devfreq_remove_device(struct devfreq *devfreq)
+static int devfreq_remove_device(struct devfreq *devfreq)
 {
 	return 0;
 }
 
-static inline int devfreq_suspend_device(struct devfreq *devfreq)
+static int devfreq_suspend_device(struct devfreq *devfreq)
 {
 	return 0;
 }
 
-static inline int devfreq_resume_device(struct devfreq *devfreq)
+static int devfreq_resume_device(struct devfreq *devfreq)
 {
 	return 0;
 }
 
-static inline struct opp *devfreq_recommended_opp(struct device *dev,
+static struct opp *devfreq_recommended_opp(struct device *dev,
 					   unsigned long *freq, u32 flags)
 {
-	return ERR_PTR(-EINVAL);
+	return -EINVAL;
 }
 
-static inline int devfreq_register_opp_notifier(struct device *dev,
+static int devfreq_register_opp_notifier(struct device *dev,
 					 struct devfreq *devfreq)
 {
 	return -EINVAL;
 }
 
-static inline int devfreq_unregister_opp_notifier(struct device *dev,
+static int devfreq_unregister_opp_notifier(struct device *dev,
 					   struct devfreq *devfreq)
 {
 	return -EINVAL;

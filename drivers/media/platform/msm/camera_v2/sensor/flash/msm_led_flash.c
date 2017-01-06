@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2009-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,10 +15,13 @@
 
 #include "msm_led_flash.h"
 
+/*#define CONFIG_MSMB_CAMERA_DEBUG*/
 #undef CDBG
-#define CDBG(fmt, args...) pr_debug(fmt, ##args)
-
-static struct v4l2_file_operations msm_led_flash_v4l2_subdev_fops;
+#ifdef CONFIG_MSMB_CAMERA_DEBUG
+#define CDBG(fmt, args...) pr_err(fmt, ##args)
+#else
+#define CDBG(fmt, args...) do { } while (0)
+#endif
 
 static int32_t flash_cci_config(struct msm_led_flash_ctrl_t  *fctrl,
 	void __user *argp)
@@ -92,10 +95,8 @@ static int32_t flash_cci_config(struct msm_led_flash_ctrl_t  *fctrl,
 			pr_err("%s:%d: i2c_read failed\n", __func__, __LINE__);
 			break;
 		}
-		read_config.data = local_data;
-		if (copy_to_user((void __user *)cdata->cfg.setting,
-			(void *)&read_config,
-			sizeof(struct msm_camera_i2c_read_config))) {
+		if (copy_to_user((void __user *)read_config.data,
+			(void *)&local_data, sizeof(uint16_t))) {
 			pr_err("%s:%d copy failed\n", __func__, __LINE__);
 			rc = -EFAULT;
 			break;
@@ -136,7 +137,7 @@ static long msm_led_flash_subdev_ioctl(struct v4l2_subdev *sd,
 	case VIDIOC_MSM_SENSOR_CFG:
 		return flash_cci_config(fctrl, argp);
 	default:
-		pr_err_ratelimited("invalid cmd %d\n", cmd);
+		pr_err("invalid cmd %d\n", cmd);
 		return -ENOIOCTLCMD;
 	}
 }
@@ -177,12 +178,6 @@ int32_t msm_led_flash_create_v4lsubdev(struct platform_device *pdev, void *data)
 	fctrl->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x1;
 	msm_sd_register(&fctrl->msm_sd);
 
-	msm_led_flash_v4l2_subdev_fops = v4l2_subdev_fops;
-#ifdef CONFIG_COMPAT
-	msm_led_flash_v4l2_subdev_fops.compat_ioctl32 =
-		msm_led_flash_v4l2_subdev_fops.unlocked_ioctl;
-#endif
-	fctrl->msm_sd.sd.devnode->fops = &msm_led_flash_v4l2_subdev_fops;
 	CDBG("probe success\n");
 	return 0;
 }

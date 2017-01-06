@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,9 +15,9 @@
 
 #include <linux/irq.h>
 #include <linux/kthread.h>
-#include <soc/qcom/msm_qmi_interface.h>
-#include <soc/qcom/subsystem_notif.h>
-#include <linux/ipc_logging.h>
+#include <mach/msm_qmi_interface.h>
+#include <mach/subsystem_notif.h>
+#include <mach/msm_ipc_logging.h>
 
 /* Per spec.max 40 bytes per received message */
 #define SLIM_MSGQ_BUF_LEN	40
@@ -188,7 +188,7 @@ enum msm_slim_msgq {
 };
 
 struct msm_slim_sps_bam {
-	unsigned long		hdl;
+	u32			hdl;
 	void __iomem		*base;
 	int			irq;
 };
@@ -199,7 +199,6 @@ struct msm_slim_endp {
 	struct sps_register_event	event;
 	struct sps_mem_buffer		buf;
 	bool				connected;
-	int				port_b;
 };
 
 struct msm_slim_qmi {
@@ -215,7 +214,7 @@ struct msm_slim_qmi {
 	struct work_struct		ssr_up;
 };
 
-struct msm_slim_mdm {
+struct msm_slim_ss {
 	struct notifier_block nb;
 	void *ssr;
 	enum msm_ctrl_state state;
@@ -247,7 +246,7 @@ struct msm_slim_ctrl {
 	int			ee;
 	struct completion	**wr_comp;
 	struct msm_slim_sat	*satd[MSM_MAX_NSATS];
-	struct msm_slim_endp	*pipes;
+	struct msm_slim_endp	pipes[7];
 	struct msm_slim_sps_bam	bam;
 	struct msm_slim_endp	tx_msgq;
 	struct msm_slim_endp	rx_msgq;
@@ -260,7 +259,7 @@ struct msm_slim_ctrl {
 	u8			pgdla;
 	enum msm_slim_msgq	use_rx_msgqs;
 	enum msm_slim_msgq	use_tx_msgqs;
-	int			port_nums;
+	int			port_b;
 	struct completion	reconf;
 	bool			reconf_busy;
 	bool			chan_active;
@@ -270,7 +269,8 @@ struct msm_slim_ctrl {
 	u32			ver;
 	struct msm_slim_qmi	qmi;
 	struct msm_slim_pdata	pdata;
-	struct msm_slim_mdm	mdm;
+	struct msm_slim_ss	ext_mdm;
+	struct msm_slim_ss	dsp;
 	int			default_ipc_log_mask;
 	int			ipc_log_mask;
 	bool			sysfs_created;

@@ -18,16 +18,20 @@
 #include <linux/io.h>
 
 #include <asm/cacheflush.h>
+#include <asm/hardware/gic.h>
 #include <asm/smp_plat.h>
 #include <asm/smp_scu.h>
-
-#include "setup.h"
-
-#include "db8500-regs.h"
-#include "id.h"
+#include <mach/hardware.h>
+#include <mach/setup.h>
 
 /* This is called from headsmp.S to wakeup the secondary core */
 extern void u8500_secondary_startup(void);
+
+/*
+ * control for which core is the next to come out of the secondary
+ * boot "holding pen"
+ */
+volatile int pen_release = -1;
 
 /*
  * Write pen_release in a way that is guaranteed to be visible to all
@@ -44,7 +48,9 @@ static void write_pen_release(int val)
 
 static void __iomem *scu_base_addr(void)
 {
-	if (cpu_is_u8500_family() || cpu_is_ux540_family())
+	if (cpu_is_u5500())
+		return __io_address(U5500_SCU_BASE);
+	else if (cpu_is_u8500())
 		return __io_address(U8500_SCU_BASE);
 	else
 		ux500_unknown_soc();
@@ -54,8 +60,15 @@ static void __iomem *scu_base_addr(void)
 
 static DEFINE_SPINLOCK(boot_lock);
 
-static void __cpuinit ux500_secondary_init(unsigned int cpu)
+void __cpuinit platform_secondary_init(unsigned int cpu)
 {
+	/*
+	 * if any interrupts are already enabled for the primary
+	 * core (e.g. timer irq), then they will not have been enabled
+	 * for us: do so
+	 */
+	gic_secondary_init(0);
+
 	/*
 	 * let the primary processor know we're out of the
 	 * pen, then head off into the C entry point
@@ -69,7 +82,7 @@ static void __cpuinit ux500_secondary_init(unsigned int cpu)
 	spin_unlock(&boot_lock);
 }
 
-static int __cpuinit ux500_boot_secondary(unsigned int cpu, struct task_struct *idle)
+int __cpuinit boot_secondary(unsigned int cpu, struct task_struct *idle)
 {
 	unsigned long timeout;
 
@@ -86,7 +99,7 @@ static int __cpuinit ux500_boot_secondary(unsigned int cpu, struct task_struct *
 	 */
 	write_pen_release(cpu_logical_map(cpu));
 
-	arch_send_wakeup_ipi_mask(cpumask_of(cpu));
+	smp_send_reschedule(cpu);
 
 	timeout = jiffies + (1 * HZ);
 	while (time_before(jiffies, timeout)) {
@@ -107,7 +120,9 @@ static void __init wakeup_secondary(void)
 {
 	void __iomem *backupram;
 
-	if (cpu_is_u8500_family() || cpu_is_ux540_family())
+	if (cpu_is_u5500())
+		backupram = __io_address(U5500_BACKUPRAM0_BASE);
+	else if (cpu_is_u8500())
 		backupram = __io_address(U8500_BACKUPRAM0_BASE);
 	else
 		ux500_unknown_soc();
@@ -134,7 +149,7 @@ static void __init wakeup_secondary(void)
  * Initialise the CPU possible map early - this describes the CPUs
  * which may be present or become present in the system.
  */
-static void __init ux500_smp_init_cpus(void)
+void __init smp_init_cpus(void)
 {
 	void __iomem *scu_base = scu_base_addr();
 	unsigned int i, ncores;
@@ -150,21 +165,13 @@ static void __init ux500_smp_init_cpus(void)
 
 	for (i = 0; i < ncores; i++)
 		set_cpu_possible(i, true);
+
+	set_smp_cross_call(gic_raise_softirq);
 }
 
-static void __init ux500_smp_prepare_cpus(unsigned int max_cpus)
+void __init platform_smp_prepare_cpus(unsigned int max_cpus)
 {
 
 	scu_enable(scu_base_addr());
 	wakeup_secondary();
 }
-
-struct smp_operations ux500_smp_ops __initdata = {
-	.smp_init_cpus		= ux500_smp_init_cpus,
-	.smp_prepare_cpus	= ux500_smp_prepare_cpus,
-	.smp_secondary_init	= ux500_secondary_init,
-	.smp_boot_secondary	= ux500_boot_secondary,
-#ifdef CONFIG_HOTPLUG_CPU
-	.cpu_die		= ux500_cpu_die,
-#endif
-};

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2013, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -222,27 +222,13 @@ acpi_ds_load2_begin_op(struct acpi_walk_state *walk_state,
 			 */
 			ACPI_WARNING((AE_INFO,
 				      "Type override - [%4.4s] had invalid type (%s) "
-				      "for Scope operator, changed to type ANY",
+				      "for Scope operator, changed to type ANY\n",
 				      acpi_ut_get_node_name(node),
 				      acpi_ut_get_type_name(node->type)));
 
 			node->type = ACPI_TYPE_ANY;
 			walk_state->scope_info->common.value = ACPI_TYPE_ANY;
 			break;
-
-		case ACPI_TYPE_METHOD:
-
-			/*
-			 * Allow scope change to root during execution of module-level
-			 * code. Root is typed METHOD during this time.
-			 */
-			if ((node == acpi_gbl_root_node) &&
-			    (walk_state->
-			     parse_flags & ACPI_PARSE_MODULE_LEVEL)) {
-				break;
-			}
-
-			/*lint -fallthrough */
 
 		default:
 
@@ -254,7 +240,7 @@ acpi_ds_load2_begin_op(struct acpi_walk_state *walk_state,
 				    acpi_ut_get_type_name(node->type),
 				    acpi_ut_get_node_name(node)));
 
-			return_ACPI_STATUS(AE_AML_OPERAND_TYPE);
+			return (AE_AML_OPERAND_TYPE);
 		}
 		break;
 
@@ -602,7 +588,7 @@ acpi_status acpi_ds_load2_end_op(struct acpi_walk_state *walk_state)
 							  region_space,
 							  walk_state);
 				if (ACPI_FAILURE(status)) {
-					return_ACPI_STATUS(status);
+					return (status);
 				}
 
 				acpi_ex_exit_interpreter();

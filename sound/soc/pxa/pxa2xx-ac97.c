@@ -47,7 +47,6 @@ struct snd_ac97_bus_ops soc_ac97_ops = {
 	.warm_reset	= pxa2xx_ac97_warm_reset,
 	.reset	= pxa2xx_ac97_cold_reset,
 };
-EXPORT_SYMBOL_GPL(soc_ac97_ops);
 
 static struct pxa2xx_pcm_dma_params pxa2xx_ac97_pcm_stereo_out = {
 	.name			= "AC97 PCM Stereo out",
@@ -105,7 +104,7 @@ static int pxa2xx_ac97_resume(struct snd_soc_dai *dai)
 #define pxa2xx_ac97_resume	NULL
 #endif
 
-static int pxa2xx_ac97_probe(struct snd_soc_dai *dai)
+static int __devinit pxa2xx_ac97_probe(struct snd_soc_dai *dai)
 {
 	return pxa2xx_ac97_hw_probe(to_platform_device(dai->dev));
 }
@@ -233,11 +232,9 @@ static struct snd_soc_dai_driver pxa_ac97_dai_driver[] = {
 },
 };
 
-static const struct snd_soc_component_driver pxa_ac97_component = {
-	.name		= "pxa-ac97",
-};
+EXPORT_SYMBOL_GPL(soc_ac97_ops);
 
-static int pxa2xx_ac97_dev_probe(struct platform_device *pdev)
+static __devinit int pxa2xx_ac97_dev_probe(struct platform_device *pdev)
 {
 	if (pdev->id != -1) {
 		dev_err(&pdev->dev, "PXA2xx has only one AC97 port.\n");
@@ -248,19 +245,19 @@ static int pxa2xx_ac97_dev_probe(struct platform_device *pdev)
 	 * driver to do interesting things with the clocking to get us up
 	 * and running.
 	 */
-	return snd_soc_register_component(&pdev->dev, &pxa_ac97_component,
-					  pxa_ac97_dai_driver, ARRAY_SIZE(pxa_ac97_dai_driver));
+	return snd_soc_register_dais(&pdev->dev, pxa_ac97_dai_driver,
+			ARRAY_SIZE(pxa_ac97_dai_driver));
 }
 
-static int pxa2xx_ac97_dev_remove(struct platform_device *pdev)
+static int __devexit pxa2xx_ac97_dev_remove(struct platform_device *pdev)
 {
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dais(&pdev->dev, ARRAY_SIZE(pxa_ac97_dai_driver));
 	return 0;
 }
 
 static struct platform_driver pxa2xx_ac97_driver = {
 	.probe		= pxa2xx_ac97_dev_probe,
-	.remove		= pxa2xx_ac97_dev_remove,
+	.remove		= __devexit_p(pxa2xx_ac97_dev_remove),
 	.driver		= {
 		.name	= "pxa2xx-ac97",
 		.owner	= THIS_MODULE,

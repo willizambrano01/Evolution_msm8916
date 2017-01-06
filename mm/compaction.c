@@ -14,12 +14,6 @@
 #include <linux/backing-dev.h>
 #include <linux/sysctl.h>
 #include <linux/sysfs.h>
-#include <linux/balloon_compaction.h>
-#include <linux/page-isolation.h>
-#include <linux/fb.h>
-#include <linux/kthread.h>
-#include <linux/freezer.h>
-#include <linux/module.h>
 #include "internal.h"
 
 #ifdef CONFIG_COMPACTION
@@ -90,7 +84,7 @@ static inline bool isolation_suitable(struct compact_control *cc,
 static void __reset_isolation_suitable(struct zone *zone)
 {
 	unsigned long start_pfn = zone->zone_start_pfn;
-	unsigned long end_pfn = zone_end_pfn(zone);
+	unsigned long end_pfn = zone->zone_start_pfn + zone->spanned_pages;
 	unsigned long pfn;
 
 	zone->compact_cached_migrate_pfn = start_pfn;
@@ -138,10 +132,6 @@ static void update_pageblock_skip(struct compact_control *cc,
 			bool migrate_scanner)
 {
 	struct zone *zone = cc->zone;
-
-	if (cc->ignore_skip_hint)
-		return;
-
 	if (!page)
 		return;
 
@@ -224,10 +214,7 @@ static bool suitable_migration_target(struct page *page)
 	int migratetype = get_pageblock_migratetype(page);
 
 	/* Don't interfere with memory hot-remove or the min_free_kbytes blocks */
-	if (migratetype == MIGRATE_RESERVE)
-		return false;
-
-	if (is_migrate_isolate(migratetype))
+	if (migratetype == MIGRATE_ISOLATE || migratetype == MIGRATE_RESERVE)
 		return false;
 
 	/* If the page is a large free page, then allow migration */
@@ -314,8 +301,6 @@ static unsigned long isolate_freepages_block(struct compact_control *cc,
 isolate_fail:
 		if (strict)
 			break;
-		else
-			continue;
 
 	}
 
@@ -466,8 +451,7 @@ isolate_migratepages_range(struct zone *zone, struct compact_control *cc,
 	unsigned long nr_scanned = 0, nr_isolated = 0;
 	struct list_head *migratelist = &cc->migratepages;
 	isolate_mode_t mode = 0;
-	struct lruvec *lruvec;
-	unsigned long flags;
+	unsigned long flags = 0;
 	bool locked = false;
 	struct page *page = NULL, *valid_page = NULL;
 
@@ -548,24 +532,9 @@ isolate_migratepages_range(struct zone *zone, struct compact_control *cc,
 			goto next_pageblock;
 		}
 
-		/*
-		 * Check may be lockless but that's ok as we recheck later.
-		 * It's possible to migrate LRU pages and balloon pages
-		 * Skip any other type of page
-		 */
-		if (!PageLRU(page)) {
-			if (unlikely(balloon_page_movable(page))) {
-				if (locked && balloon_page_isolate(page)) {
-					/* Successfully isolated */
-					cc->finished_update_migrate = true;
-					list_add(&page->lru, migratelist);
-					cc->nr_migratepages++;
-					nr_isolated++;
-					goto check_compact_cluster;
-				}
-			}
+		/* Check may be lockless but that's ok as we recheck later */
+		if (!PageLRU(page))
 			continue;
-		}
 
 		/*
 		 * PageLRU is set. lru_lock normally excludes isolation
@@ -604,8 +573,6 @@ isolate_migratepages_range(struct zone *zone, struct compact_control *cc,
 		if (unevictable)
 			mode |= ISOLATE_UNEVICTABLE;
 
-		lruvec = mem_cgroup_page_lruvec(page, zone);
-
 		/* Try isolate the page */
 		if (__isolate_lru_page(page, mode) != 0)
 			continue;
@@ -614,12 +581,11 @@ isolate_migratepages_range(struct zone *zone, struct compact_control *cc,
 
 		/* Successfully isolated */
 		cc->finished_update_migrate = true;
-		del_page_from_lru_list(page, lruvec, page_lru(page));
+		del_page_from_lru_list(zone, page, page_lru(page));
 		list_add(&page->lru, migratelist);
 		cc->nr_migratepages++;
 		nr_isolated++;
 
-check_compact_cluster:
 		/* Avoid isolating too much */
 		if (cc->nr_migratepages == COMPACT_CLUSTER_MAX) {
 			++low_pfn;
@@ -629,7 +595,8 @@ check_compact_cluster:
 		continue;
 
 next_pageblock:
-		low_pfn = ALIGN(low_pfn + 1, pageblock_nr_pages) - 1;
+		low_pfn += pageblock_nr_pages;
+		low_pfn = ALIGN(low_pfn, pageblock_nr_pages) - 1;
 		last_pageblock_nr = pageblock_nr;
 	}
 
@@ -661,21 +628,17 @@ static void isolate_freepages(struct zone *zone,
 				struct compact_control *cc)
 {
 	struct page *page;
-	unsigned long high_pfn, low_pfn, pfn, z_end_pfn;
+	unsigned long high_pfn, low_pfn, pfn, zone_end_pfn, end_pfn;
 	int nr_freepages = cc->nr_freepages;
 	struct list_head *freelist = &cc->freepages;
 
 	/*
 	 * Initialise the free scanner. The starting point is where we last
-	 * successfully isolated from, zone-cached value, or the end of the
-	 * zone when isolating for the first time. We need this aligned to
-	 * the pageblock boundary, because we do pfn -= pageblock_nr_pages
-	 * in the for loop.
-	 * The low boundary is the end of the pageblock the migration scanner
-	 * is using.
+	 * scanned from (or the end of the zone if starting). The low point
+	 * is the end of the pageblock the migration scanner is using.
 	 */
-	pfn = cc->free_pfn & ~(pageblock_nr_pages-1);
-	low_pfn = ALIGN(cc->migrate_pfn + 1, pageblock_nr_pages);
+	pfn = cc->free_pfn;
+	low_pfn = cc->migrate_pfn + pageblock_nr_pages;
 
 	/*
 	 * Take care that if the migration scanner is at the end of the zone
@@ -684,17 +647,16 @@ static void isolate_freepages(struct zone *zone,
 	 */
 	high_pfn = min(low_pfn, pfn);
 
-	z_end_pfn = zone_end_pfn(zone);
+	zone_end_pfn = zone->zone_start_pfn + zone->spanned_pages;
 
 	/*
 	 * Isolate free pages until enough are available to migrate the
 	 * pages on cc->migratepages. We stop searching if the migrate
 	 * and free page scanners meet or enough free pages are isolated.
 	 */
-	for (; pfn >= low_pfn && cc->nr_migratepages > nr_freepages;
+	for (; pfn > low_pfn && cc->nr_migratepages > nr_freepages;
 					pfn -= pageblock_nr_pages) {
 		unsigned long isolated;
-		unsigned long end_pfn;
 
 		if (!pfn_valid(pfn))
 			continue;
@@ -722,10 +684,13 @@ static void isolate_freepages(struct zone *zone,
 		isolated = 0;
 
 		/*
-		 * Take care when isolating in last pageblock of a zone which
-		 * ends in the middle of a pageblock.
+		 * As pfn may not start aligned, pfn+pageblock_nr_page
+		 * may cross a MAX_ORDER_NR_PAGES boundary and miss
+		 * a pfn_valid check. Ensure isolate_freepages_block()
+		 * only scans within a pageblock
 		 */
-		end_pfn = min(pfn + pageblock_nr_pages, z_end_pfn);
+		end_pfn = ALIGN(pfn + 1, pageblock_nr_pages);
+		end_pfn = min(end_pfn, zone_end_pfn);
 		isolated = isolate_freepages_block(cc, pfn, end_pfn,
 						   freelist, false);
 		nr_freepages += isolated;
@@ -744,14 +709,7 @@ static void isolate_freepages(struct zone *zone,
 	/* split_free_page does not map the pages */
 	map_pages(freelist);
 
-	/*
-	 * If we crossed the migrate scanner, we want to keep it that way
-	 * so that compact_finished() may detect this
-	 */
-	if (pfn < low_pfn)
-		cc->free_pfn = max(pfn, zone->zone_start_pfn);
-	else
-		cc->free_pfn = high_pfn;
+	cc->free_pfn = high_pfn;
 	cc->nr_freepages = nr_freepages;
 }
 
@@ -821,7 +779,7 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 	low_pfn = max(cc->migrate_pfn, zone->zone_start_pfn);
 
 	/* Only scan within a pageblock boundary */
-	end_pfn = ALIGN(low_pfn + 1, pageblock_nr_pages);
+	end_pfn = ALIGN(low_pfn + pageblock_nr_pages, pageblock_nr_pages);
 
 	/* Do not cross the free scanner or scan within a memory hole */
 	if (end_pfn > cc->free_pfn || !pfn_valid(low_pfn)) {
@@ -952,7 +910,7 @@ static int compact_zone(struct zone *zone, struct compact_control *cc)
 {
 	int ret;
 	unsigned long start_pfn = zone->zone_start_pfn;
-	unsigned long end_pfn = zone_end_pfn(zone);
+	unsigned long end_pfn = zone->zone_start_pfn + zone->spanned_pages;
 
 	ret = compaction_suitable(zone, cc->order);
 	switch (ret) {
@@ -964,14 +922,6 @@ static int compact_zone(struct zone *zone, struct compact_control *cc)
 		/* Fall through to compaction */
 		;
 	}
-
-	/*
-	 * Clear pageblock skip if there were failures recently and compaction
-	 * is about to be retried after being deferred. kswapd does not do
-	 * this reset as it'll reset the cached information when going to sleep.
-	 */
-	if (compaction_restarting(zone, cc->order) && !current_is_kswapd())
-		__reset_isolation_suitable(zone);
 
 	/*
 	 * Setup to move all movable pages to the end of the zone. Used cached
@@ -989,6 +939,14 @@ static int compact_zone(struct zone *zone, struct compact_control *cc)
 		zone->compact_cached_migrate_pfn = cc->migrate_pfn;
 	}
 
+	/*
+	 * Clear pageblock skip if there were failures recently and compaction
+	 * is about to be retried after being deferred. kswapd does not do
+	 * this reset as it'll reset the cached information when going to sleep.
+	 */
+	if (compaction_restarting(zone, cc->order) && !current_is_kswapd())
+		__reset_isolation_suitable(zone);
+
 	migrate_prep_local();
 
 	while ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
@@ -998,7 +956,7 @@ static int compact_zone(struct zone *zone, struct compact_control *cc)
 		switch (isolate_migratepages(zone, cc)) {
 		case ISOLATE_ABORT:
 			ret = COMPACT_PARTIAL;
-			putback_movable_pages(&cc->migratepages);
+			putback_lru_pages(&cc->migratepages);
 			cc->nr_migratepages = 0;
 			goto out;
 		case ISOLATE_NONE:
@@ -1009,24 +967,19 @@ static int compact_zone(struct zone *zone, struct compact_control *cc)
 
 		nr_migrate = cc->nr_migratepages;
 		err = migrate_pages(&cc->migratepages, compaction_alloc,
-				(unsigned long)cc,
-				cc->sync ? MIGRATE_SYNC_LIGHT : MIGRATE_ASYNC,
-				MR_COMPACTION);
+				(unsigned long)cc, false,
+				cc->sync ? MIGRATE_SYNC_LIGHT : MIGRATE_ASYNC);
 		update_nr_listpages(cc);
 		nr_remaining = cc->nr_migratepages;
 
 		trace_mm_compaction_migratepages(nr_migrate - nr_remaining,
 						nr_remaining);
 
-		/* Release isolated pages not migrated */
+		/* Release LRU pages not migrated */
 		if (err) {
-			putback_movable_pages(&cc->migratepages);
+			putback_lru_pages(&cc->migratepages);
 			cc->nr_migratepages = 0;
-			/*
-			 * migrate_pages() may return -ENOMEM when scanners meet
-			 * and we want compact_finished() to detect it
-			 */
-			if (err == -ENOMEM && cc->free_pfn > cc->migrate_pfn) {
+			if (err == -ENOMEM) {
 				ret = COMPACT_PARTIAL;
 				goto out;
 			}
@@ -1120,80 +1073,9 @@ unsigned long try_to_compact_pages(struct zonelist *zonelist,
 	return rc;
 }
 
-static struct compact_thread {
-	wait_queue_head_t waitqueue;
-	struct task_struct *task;
-	struct timer_list timer;
-	atomic_t should_run;
-} compact_thread;
-
-static uint compact_interval_sec = 1800;
-module_param_named(interval, compact_interval_sec, uint,
-			S_IRUGO | S_IWUSR | S_IWGRP);
-
-static void compact_nodes(void);
-
-static int compact_thread_should_run(void)
-{
-	return atomic_read(&compact_thread.should_run);
-}
-
-static void compact_thread_wakeup(void)
-{
-	atomic_set(&compact_thread.should_run, 1);
-	wake_up(&compact_thread.waitqueue);
-}
-
-static void compact_thread_timer_func(unsigned long data)
-{
-	compact_thread_wakeup();
-	mod_timer(&compact_thread.timer,
-			jiffies + (HZ * compact_interval_sec));
-}
-
-static int compact_thread_func(void *data)
-{
-	set_freezable();
-	for (;;) {
-		wait_event_freezable(compact_thread.waitqueue,
-				compact_thread_should_run());
-		if (compact_thread_should_run()) {
-			compact_nodes();
-			atomic_set(&compact_thread.should_run, 0);
-		}
-	}
-	return 0;
-}
-
-static int compact_notifier(struct notifier_block *self,
-				unsigned long event, void *data)
-{
-	struct fb_event *evdata = (struct fb_event *)data;
-
-	if ((event == FB_EVENT_BLANK) && evdata && evdata->data) {
-		int blank = *(int *)evdata->data;
-
-		if (blank == FB_BLANK_POWERDOWN) {
-			del_timer_sync(&compact_thread.timer);
-			compact_thread_wakeup();
-			return NOTIFY_OK;
-		} else if (blank == FB_BLANK_UNBLANK) {
-			if (!timer_pending(&compact_thread.timer))
-				mod_timer(&compact_thread.timer, jiffies +
-						(HZ * compact_interval_sec));
-			return NOTIFY_OK;
-		}
-	}
-	return NOTIFY_DONE;
-}
-
-static struct notifier_block compact_notifier_block = {
-	.notifier_call = compact_notifier,
-	.priority = -1,
-};
 
 /* Compact all zones within a node */
-static void __compact_pgdat(pg_data_t *pgdat, struct compact_control *cc)
+static int __compact_pgdat(pg_data_t *pgdat, struct compact_control *cc)
 {
 	int zoneid;
 	struct zone *zone;
@@ -1231,26 +1113,28 @@ static void __compact_pgdat(pg_data_t *pgdat, struct compact_control *cc)
 		VM_BUG_ON(!list_empty(&cc->freepages));
 		VM_BUG_ON(!list_empty(&cc->migratepages));
 	}
+
+	return 0;
 }
 
-void compact_pgdat(pg_data_t *pgdat, int order)
+int compact_pgdat(pg_data_t *pgdat, int order)
 {
 	struct compact_control cc = {
 		.order = order,
 		.sync = false,
 	};
 
-	__compact_pgdat(pgdat, &cc);
+	return __compact_pgdat(pgdat, &cc);
 }
 
-static void compact_node(int nid)
+static int compact_node(int nid)
 {
 	struct compact_control cc = {
 		.order = -1,
 		.sync = true,
 	};
 
-	__compact_pgdat(NODE_DATA(nid), &cc);
+	return __compact_pgdat(NODE_DATA(nid), &cc);
 }
 
 /* Compact all nodes in the system */
@@ -1315,20 +1199,4 @@ void compaction_unregister_node(struct node *node)
 }
 #endif /* CONFIG_SYSFS && CONFIG_NUMA */
 
-static int  __init mem_compaction_init(void)
-{
-	struct sched_param param = { .sched_priority = 0 };
-
-	init_timer_deferrable(&compact_thread.timer);
-	compact_thread.timer.function = compact_thread_timer_func;
-	init_waitqueue_head(&compact_thread.waitqueue);
-	compact_thread.task = kthread_run(compact_thread_func, NULL,
-				"%s", "kcompact");
-	if (!IS_ERR(compact_thread.task))
-		sched_setscheduler(compact_thread.task, SCHED_IDLE, &param);
-
-	fb_register_client(&compact_notifier_block);
-	return 0;
-}
-late_initcall(mem_compaction_init);
 #endif /* CONFIG_COMPACTION */

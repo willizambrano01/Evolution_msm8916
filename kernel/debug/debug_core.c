@@ -29,7 +29,6 @@
  */
 #include <linux/pid_namespace.h>
 #include <linux/clocksource.h>
-#include <linux/serial_core.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/console.h>
@@ -532,7 +531,7 @@ return_normal:
 			kgdb_info[cpu].exception_state &=
 				~(DCPU_WANT_MASTER | DCPU_IS_SLAVE);
 			kgdb_info[cpu].enter_kgdb--;
-			smp_mb__before_atomic();
+			smp_mb__before_atomic_dec();
 			atomic_dec(&slaves_in_kgdb);
 			dbg_touch_watchdogs();
 			local_irq_restore(flags);
@@ -656,7 +655,7 @@ kgdb_restore:
 	kgdb_info[cpu].exception_state &=
 		~(DCPU_WANT_MASTER | DCPU_IS_SLAVE);
 	kgdb_info[cpu].enter_kgdb--;
-	smp_mb__before_atomic();
+	smp_mb__before_atomic_dec();
 	atomic_dec(&masters_in_kgdb);
 	/* Free kgdb_active */
 	atomic_set(&kgdb_active, -1);
@@ -679,10 +678,6 @@ kgdb_handle_exception(int evector, int signo, int ecode, struct pt_regs *regs)
 {
 	struct kgdb_state kgdb_var;
 	struct kgdb_state *ks = &kgdb_var;
-	int ret = 0;
-
-	if (arch_kgdb_ops.enable_nmi)
-		arch_kgdb_ops.enable_nmi(0);
 
 	if (unlikely(signo != SIGTRAP && !break_on_exception))
 		return 1;
@@ -695,32 +690,12 @@ kgdb_handle_exception(int evector, int signo, int ecode, struct pt_regs *regs)
 	ks->linux_regs		= regs;
 
 	if (kgdb_reenter_check(ks))
-		goto out; /* Ouch, double exception ! */
+		return 0; /* Ouch, double exception ! */
 	if (kgdb_info[ks->cpu].enter_kgdb != 0)
-		goto out;
+		return 0;
 
-	ret = kgdb_cpu_enter(ks, regs, DCPU_WANT_MASTER);
-out:
-	if (arch_kgdb_ops.enable_nmi)
-		arch_kgdb_ops.enable_nmi(1);
-	return ret;
+	return kgdb_cpu_enter(ks, regs, DCPU_WANT_MASTER);
 }
-
-/*
- * GDB places a breakpoint at this function to know dynamically
- * loaded objects. It's not defined static so that only one instance with this
- * name exists in the kernel.
- */
-
-static int module_event(struct notifier_block *self, unsigned long val,
-	void *data)
-{
-	return 0;
-}
-
-static struct notifier_block dbg_module_load_nb = {
-	.notifier_call	= module_event,
-};
 
 int kgdb_nmicallback(int cpu, void *regs)
 {
@@ -784,7 +759,7 @@ static void sysrq_handle_dbg(int key)
 
 static struct sysrq_key_op sysrq_dbg_op = {
 	.handler	= sysrq_handle_dbg,
-	.help_msg	= "debug(g)",
+	.help_msg	= "debug(G)",
 	.action_msg	= "DEBUG",
 };
 #endif
@@ -853,7 +828,6 @@ static void kgdb_register_callbacks(void)
 		kgdb_arch_init();
 		if (!dbg_is_early)
 			kgdb_arch_late();
-		register_module_notifier(&dbg_module_load_nb);
 		register_reboot_notifier(&dbg_reboot_notifier);
 		atomic_notifier_chain_register(&panic_notifier_list,
 					       &kgdb_panic_event_nb);
@@ -877,7 +851,6 @@ static void kgdb_unregister_callbacks(void)
 	if (kgdb_io_module_registered) {
 		kgdb_io_module_registered = 0;
 		unregister_reboot_notifier(&dbg_reboot_notifier);
-		unregister_module_notifier(&dbg_module_load_nb);
 		atomic_notifier_chain_unregister(&panic_notifier_list,
 					       &kgdb_panic_event_nb);
 		kgdb_arch_exit();

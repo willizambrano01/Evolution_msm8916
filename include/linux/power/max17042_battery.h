@@ -100,7 +100,6 @@ enum max17042_register {
 
 	MAX17042_VFSOC0		= 0x48,
 
-	MAX17042_QH0		= 0x4C,
 	MAX17042_QH		= 0x4D,
 	MAX17042_QL		= 0x4E,
 
@@ -117,18 +116,6 @@ enum max17042_register {
 	MAX17042_VFSOC		= 0xFF,
 };
 
-/* Registers specific to max17047/50 */
-enum max17047_register {
-	MAX17047_QRTbl00	= 0x12,
-	MAX17047_FullSOCThr	= 0x13,
-	MAX17047_QRTbl10	= 0x22,
-	MAX17047_QRTbl20	= 0x32,
-	MAX17047_V_empty	= 0x3A,
-	MAX17047_QRTbl30	= 0x42,
-};
-
-enum max170xx_chip_type {MAX17042, MAX17047};
-
 /*
  * used for setting a register to a desired value
  * addr : address for a register
@@ -140,9 +127,6 @@ struct max17042_reg_data {
 };
 
 struct max17042_config_data {
-	/* Revision of this Data*/
-	u16	revision;
-
 	/* External current sense resistor value in milli-ohms */
 	u32	cur_sense_val;
 
@@ -160,7 +144,6 @@ struct max17042_config_data {
 	u16	shdntimer;	/* 0x03F */
 
 	/* App data */
-	u16	full_soc_thresh;	/* 0x13 */
 	u16	design_cap;	/* 0x18 */
 	u16	ichgt_term;	/* 0x1E */
 
@@ -179,10 +162,6 @@ struct max17042_config_data {
 	u16	lavg_empty;	/* 0x36 */
 	u16	dqacc;		/* 0x45 */
 	u16	dpacc;		/* 0x46 */
-	u16	qrtbl00;	/* 0x12 */
-	u16	qrtbl10;	/* 0x22 */
-	u16	qrtbl20;	/* 0x32 */
-	u16	qrtbl30;	/* 0x42 */
 
 	/* Cell technology from power_supply.h */
 	u16	cell_technology;
@@ -199,25 +178,10 @@ struct max17042_config_data {
 	u16	cell_char_tbl[MAX17042_CHARACTERIZATION_DATA_SIZE];
 } __packed;
 
-/*
- * used to convert a value from Temperature register to a "real" temp value.
- * This conversion table can be used when configuring tgain and toff is not
- * sufficient to get accurate temperature measurements.
- * The result[0] corresponds to start temp, result[1] to (start + 1) temp, etc.
- */
-struct max17042_temp_conv {
-	s16 start;	/* Centigrade */
-	s16 *result;	/* Deci-centigrade */
-	int num_result;	/* Number of entries in result array */
-};
-
 struct max17042_platform_data {
 	struct max17042_reg_data *init_data;
 	struct max17042_config_data *config_data;
 	int num_init_data; /* Number of enties in init_data array */
-	struct gpio *gpio_list;
-	int num_gpio_list; /* Number of entries in gpio_list array */
-	struct max17042_temp_conv *tcnv; /* temp conversion table */
 	bool enable_current_sense;
 	bool enable_por_init; /* Use POR init from Maxim appnote */
 
@@ -227,17 +191,6 @@ struct max17042_platform_data {
 	 * the datasheet although it can be changed by board designers.
 	 */
 	unsigned int r_sns;
-	/*
-	 * Enable this flag to report "0" SOC iff battery undervoltage interrupt
-	 * has fired.
-	 */
-	bool batt_undervoltage_zero_soc;
-	const char *batt_psy_name;
-	int warm_temp_c;
-	int hot_temp_c;
-	int cool_temp_c;
-	int cold_temp_c;
-	int hotspot_thrs_c;
 };
 
 #endif /* __MAX17042_BATTERY_H_ */

@@ -1,6 +1,7 @@
 /*
  * Copyright (C) ST-Ericsson AB 2010
- * Author:  Daniel Martensson
+ * Contact: Sjur Brendeland / sjur.brandeland@stericsson.com
+ * Author:  Daniel Martensson / Daniel.Martensson@stericsson.com
  * License terms: GNU General Public License (GPL) version 2.
  */
 
@@ -28,7 +29,7 @@
 #endif /* CONFIG_CAIF_SPI_SYNC */
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Daniel Martensson");
+MODULE_AUTHOR("Daniel Martensson<daniel.martensson@stericsson.com>");
 MODULE_DESCRIPTION("CAIF SPI driver");
 
 /* Returns the number of padding bytes for alignment. */
@@ -863,7 +864,6 @@ static int __init cfspi_init_module(void)
 	driver_remove_file(&cfspi_spi_driver.driver,
 			   &driver_attr_up_head_align);
  err_create_up_head_align:
-	platform_driver_unregister(&cfspi_spi_driver);
  err_dev_register:
 	return result;
 }

@@ -33,7 +33,8 @@
 
 static int mal_count;
 
-int mal_register_commac(struct mal_instance *mal, struct mal_commac *commac)
+int __devinit mal_register_commac(struct mal_instance	*mal,
+				  struct mal_commac	*commac)
 {
 	unsigned long flags;
 
@@ -516,7 +517,7 @@ void *mal_dump_regs(struct mal_instance *mal, void *buf)
 	return regs + 1;
 }
 
-static int mal_probe(struct platform_device *ofdev)
+static int __devinit mal_probe(struct platform_device *ofdev)
 {
 	struct mal_instance *mal;
 	int err = 0, i, bd_size;
@@ -528,9 +529,12 @@ static int mal_probe(struct platform_device *ofdev)
 	irq_handler_t hdlr_serr, hdlr_txde, hdlr_rxde;
 
 	mal = kzalloc(sizeof(struct mal_instance), GFP_KERNEL);
-	if (!mal)
+	if (!mal) {
+		printk(KERN_ERR
+		       "mal%d: out of memory allocating MAL structure!\n",
+		       index);
 		return -ENOMEM;
-
+	}
 	mal->index = index;
 	mal->ofdev = ofdev;
 	mal->version = of_device_is_compatible(ofdev->dev.of_node, "ibm,mcmal2") ? 2 : 1;
@@ -637,12 +641,17 @@ static int mal_probe(struct platform_device *ofdev)
 	bd_size = sizeof(struct mal_descriptor) *
 		(NUM_TX_BUFF * mal->num_tx_chans +
 		 NUM_RX_BUFF * mal->num_rx_chans);
-	mal->bd_virt = dma_alloc_coherent(&ofdev->dev, bd_size, &mal->bd_dma,
-					  GFP_KERNEL | __GFP_ZERO);
+	mal->bd_virt =
+		dma_alloc_coherent(&ofdev->dev, bd_size, &mal->bd_dma,
+				   GFP_KERNEL);
 	if (mal->bd_virt == NULL) {
+		printk(KERN_ERR
+		       "mal%d: out of memory allocating RX/TX descriptors!\n",
+		       index);
 		err = -ENOMEM;
 		goto fail_unmap;
 	}
+	memset(mal->bd_virt, 0, bd_size);
 
 	for (i = 0; i < mal->num_tx_chans; ++i)
 		set_mal_dcrn(mal, MAL_TXCTPR(i), mal->bd_dma +
@@ -720,7 +729,7 @@ static int mal_probe(struct platform_device *ofdev)
 	return err;
 }
 
-static int mal_remove(struct platform_device *ofdev)
+static int __devexit mal_remove(struct platform_device *ofdev)
 {
 	struct mal_instance *mal = dev_get_drvdata(&ofdev->dev);
 
@@ -729,11 +738,13 @@ static int mal_remove(struct platform_device *ofdev)
 	/* Synchronize with scheduled polling */
 	napi_disable(&mal->napi);
 
-	if (!list_empty(&mal->list))
+	if (!list_empty(&mal->list)) {
 		/* This is *very* bad */
-		WARN(1, KERN_EMERG
+		printk(KERN_EMERG
 		       "mal%d: commac list is not empty on remove!\n",
 		       mal->index);
+		WARN_ON(1);
+	}
 
 	dev_set_drvdata(&ofdev->dev, NULL);
 

@@ -90,25 +90,17 @@ static inline int ___range_ok(unsigned long addr, unsigned long size)
 
 #else
 
-static inline int access_ok(int type, const void __user *addr,
-							unsigned long size)
-{
-	if (!size)
-		goto ok;
+/*
+ * Address is valid if:
+ *  - "addr", "addr + size" and "size" are all below the limit
+ */
+#define access_ok(type, addr, size) \
+	(get_fs().seg >= (((unsigned long)(addr)) | \
+		(size) | ((unsigned long)(addr) + (size))))
 
-	if ((get_fs().seg < ((unsigned long)addr)) ||
-			(get_fs().seg < ((unsigned long)addr + size - 1))) {
-		pr_debug("ACCESS fail: %s at 0x%08x (size 0x%x), seg 0x%08x\n",
-			type ? "WRITE" : "READ ", (__force u32)addr, (u32)size,
-			(u32)get_fs().seg);
-		return 0;
-	}
-ok:
-	pr_debug("ACCESS OK: %s at 0x%08x (size 0x%x), seg 0x%08x\n",
-			type ? "WRITE" : "READ ", (__force u32)addr, (u32)size,
-			(u32)get_fs().seg);
-	return 1;
-}
+/* || printk("access_ok failed for %s at 0x%08lx (size %d), seg 0x%08x\n",
+ type?"WRITE":"READ",addr,size,get_fs().seg)) */
+
 #endif
 
 #ifdef CONFIG_MMU
@@ -116,7 +108,7 @@ ok:
 # define __EX_TABLE_SECTION	".section __ex_table,\"a\"\n"
 #else
 # define __FIXUP_SECTION	".section .discard,\"ax\"\n"
-# define __EX_TABLE_SECTION	".section .discard,\"ax\"\n"
+# define __EX_TABLE_SECTION	".section .discard,\"a\"\n"
 #endif
 
 extern unsigned long __copy_tofrom_user(void __user *to,
@@ -306,10 +298,11 @@ extern long __user_bad(void);
 
 #define __put_user_check(x, ptr, size)					\
 ({									\
-	typeof(*(ptr)) volatile __pu_val = x;					\
+	typeof(*(ptr)) __pu_val;					\
 	typeof(*(ptr)) __user *__pu_addr = (ptr);			\
 	int __pu_err = 0;						\
 									\
+	__pu_val = (x);							\
 	if (access_ok(VERIFY_WRITE, __pu_addr, size)) {			\
 		switch (size) {						\
 		case 1:							\

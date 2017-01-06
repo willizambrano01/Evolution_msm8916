@@ -77,7 +77,12 @@ static inline int get_rsp_type(u8 rsp_code, u8 *rsp_type, int *rsp_len)
 	return STATUS_SUCCESS;
 }
 
-static int ext_sd_send_cmd_get_rsp(struct rts51x_chip *chip, u8 cmd_idx,
+int soft_reset_sd_card(struct rts51x_chip *chip)
+{
+	return reset_sd(chip);
+}
+
+int ext_sd_send_cmd_get_rsp(struct rts51x_chip *chip, u8 cmd_idx,
 			    u32 arg, u8 rsp_type, u8 *rsp, int rsp_len,
 			    int special_check)
 {
@@ -201,8 +206,13 @@ RTY_SEND_CMD:
 			if (buf[1] & 0x80)
 				TRACE_RET(chip, STATUS_FAIL);
 		}
-		if (buf[1] & 0x7F)
+#ifdef SUPPORT_SD_LOCK
+		if (buf[1] & 0x7D) {
+#else
+		if (buf[1] & 0x7F) {
+#endif
 			TRACE_RET(chip, STATUS_FAIL);
+		}
 		if (buf[2] & 0xF8)
 			TRACE_RET(chip, STATUS_FAIL);
 
@@ -223,8 +233,7 @@ RTY_SEND_CMD:
 	return STATUS_SUCCESS;
 }
 
-static int ext_sd_get_rsp(struct rts51x_chip *chip, int len,
-			u8 *rsp, u8 rsp_type)
+int ext_sd_get_rsp(struct rts51x_chip *chip, int len, u8 *rsp, u8 rsp_type)
 {
 	int retval, rsp_len;
 	u16 reg_addr;
@@ -269,7 +278,7 @@ static int ext_sd_get_rsp(struct rts51x_chip *chip, int len,
 	return STATUS_SUCCESS;
 }
 
-int ext_rts51x_sd_execute_no_data(struct rts51x_chip *chip, unsigned int lun,
+int ext_sd_execute_no_data(struct rts51x_chip *chip, unsigned int lun,
 			   u8 cmd_idx, u8 standby, u8 acmd, u8 rsp_code,
 			   u32 arg)
 {
@@ -277,30 +286,48 @@ int ext_rts51x_sd_execute_no_data(struct rts51x_chip *chip, unsigned int lun,
 	int retval, rsp_len;
 	u8 rsp_type;
 
-	retval = rts51x_sd_switch_clock(chip);
+	retval = sd_switch_clock(chip);
 	if (retval != STATUS_SUCCESS)
 		TRACE_RET(chip, TRANSPORT_FAILED);
 
 	if (sd_card->pre_cmd_err) {
 		sd_card->pre_cmd_err = 0;
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 	retval = get_rsp_type(rsp_code, &rsp_type, &rsp_len);
 	if (retval != STATUS_SUCCESS) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 	sd_card->last_rsp_type = rsp_type;
 
-	retval = rts51x_sd_switch_clock(chip);
+	retval = sd_switch_clock(chip);
 	if (retval != STATUS_SUCCESS)
 		TRACE_RET(chip, TRANSPORT_FAILED);
+#ifdef SUPPORT_SD_LOCK
+	if ((sd_card->sd_lock_status & SD_LOCK_1BIT_MODE) == 0) {
+		if (CHK_MMC_8BIT(sd_card)) {
+			retval =
+			    rts51x_write_register(chip, SD_CFG1, 0x03,
+						  SD_BUS_WIDTH_8);
+			if (retval != STATUS_SUCCESS)
+				TRACE_RET(chip, TRANSPORT_FAILED);
+		} else if (CHK_SD(sd_card) || CHK_MMC_4BIT(sd_card)) {
+			retval =
+			    rts51x_write_register(chip, SD_CFG1, 0x03,
+						  SD_BUS_WIDTH_4);
+			if (retval != STATUS_SUCCESS)
+				TRACE_RET(chip, TRANSPORT_FAILED);
+		}
+	}
+#else
 	/* Set H/W SD/MMC Bus Width */
 	rts51x_write_register(chip, SD_CFG1, 0x03, SD_BUS_WIDTH_4);
+#endif
 
 	if (standby) {
-		retval = rts51x_sd_select_card(chip, 0);
+		retval = sd_select_card(chip, 0);
 		if (retval != STATUS_SUCCESS)
 			TRACE_GOTO(chip, SD_Execute_Cmd_Failed);
 	}
@@ -319,25 +346,31 @@ int ext_rts51x_sd_execute_no_data(struct rts51x_chip *chip, unsigned int lun,
 		TRACE_GOTO(chip, SD_Execute_Cmd_Failed);
 
 	if (standby) {
-		retval = rts51x_sd_select_card(chip, 1);
+		retval = sd_select_card(chip, 1);
 		if (retval != STATUS_SUCCESS)
 			TRACE_GOTO(chip, SD_Execute_Cmd_Failed);
 	}
+#ifdef SUPPORT_SD_LOCK
+	/* Get SD lock status */
+	retval = sd_update_lock_status(chip);
+	if (retval != STATUS_SUCCESS)
+		TRACE_GOTO(chip, SD_Execute_Cmd_Failed);
+#endif
 
 	return TRANSPORT_GOOD;
 
 SD_Execute_Cmd_Failed:
 	sd_card->pre_cmd_err = 1;
-	rts51x_set_sense_type(chip, lun, SENSE_TYPE_NO_SENSE);
-	rts51x_release_sd_card(chip);
-	rts51x_do_rts51x_reset_sd_card(chip);
+	set_sense_type(chip, lun, SENSE_TYPE_NO_SENSE);
+	release_sd_card(chip);
+	do_reset_sd_card(chip);
 	if (!(chip->card_ready & SD_CARD))
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
 
 	TRACE_RET(chip, TRANSPORT_FAILED);
 }
 
-int ext_rts51x_sd_execute_read_data(struct rts51x_chip *chip, unsigned int lun,
+int ext_sd_execute_read_data(struct rts51x_chip *chip, unsigned int lun,
 			     u8 cmd_idx, u8 cmd12, u8 standby,
 			     u8 acmd, u8 rsp_code, u32 arg, u32 data_len,
 			     void *data_buf, unsigned int buf_len, int use_sg)
@@ -349,24 +382,38 @@ int ext_rts51x_sd_execute_read_data(struct rts51x_chip *chip, unsigned int lun,
 
 	if (sd_card->pre_cmd_err) {
 		sd_card->pre_cmd_err = 0;
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
-	retval = rts51x_sd_switch_clock(chip);
+	retval = sd_switch_clock(chip);
 	if (retval != STATUS_SUCCESS)
 		TRACE_RET(chip, STATUS_FAIL);
 	retval = get_rsp_type(rsp_code, &rsp_type, &rsp_len);
 	if (retval != STATUS_SUCCESS) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 	sd_card->last_rsp_type = rsp_type;
 
-	retval = rts51x_sd_switch_clock(chip);
+	retval = sd_switch_clock(chip);
 	if (retval != STATUS_SUCCESS)
 		TRACE_RET(chip, TRANSPORT_FAILED);
+#ifdef SUPPORT_SD_LOCK
+	if ((sd_card->sd_lock_status & SD_LOCK_1BIT_MODE) == 0) {
+		if (CHK_MMC_8BIT(sd_card))
+			bus_width = SD_BUS_WIDTH_8;
+		else if (CHK_SD(sd_card) || CHK_MMC_4BIT(sd_card))
+			bus_width = SD_BUS_WIDTH_4;
+		else
+			bus_width = SD_BUS_WIDTH_1;
+	} else {
+		bus_width = SD_BUS_WIDTH_4;
+	}
+	RTS51X_DEBUGP("bus_width = %d\n", bus_width);
+#else
 	bus_width = SD_BUS_WIDTH_4;
+#endif
 
 	if (data_len < 512) {
 		retval = ext_sd_send_cmd_get_rsp(chip, SET_BLOCKLEN, data_len,
@@ -376,7 +423,7 @@ int ext_rts51x_sd_execute_read_data(struct rts51x_chip *chip, unsigned int lun,
 	}
 
 	if (standby) {
-		retval = rts51x_sd_select_card(chip, 0);
+		retval = sd_select_card(chip, 0);
 		if (retval != STATUS_SUCCESS)
 			TRACE_GOTO(chip, SD_Execute_Read_Cmd_Failed);
 	}
@@ -448,7 +495,7 @@ int ext_rts51x_sd_execute_read_data(struct rts51x_chip *chip, unsigned int lun,
 		rts51x_add_cmd(chip, WRITE_REG_CMD, SD_CMD4, 0xFF, (u8) arg);
 		rts51x_add_cmd(chip, WRITE_REG_CMD, SD_CFG1, 0x03, bus_width);
 		rts51x_add_cmd(chip, WRITE_REG_CMD, SD_CFG2, 0xFF, rsp_type);
-		rts51x_trans_dma_enable(DMA_FROM_DEVICE, chip, data_len, DMA_512);
+		trans_dma_enable(DMA_FROM_DEVICE, chip, data_len, DMA_512);
 		rts51x_add_cmd(chip, WRITE_REG_CMD, SD_TRANSFER, 0xFF,
 			       SD_TM_AUTO_READ_2 | SD_TRANSFER_START);
 		rts51x_add_cmd(chip, CHECK_REG_CMD, SD_TRANSFER,
@@ -490,7 +537,7 @@ int ext_rts51x_sd_execute_read_data(struct rts51x_chip *chip, unsigned int lun,
 		TRACE_GOTO(chip, SD_Execute_Read_Cmd_Failed);
 
 	if (standby) {
-		retval = rts51x_sd_select_card(chip, 1);
+		retval = sd_select_card(chip, 1);
 		if (retval != STATUS_SUCCESS)
 			TRACE_GOTO(chip, SD_Execute_Read_Cmd_Failed);
 	}
@@ -531,18 +578,18 @@ int ext_rts51x_sd_execute_read_data(struct rts51x_chip *chip, unsigned int lun,
 
 SD_Execute_Read_Cmd_Failed:
 	sd_card->pre_cmd_err = 1;
-	rts51x_set_sense_type(chip, lun, SENSE_TYPE_NO_SENSE);
+	set_sense_type(chip, lun, SENSE_TYPE_NO_SENSE);
 	if (read_err)
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_UNRECOVER_READ_ERR);
-	rts51x_release_sd_card(chip);
-	rts51x_do_rts51x_reset_sd_card(chip);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_UNRECOVER_READ_ERR);
+	release_sd_card(chip);
+	do_reset_sd_card(chip);
 	if (!(chip->card_ready & SD_CARD))
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
 
 	TRACE_RET(chip, TRANSPORT_FAILED);
 }
 
-int ext_rts51x_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
+int ext_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
 			      u8 cmd_idx, u8 cmd12, u8 standby, u8 acmd,
 			      u8 rsp_code, u32 arg, u32 data_len,
 			      void *data_buf, unsigned int buf_len, int use_sg)
@@ -552,28 +599,57 @@ int ext_rts51x_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
 	int cmd13_checkbit = 0, write_err = 0;
 	u8 rsp_type;
 	u32 i;
+#ifdef SUPPORT_SD_LOCK
+	int lock_cmd_fail = 0;
+	u8 sd_lock_state = 0;
+	u8 lock_cmd_type = 0;
+#endif
 
 	if (sd_card->pre_cmd_err) {
 		sd_card->pre_cmd_err = 0;
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
-	retval = rts51x_sd_switch_clock(chip);
+	retval = sd_switch_clock(chip);
 	if (retval != STATUS_SUCCESS)
 		TRACE_RET(chip, STATUS_FAIL);
+#ifdef SUPPORT_SD_LOCK
+	if (cmd_idx == LOCK_UNLOCK) {
+		sd_lock_state = sd_card->sd_lock_status;
+		sd_lock_state &= SD_LOCKED;
+	}
+#endif
 
 	retval = get_rsp_type(rsp_code, &rsp_type, &rsp_len);
 	if (retval != STATUS_SUCCESS) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 	sd_card->last_rsp_type = rsp_type;
 
-	retval = rts51x_sd_switch_clock(chip);
+	retval = sd_switch_clock(chip);
 	if (retval != STATUS_SUCCESS)
 		TRACE_RET(chip, TRANSPORT_FAILED);
+#ifdef SUPPORT_SD_LOCK
+	if ((sd_card->sd_lock_status & SD_LOCK_1BIT_MODE) == 0) {
+		if (CHK_MMC_8BIT(sd_card)) {
+			retval =
+			    rts51x_write_register(chip, SD_CFG1, 0x03,
+						  SD_BUS_WIDTH_8);
+			if (retval != STATUS_SUCCESS)
+				TRACE_RET(chip, TRANSPORT_FAILED);
+		} else if (CHK_SD(sd_card) || CHK_MMC_4BIT(sd_card)) {
+			retval =
+			    rts51x_write_register(chip, SD_CFG1, 0x03,
+						  SD_BUS_WIDTH_4);
+			if (retval != STATUS_SUCCESS)
+				TRACE_RET(chip, TRANSPORT_FAILED);
+		}
+	}
+#else
 	rts51x_write_register(chip, SD_CFG1, 0x03, SD_BUS_WIDTH_4);
+#endif
 
 	if (data_len < 512) {
 		retval = ext_sd_send_cmd_get_rsp(chip, SET_BLOCKLEN, data_len,
@@ -583,7 +659,7 @@ int ext_rts51x_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
 	}
 
 	if (standby) {
-		retval = rts51x_sd_select_card(chip, 0);
+		retval = sd_select_card(chip, 0);
 		if (retval != STATUS_SUCCESS)
 			TRACE_GOTO(chip, SD_Execute_Write_Cmd_Failed);
 	}
@@ -616,6 +692,10 @@ int ext_rts51x_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
 		else
 			memcpy(buf, data_buf, data_len);
 
+#ifdef SUPPORT_SD_LOCK
+		if (cmd_idx == LOCK_UNLOCK)
+			lock_cmd_type = buf[0] & 0x0F;
+#endif
 
 		if (data_len > 256) {
 			rts51x_init_cmd(chip);
@@ -690,7 +770,7 @@ int ext_rts51x_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
 		rts51x_add_cmd(chip, WRITE_REG_CMD, SD_BLOCK_CNT_L,
 			       0xFF, (u8) ((data_len & 0x0001FE00) >> 9));
 
-		rts51x_trans_dma_enable(DMA_TO_DEVICE, chip, data_len, DMA_512);
+		trans_dma_enable(DMA_TO_DEVICE, chip, data_len, DMA_512);
 
 		rts51x_add_cmd(chip, WRITE_REG_CMD, SD_TRANSFER, 0xFF,
 			       SD_TM_AUTO_WRITE_3 | SD_TRANSFER_START);
@@ -722,9 +802,32 @@ int ext_rts51x_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
 				      SD_STOP | SD_CLR_ERR);
 		TRACE_GOTO(chip, SD_Execute_Write_Cmd_Failed);
 	}
+#ifdef SUPPORT_SD_LOCK
+	if (cmd_idx == LOCK_UNLOCK) {
+		if (lock_cmd_type == SD_ERASE) {
+			sd_card->sd_erase_status = SD_UNDER_ERASING;
+			scsi_set_resid(srb, 0);
+			return TRANSPORT_GOOD;
+		}
+
+		rts51x_init_cmd(chip);
+		rts51x_add_cmd(chip, CHECK_REG_CMD, SD_BUS_STAT, SD_DAT0_STATUS,
+			       SD_DAT0_STATUS);
+		retval = rts51x_send_cmd(chip, MODE_CR, 250);
+		if (retval != STATUS_SUCCESS)
+			TRACE_GOTO(chip, SD_Execute_Write_Cmd_Failed);
+		rts51x_get_rsp(chip, 1, 200); /* Don't care return value */
+
+		retval = sd_update_lock_status(chip);
+		if (retval != STATUS_SUCCESS) {
+			RTS51X_DEBUGP("Lock command fail!\n");
+			lock_cmd_fail = 1;
+		}
+	}
+#endif /* SUPPORT_SD_LOCK */
 
 	if (standby) {
-		retval = rts51x_sd_select_card(chip, 1);
+		retval = sd_select_card(chip, 1);
 		if (retval != STATUS_SUCCESS)
 			TRACE_GOTO(chip, SD_Execute_Write_Cmd_Failed);
 	}
@@ -762,23 +865,68 @@ int ext_rts51x_sd_execute_write_data(struct rts51x_chip *chip, unsigned int lun,
 	}
 	if (retval != STATUS_SUCCESS)
 		TRACE_GOTO(chip, SD_Execute_Write_Cmd_Failed);
+#ifdef SUPPORT_SD_LOCK
+	if (cmd_idx == LOCK_UNLOCK) {
+		if (!lock_cmd_fail) {
+			RTS51X_DEBUGP("lock_cmd_type = 0x%x\n",
+				       lock_cmd_type);
+			if (lock_cmd_type & SD_CLR_PWD)
+				sd_card->sd_lock_status &= ~SD_PWD_EXIST;
+			if (lock_cmd_type & SD_SET_PWD)
+				sd_card->sd_lock_status |= SD_PWD_EXIST;
+		}
+
+		RTS51X_DEBUGP("sd_lock_state = 0x%x,"
+				"sd_card->sd_lock_status = 0x%x\n",
+				sd_lock_state, sd_card->sd_lock_status);
+		if (sd_lock_state ^ (sd_card->sd_lock_status & SD_LOCKED)) {
+			sd_card->sd_lock_notify = 1;
+			if (sd_lock_state) {
+				if (sd_card->sd_lock_status &
+						SD_LOCK_1BIT_MODE) {
+					sd_card->sd_lock_status |=
+					    (SD_UNLOCK_POW_ON | SD_SDR_RST);
+					if (CHK_SD(sd_card)) {
+						retval = reset_sd(chip);
+						if (retval != STATUS_SUCCESS) {
+							sd_card->sd_lock_status
+							&= ~(SD_UNLOCK_POW_ON |
+							      SD_SDR_RST);
+							TRACE_GOTO(chip,
+								   SD_Execute_Write_Cmd_Failed);
+						}
+					}
+
+					sd_card->sd_lock_status &=
+					    ~(SD_UNLOCK_POW_ON | SD_SDR_RST);
+				}
+			}
+		}
+	}
+
+	if (lock_cmd_fail) {
+		scsi_set_resid(srb, 0);
+		set_sense_type(chip, lun, SENSE_TYPE_NO_SENSE);
+		TRACE_RET(chip, TRANSPORT_FAILED);
+	}
+#endif /* SUPPORT_SD_LOCK */
 
 	return TRANSPORT_GOOD;
 
 SD_Execute_Write_Cmd_Failed:
 	sd_card->pre_cmd_err = 1;
-	rts51x_set_sense_type(chip, lun, SENSE_TYPE_NO_SENSE);
+	set_sense_type(chip, lun, SENSE_TYPE_NO_SENSE);
 	if (write_err)
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_WRITE_ERR);
-	rts51x_release_sd_card(chip);
-	rts51x_do_rts51x_reset_sd_card(chip);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_WRITE_ERR);
+	release_sd_card(chip);
+	do_reset_sd_card(chip);
 	if (!(chip->card_ready & SD_CARD))
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
 
 	TRACE_RET(chip, TRANSPORT_FAILED);
 }
 
-int rts51x_sd_pass_thru_mode(struct scsi_cmnd *srb, struct rts51x_chip *chip)
+int sd_pass_thru_mode(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 {
 	struct sd_info *sd_card = &(chip->sd_card);
 	unsigned int lun = SCSI_LUN(srb);
@@ -808,7 +956,7 @@ int rts51x_sd_pass_thru_mode(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 
 	if (!(CHK_BIT(chip->lun_mc, lun))) {
 		SET_BIT(chip->lun_mc, lun);
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
@@ -816,7 +964,7 @@ int rts51x_sd_pass_thru_mode(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	    || (0x20 != srb->cmnd[4]) || (0x43 != srb->cmnd[5])
 	    || (0x61 != srb->cmnd[6]) || (0x72 != srb->cmnd[7])
 	    || (0x64 != srb->cmnd[8])) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
@@ -830,7 +978,7 @@ int rts51x_sd_pass_thru_mode(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 		break;
 
 	default:
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
@@ -844,13 +992,13 @@ int rts51x_sd_pass_thru_mode(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 
 	buf[15] = chip->max_lun;
 
-	len = min_t(unsigned, 18, scsi_bufflen(srb));
+	len = min(18, (int)scsi_bufflen(srb));
 	rts51x_set_xfer_buf(buf, len, srb);
 
 	return TRANSPORT_GOOD;
 }
 
-int rts51x_sd_execute_no_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
+int sd_execute_no_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 {
 	struct sd_info *sd_card = &(chip->sd_card);
 	unsigned int lun = SCSI_LUN(srb);
@@ -860,7 +1008,7 @@ int rts51x_sd_execute_no_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	u32 arg;
 
 	if (!sd_card->sd_pass_thru_en) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
@@ -876,13 +1024,13 @@ int rts51x_sd_execute_no_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	rsp_code = srb->cmnd[10];
 
 	retval =
-	    ext_rts51x_sd_execute_no_data(chip, lun, cmd_idx, standby, acmd, rsp_code,
+	    ext_sd_execute_no_data(chip, lun, cmd_idx, standby, acmd, rsp_code,
 				   arg);
 	scsi_set_resid(srb, 0);
 	return retval;
 }
 
-int rts51x_sd_execute_read_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
+int sd_execute_read_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 {
 	struct sd_info *sd_card = &(chip->sd_card);
 	int retval;
@@ -891,7 +1039,7 @@ int rts51x_sd_execute_read_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	u32 arg, data_len;
 
 	if (!sd_card->sd_pass_thru_en) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
@@ -912,7 +1060,7 @@ int rts51x_sd_execute_read_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	rsp_code = srb->cmnd[10];
 
 	retval =
-	    ext_rts51x_sd_execute_read_data(chip, lun, cmd_idx, send_cmd12, standby,
+	    ext_sd_execute_read_data(chip, lun, cmd_idx, send_cmd12, standby,
 				     acmd, rsp_code, arg, data_len,
 				     scsi_sglist(srb), scsi_bufflen(srb),
 				     scsi_sg_count(srb));
@@ -920,7 +1068,7 @@ int rts51x_sd_execute_read_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	return retval;
 }
 
-int rts51x_sd_execute_write_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
+int sd_execute_write_data(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 {
 	struct sd_info *sd_card = &(chip->sd_card);
 	int retval;
@@ -929,7 +1077,7 @@ int rts51x_sd_execute_write_data(struct scsi_cmnd *srb, struct rts51x_chip *chip
 	u32 data_len, arg;
 
 	if (!sd_card->sd_pass_thru_en) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
@@ -950,7 +1098,7 @@ int rts51x_sd_execute_write_data(struct scsi_cmnd *srb, struct rts51x_chip *chip
 	rsp_code = srb->cmnd[10];
 
 	retval =
-	    ext_rts51x_sd_execute_write_data(chip, lun, cmd_idx, send_cmd12, standby,
+	    ext_sd_execute_write_data(chip, lun, cmd_idx, send_cmd12, standby,
 				      acmd, rsp_code, arg, data_len,
 				      scsi_sglist(srb), scsi_bufflen(srb),
 				      scsi_sg_count(srb));
@@ -958,7 +1106,7 @@ int rts51x_sd_execute_write_data(struct scsi_cmnd *srb, struct rts51x_chip *chip
 	return retval;
 }
 
-int rts51x_sd_get_cmd_rsp(struct scsi_cmnd *srb, struct rts51x_chip *chip)
+int sd_get_cmd_rsp(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 {
 	struct sd_info *sd_card = &(chip->sd_card);
 	unsigned int lun = SCSI_LUN(srb);
@@ -966,20 +1114,20 @@ int rts51x_sd_get_cmd_rsp(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	u16 data_len;
 
 	if (!sd_card->sd_pass_thru_en) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
 	if (sd_card->pre_cmd_err) {
 		sd_card->pre_cmd_err = 0;
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
 	data_len = ((u16) srb->cmnd[7] << 8) | srb->cmnd[8];
 
 	if (sd_card->last_rsp_type == SD_RSP_TYPE_R0) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	} else if (sd_card->last_rsp_type == SD_RSP_TYPE_R2) {
 		count = (data_len < 17) ? data_len : 17;
@@ -997,20 +1145,20 @@ int rts51x_sd_get_cmd_rsp(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	return TRANSPORT_GOOD;
 }
 
-int rts51x_sd_hw_rst(struct scsi_cmnd *srb, struct rts51x_chip *chip)
+int sd_hw_rst(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 {
 	struct sd_info *sd_card = &(chip->sd_card);
 	unsigned int lun = SCSI_LUN(srb);
 	int retval;
 
 	if (!sd_card->sd_pass_thru_en) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
 	if (sd_card->pre_cmd_err) {
 		sd_card->pre_cmd_err = 0;
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_CHANGE);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
@@ -1018,34 +1166,46 @@ int rts51x_sd_hw_rst(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	    || (0x20 != srb->cmnd[4]) || (0x43 != srb->cmnd[5])
 	    || (0x61 != srb->cmnd[6]) || (0x72 != srb->cmnd[7])
 	    || (0x64 != srb->cmnd[8])) {
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 
 	switch (srb->cmnd[1] & 0x0F) {
 	case 0:
 		/* SD Card Power Off -> ON and Initialization */
-		retval = rts51x_reset_sd_card(chip);
+#ifdef SUPPORT_SD_LOCK
+		if (0x64 == srb->cmnd[9]) {
+			/* Command Mode */
+			sd_card->sd_lock_status |= SD_SDR_RST;
+		}
+#endif /* SUPPORT_SD_LOCK */
+		retval = reset_sd_card(chip);
 		if (retval != STATUS_SUCCESS) {
-			rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
+#ifdef SUPPORT_SD_LOCK
+			sd_card->sd_lock_status &= ~SD_SDR_RST;
+#endif
+			set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
 			sd_card->pre_cmd_err = 1;
 			TRACE_RET(chip, TRANSPORT_FAILED);
 		}
+#ifdef SUPPORT_SD_LOCK
+		sd_card->sd_lock_status &= ~SD_SDR_RST;
+#endif
 		break;
 
 	case 1:
 		/* reset CMD(CMD0) and Initialization
 		 * (without SD Card Power Off -> ON) */
-		retval = reset_sd(chip);
+		retval = soft_reset_sd_card(chip);
 		if (retval != STATUS_SUCCESS) {
-			rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
+			set_sense_type(chip, lun, SENSE_TYPE_MEDIA_NOT_PRESENT);
 			sd_card->pre_cmd_err = 1;
 			TRACE_RET(chip, TRANSPORT_FAILED);
 		}
 		break;
 
 	default:
-		rts51x_set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
+		set_sense_type(chip, lun, SENSE_TYPE_MEDIA_INVALID_CMD_FIELD);
 		TRACE_RET(chip, TRANSPORT_FAILED);
 	}
 

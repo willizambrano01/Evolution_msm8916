@@ -26,6 +26,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
+#include <linux/delay.h>
 #include <linux/log2.h>
 #include <linux/slab.h>
 
@@ -836,7 +837,7 @@ static ssize_t set_temp_min(struct device *dev,
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000) + 64;
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->temp_min[attr->index] = temp;
@@ -874,7 +875,7 @@ static ssize_t set_temp_max(struct device *dev,
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000) + 64;
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->temp_max[attr->index] = temp;
@@ -939,7 +940,7 @@ static ssize_t set_volt_max(struct device *dev,
 
 	temp *= 1000; /* convert mV to uV */
 	temp = DIV_ROUND_CLOSEST(temp, x);
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->volt_max[attr->index] = temp;
@@ -981,7 +982,7 @@ static ssize_t set_volt_min(struct device *dev,
 
 	temp *= 1000; /* convert mV to uV */
 	temp = DIV_ROUND_CLOSEST(temp, x);
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->volt_min[attr->index] = temp;
@@ -1071,7 +1072,7 @@ static ssize_t set_fan_min(struct device *dev,
 
 	temp = FAN_RPM_TO_PERIOD(temp);
 	temp >>= 8;
-	temp = clamp_val(temp, 1, 255);
+	temp = SENSORS_LIMIT(temp, 1, 255);
 
 	mutex_lock(&data->lock);
 	data->fan_min[attr->index] = temp;
@@ -1149,7 +1150,7 @@ static ssize_t set_pwm(struct device *dev, struct device_attribute *devattr,
 	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->pwm[attr->index] = temp;
@@ -1179,7 +1180,7 @@ static ssize_t set_pwm_max(struct device *dev,
 	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->pwm_max = temp;
@@ -1211,7 +1212,7 @@ static ssize_t set_pwm_min(struct device *dev,
 	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->pwm_min[attr->index] = temp;
@@ -1246,7 +1247,7 @@ static ssize_t set_pwm_hyst(struct device *dev,
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000);
-	temp = clamp_val(temp, 0, 15);
+	temp = SENSORS_LIMIT(temp, 0, 15);
 
 	/* package things up */
 	temp &= ADT7462_PWM_HYST_MASK;
@@ -1333,7 +1334,7 @@ static ssize_t set_pwm_tmin(struct device *dev,
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000) + 64;
-	temp = clamp_val(temp, 0, 255);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->pwm_tmin[attr->index] = temp;
@@ -1930,10 +1931,11 @@ static int adt7462_probe(struct i2c_client *client,
 	struct adt7462_data *data;
 	int err;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct adt7462_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct adt7462_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->lock);
@@ -1944,7 +1946,7 @@ static int adt7462_probe(struct i2c_client *client,
 	data->attrs.attrs = adt7462_attr;
 	err = sysfs_create_group(&client->dev.kobj, &data->attrs);
 	if (err)
-		return err;
+		goto exit_free;
 
 	data->hwmon_dev = hwmon_device_register(&client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -1956,6 +1958,9 @@ static int adt7462_probe(struct i2c_client *client,
 
 exit_remove:
 	sysfs_remove_group(&client->dev.kobj, &data->attrs);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -1965,6 +1970,7 @@ static int adt7462_remove(struct i2c_client *client)
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &data->attrs);
+	kfree(data);
 	return 0;
 }
 

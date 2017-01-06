@@ -16,7 +16,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-#include <linux/ctype.h>
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -693,6 +693,7 @@ static int fwu_wait_for_idle(int timeout_ms)
 static enum flash_area fwu_go_nogo(void)
 {
 	int retval = 0;
+	int index = 0;
 	int deviceFirmwareID;
 	int imageConfigID;
 	int deviceConfigID;
@@ -701,20 +702,11 @@ static enum flash_area fwu_go_nogo(void)
 	unsigned char config_id[4];
 	unsigned char pkg_id[4];
 	char *strptr;
-	char *imagePR;
+	char *imagePR = kzalloc(sizeof(MAX_FIRMWARE_ID_LEN), GFP_KERNEL);
 	enum flash_area flash_area = NONE;
 	struct i2c_client *i2c_client = fwu->rmi4_data->i2c_client;
 	struct f01_device_status f01_device_status;
 	struct image_content *img = &fwu->image_content;
-
-	imagePR = kzalloc(sizeof(MAX_FIRMWARE_ID_LEN), GFP_KERNEL);
-	if (!imagePR) {
-		dev_err(&i2c_client->dev,
-			"%s: Failed to alloc mem for image pointer\n",
-			__func__);
-		flash_area = NONE;
-		return flash_area;
-	}
 
 	if (fwu->force_update) {
 		flash_area = UI_FIRMWARE;
@@ -797,8 +789,6 @@ static enum flash_area fwu_go_nogo(void)
 			__func__);
 		imageFirmwareID = img->firmware_id;
 	} else {
-		size_t index, max_index;
-
 		if (!fwu->image_name) {
 			dev_info(&i2c_client->dev,
 				"%s: Unknown image file name\n",
@@ -815,11 +805,8 @@ static enum flash_area fwu_go_nogo(void)
 			goto exit;
 		}
 
-		max_index = min((ptrdiff_t)(MAX_FIRMWARE_ID_LEN - 1),
-				&fwu->image_name[NAME_BUFFER_SIZE] - strptr);
-		index = 0;
 		strptr += 2;
-		while (index < max_index && isdigit(strptr[index])) {
+		while (strptr[index] >= '0' && strptr[index] <= '9') {
 			imagePR[index] = strptr[index];
 			index++;
 		}
@@ -1406,13 +1393,7 @@ static int fwu_do_read_config(void)
 
 	kfree(fwu->read_config_buf);
 	fwu->read_config_buf = kzalloc(fwu->config_size, GFP_KERNEL);
-	if (!fwu->read_config_buf) {
-		dev_err(&fwu->rmi4_data->i2c_client->dev,
-			"%s: Failed to alloc memory for config buffer\n",
-			__func__);
-		retval = -ENOMEM;
-		goto exit;
-	}
+
 	block_offset[1] |= (fwu->config_area << 5);
 
 	retval = fwu->fn_ptr->write(fwu->rmi4_data,
@@ -1578,7 +1559,7 @@ static int fwu_start_reflash(void)
 		}
 
 		dev_dbg(&fwu->rmi4_data->i2c_client->dev,
-				"%s: Firmware image size = %zu\n",
+				"%s: Firmware image size = %d\n",
 				__func__, fw_entry->size);
 
 		fwu->data_buffer = fw_entry->data;
@@ -1689,7 +1670,7 @@ static ssize_t fwu_sysfs_show_image(struct file *data_file,
 
 	if (count < fwu->config_size) {
 		dev_err(&rmi4_data->i2c_client->dev,
-				"%s: Not enough space (%zu bytes) in buffer\n",
+				"%s: Not enough space (%d bytes) in buffer\n",
 				__func__, count);
 		return -EINVAL;
 	}
@@ -1924,19 +1905,11 @@ static ssize_t fwu_sysfs_config_area_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	int retval;
-	unsigned short config_area;
-	struct synaptics_rmi4_data *rmi4_data = fwu->rmi4_data;
+	unsigned long config_area;
 
-	retval = kstrtou16(buf, 10, &config_area);
+	retval = kstrtoul(buf, 10, &config_area);
 	if (retval)
 		return retval;
-
-	if (config_area < 0x00 || config_area > 0x03) {
-		dev_err(&rmi4_data->i2c_client->dev,
-			"%s: Incorrect value of config_area\n",
-			__func__);
-		return -EINVAL;
-	}
 
 	fwu->config_area = config_area;
 

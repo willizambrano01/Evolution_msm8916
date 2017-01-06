@@ -196,7 +196,7 @@ void uninit_wr_node(void)
 {
 	cmd_head.data = NULL;
 	unregister_i2c_func();
-	proc_remove(goodix_proc_entry);
+	remove_proc_entry(procname, NULL);
 }
 
 static u8 relation(u8 src, u8 dst, u8 rlt)

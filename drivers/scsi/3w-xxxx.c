@@ -889,7 +889,7 @@ static long tw_chrdev_ioctl(struct file *file, unsigned int cmd, unsigned long a
 	unsigned long flags;
 	unsigned int data_buffer_length = 0;
 	unsigned long data_buffer_length_adjusted = 0;
-	struct inode *inode = file_inode(file);
+	struct inode *inode = file->f_dentry->d_inode;
 	unsigned long *cpu_addr;
 	long timeout;
 	TW_New_Ioctl *tw_ioctl;
@@ -2277,12 +2277,11 @@ static struct scsi_host_template driver_template = {
 	.cmd_per_lun		= TW_MAX_CMDS_PER_LUN,	
 	.use_clustering		= ENABLE_CLUSTERING,
 	.shost_attrs		= tw_host_attrs,
-	.emulated		= 1,
-	.no_write_same		= 1,
+	.emulated		= 1
 };
 
 /* This function will probe and initialize a card */
-static int tw_probe(struct pci_dev *pdev, const struct pci_device_id *dev_id)
+static int __devinit tw_probe(struct pci_dev *pdev, const struct pci_device_id *dev_id)
 {
 	struct Scsi_Host *host = NULL;
 	TW_Device_Extension *tw_dev;
@@ -2423,7 +2422,7 @@ static void tw_remove(struct pci_dev *pdev)
 } /* End tw_remove() */
 
 /* PCI Devices supported by this driver */
-static struct pci_device_id tw_pci_tbl[] = {
+static struct pci_device_id tw_pci_tbl[] __devinitdata = {
 	{ PCI_VENDOR_ID_3WARE, PCI_DEVICE_ID_3WARE_1000,
 	  PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ PCI_VENDOR_ID_3WARE, PCI_DEVICE_ID_3WARE_7000,

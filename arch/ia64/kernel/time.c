@@ -19,7 +19,7 @@
 #include <linux/interrupt.h>
 #include <linux/efi.h>
 #include <linux/timex.h>
-#include <linux/timekeeper_internal.h>
+#include <linux/clocksource.h>
 #include <linux/platform_device.h>
 
 #include <asm/machvec.h>
@@ -77,35 +77,38 @@ static struct clocksource clocksource_itc = {
 };
 static struct clocksource *itc_clocksource;
 
-#ifdef CONFIG_VIRT_CPU_ACCOUNTING_NATIVE
+#ifdef CONFIG_VIRT_CPU_ACCOUNTING
 
 #include <linux/kernel_stat.h>
 
 extern cputime_t cycle_to_cputime(u64 cyc);
-
-void vtime_account_user(struct task_struct *tsk)
-{
-	cputime_t delta_utime;
-	struct thread_info *ti = task_thread_info(tsk);
-
-	if (ti->ac_utime) {
-		delta_utime = cycle_to_cputime(ti->ac_utime);
-		account_user_time(tsk, delta_utime, delta_utime);
-		ti->ac_utime = 0;
-	}
-}
 
 /*
  * Called from the context switch with interrupts disabled, to charge all
  * accumulated times to the current process, and to prepare accounting on
  * the next process.
  */
-void arch_vtime_task_switch(struct task_struct *prev)
+void ia64_account_on_switch(struct task_struct *prev, struct task_struct *next)
 {
 	struct thread_info *pi = task_thread_info(prev);
-	struct thread_info *ni = task_thread_info(current);
+	struct thread_info *ni = task_thread_info(next);
+	cputime_t delta_stime, delta_utime;
+	__u64 now;
 
-	pi->ac_stamp = ni->ac_stamp;
+	now = ia64_get_itc();
+
+	delta_stime = cycle_to_cputime(pi->ac_stime + (now - pi->ac_stamp));
+	if (idle_task(smp_processor_id()) != prev)
+		account_system_time(prev, 0, delta_stime, delta_stime);
+	else
+		account_idle_time(delta_stime);
+
+	if (pi->ac_utime) {
+		delta_utime = cycle_to_cputime(pi->ac_utime);
+		account_user_time(prev, delta_utime, delta_utime);
+	}
+
+	pi->ac_stamp = ni->ac_stamp = now;
 	ni->ac_stime = ni->ac_utime = 0;
 }
 
@@ -113,37 +116,47 @@ void arch_vtime_task_switch(struct task_struct *prev)
  * Account time for a transition between system, hard irq or soft irq state.
  * Note that this function is called with interrupts enabled.
  */
-static cputime_t vtime_delta(struct task_struct *tsk)
+void account_system_vtime(struct task_struct *tsk)
 {
 	struct thread_info *ti = task_thread_info(tsk);
+	unsigned long flags;
 	cputime_t delta_stime;
 	__u64 now;
 
-	WARN_ON_ONCE(!irqs_disabled());
+	local_irq_save(flags);
 
 	now = ia64_get_itc();
 
 	delta_stime = cycle_to_cputime(ti->ac_stime + (now - ti->ac_stamp));
+	if (irq_count() || idle_task(smp_processor_id()) != tsk)
+		account_system_time(tsk, 0, delta_stime, delta_stime);
+	else
+		account_idle_time(delta_stime);
 	ti->ac_stime = 0;
+
 	ti->ac_stamp = now;
 
-	return delta_stime;
+	local_irq_restore(flags);
 }
+EXPORT_SYMBOL_GPL(account_system_vtime);
 
-void vtime_account_system(struct task_struct *tsk)
+/*
+ * Called from the timer interrupt handler to charge accumulated user time
+ * to the current process.  Must be called with interrupts disabled.
+ */
+void account_process_tick(struct task_struct *p, int user_tick)
 {
-	cputime_t delta = vtime_delta(tsk);
+	struct thread_info *ti = task_thread_info(p);
+	cputime_t delta_utime;
 
-	account_system_time(tsk, 0, delta, delta);
+	if (ti->ac_utime) {
+		delta_utime = cycle_to_cputime(ti->ac_utime);
+		account_user_time(p, delta_utime, delta_utime);
+		ti->ac_utime = 0;
+	}
 }
-EXPORT_SYMBOL_GPL(vtime_account_system);
 
-void vtime_account_idle(struct task_struct *tsk)
-{
-	account_idle_time(vtime_delta(tsk));
-}
-
-#endif /* CONFIG_VIRT_CPU_ACCOUNTING_NATIVE */
+#endif /* CONFIG_VIRT_CPU_ACCOUNTING */
 
 static irqreturn_t
 timer_interrupt (int irq, void *dev_id)
@@ -244,7 +257,8 @@ static int __init nojitter_setup(char *str)
 __setup("nojitter", nojitter_setup);
 
 
-void ia64_init_itm(void)
+void __devinit
+ia64_init_itm (void)
 {
 	unsigned long platform_base_freq, itc_freq;
 	struct pal_freq_ratio itc_ratio, proc_ratio;
@@ -440,7 +454,7 @@ void update_vsyscall_tz(void)
 {
 }
 
-void update_vsyscall_old(struct timespec *wall, struct timespec *wtm,
+void update_vsyscall(struct timespec *wall, struct timespec *wtm,
 			struct clocksource *c, u32 mult)
 {
 	write_seqcount_begin(&fsyscall_gtod_data.seq);

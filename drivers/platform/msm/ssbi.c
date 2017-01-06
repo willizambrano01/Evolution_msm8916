@@ -1,7 +1,7 @@
 /* Copyright (c) 2009-2013, The Linux Foundation. All rights reserved.
  * Copyright (c) 2010, Google Inc.
  *
- * Original authors: The Linux Foundation
+ * Original authors: Code Aurora Forum
  *
  * Author: Dima Zavin <dima@android.com>
  *  - Largely rewritten from original to not be an i2c driver.
@@ -63,6 +63,7 @@
 #define SSBI_PA_RD_STATUS_TRANS_DENIED	(1 << 26)
 
 #define SSBI_TIMEOUT_US			100
+#define SSBI_WRITE_RETRIES     		100
 
 /* SSBI_FSM Read and Write commands for the FSM9xxx SSBI implementation */
 #define SSBI_FSM_CMD_REG_ADDR_SHFT  (0x08)
@@ -187,24 +188,28 @@ msm_ssbi_pa_transfer(struct msm_ssbi *ssbi, u32 cmd, u8 *data)
 {
 	u32 timeout = SSBI_TIMEOUT_US;
 	u32 rd_status = 0;
+	u32 write_timeout;
 
-	ssbi_writel(ssbi, cmd, SSBI_PA_CMD);
+	for (write_timeout = 0; write_timeout < SSBI_WRITE_RETRIES;
+	     write_timeout++) {
+		ssbi_writel(ssbi, cmd, SSBI_PA_CMD);
+		while (timeout--) {
+			rd_status = ssbi_readl(ssbi, SSBI_PA_RD_STATUS);
 
-	while (timeout--) {
-		rd_status = ssbi_readl(ssbi, SSBI_PA_RD_STATUS);
-
-		if (rd_status & SSBI_PA_RD_STATUS_TRANS_DENIED) {
-			dev_err(ssbi->dev, "%s: transaction denied (0x%x)\n",
+			if (rd_status & SSBI_PA_RD_STATUS_TRANS_DENIED) {
+				dev_err(ssbi->dev, "%s: transaction denied (0x%x)\n",
 					__func__, rd_status);
-			return -EPERM;
-		}
+				return -EPERM;
+			}
 
-		if (rd_status & SSBI_PA_RD_STATUS_TRANS_DONE) {
-			if (data)
-				*data = rd_status & 0xff;
-			return 0;
+			if (rd_status & SSBI_PA_RD_STATUS_TRANS_DONE) {
+				if (data)
+					*data = rd_status & 0xff;
+				return 0;
+			}
+			udelay(1);
 		}
-		udelay(1);
+		timeout = SSBI_TIMEOUT_US;
 	}
 
 	dev_err(ssbi->dev, "%s: timeout, status 0x%x\n", __func__, rd_status);
@@ -296,7 +301,7 @@ int msm_ssbi_write(struct device *dev, u16 addr, u8 *buf, int len)
 }
 EXPORT_SYMBOL(msm_ssbi_write);
 
-static int msm_ssbi_add_slave(struct msm_ssbi *ssbi,
+static int __devinit msm_ssbi_add_slave(struct msm_ssbi *ssbi,
 				const struct msm_ssbi_slave_info *slave)
 {
 	struct platform_device *slave_pdev;
@@ -333,7 +338,7 @@ err:
 	return ret;
 }
 
-static int msm_ssbi_probe(struct platform_device *pdev)
+static int __devinit msm_ssbi_probe(struct platform_device *pdev)
 {
 	const struct msm_ssbi_platform_data *pdata = pdev->dev.platform_data;
 	struct resource *mem_res;
@@ -404,7 +409,7 @@ err_get_mem_res:
 	return ret;
 }
 
-static int msm_ssbi_remove(struct platform_device *pdev)
+static int __devexit msm_ssbi_remove(struct platform_device *pdev)
 {
 	struct msm_ssbi *ssbi = platform_get_drvdata(pdev);
 
@@ -416,7 +421,7 @@ static int msm_ssbi_remove(struct platform_device *pdev)
 
 static struct platform_driver msm_ssbi_driver = {
 	.probe		= msm_ssbi_probe,
-	.remove		= msm_ssbi_remove,
+	.remove		= __exit_p(msm_ssbi_remove),
 	.driver		= {
 		.name	= "msm_ssbi",
 		.owner	= THIS_MODULE,

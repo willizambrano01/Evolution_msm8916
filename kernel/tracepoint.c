@@ -15,6 +15,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
+#define REALLY_WANT_TRACEPOINTS
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
@@ -112,8 +113,7 @@ tracepoint_entry_add_probe(struct tracepoint_entry *entry,
 	int nr_probes = 0;
 	struct tracepoint_func *old, *new;
 
-	if (WARN_ON(!probe))
-		return ERR_PTR(-EINVAL);
+	WARN_ON(!probe);
 
 	debug_print_probes(entry);
 	old = entry->funcs;
@@ -153,18 +153,13 @@ tracepoint_entry_remove_probe(struct tracepoint_entry *entry,
 
 	debug_print_probes(entry);
 	/* (N -> M), (N > 1, M >= 0) probes */
-	if (probe) {
-		for (nr_probes = 0; old[nr_probes].func; nr_probes++) {
-			if (old[nr_probes].func == probe &&
-			     old[nr_probes].data == data)
-				nr_del++;
-		}
+	for (nr_probes = 0; old[nr_probes].func; nr_probes++) {
+		if (!probe ||
+		    (old[nr_probes].func == probe &&
+		     old[nr_probes].data == data))
+			nr_del++;
 	}
 
-	/*
-	 * If probe is NULL, then nr_probes = nr_del = 0, and then the
-	 * entire entry will be removed.
-	 */
 	if (nr_probes - nr_del == 0) {
 		/* N -> 0, (N > 1) */
 		entry->funcs = NULL;
@@ -179,7 +174,8 @@ tracepoint_entry_remove_probe(struct tracepoint_entry *entry,
 		if (new == NULL)
 			return ERR_PTR(-ENOMEM);
 		for (i = 0; old[i].func; i++)
-			if (old[i].func != probe || old[i].data != data)
+			if (probe &&
+			    (old[i].func != probe || old[i].data != data))
 				new[j++] = old[i];
 		new[nr_probes - nr_del].func = NULL;
 		entry->refcount = nr_probes - nr_del;
@@ -197,11 +193,12 @@ tracepoint_entry_remove_probe(struct tracepoint_entry *entry,
 static struct tracepoint_entry *get_tracepoint(const char *name)
 {
 	struct hlist_head *head;
+	struct hlist_node *node;
 	struct tracepoint_entry *e;
 	u32 hash = jhash(name, strlen(name), 0);
 
 	head = &tracepoint_table[hash & (TRACEPOINT_TABLE_SIZE - 1)];
-	hlist_for_each_entry(e, head, hlist) {
+	hlist_for_each_entry(e, node, head, hlist) {
 		if (!strcmp(name, e->name))
 			return e;
 	}
@@ -215,12 +212,13 @@ static struct tracepoint_entry *get_tracepoint(const char *name)
 static struct tracepoint_entry *add_tracepoint(const char *name)
 {
 	struct hlist_head *head;
+	struct hlist_node *node;
 	struct tracepoint_entry *e;
 	size_t name_len = strlen(name) + 1;
 	u32 hash = jhash(name, name_len-1, 0);
 
 	head = &tracepoint_table[hash & (TRACEPOINT_TABLE_SIZE - 1)];
-	hlist_for_each_entry(e, head, hlist) {
+	hlist_for_each_entry(e, node, head, hlist) {
 		if (!strcmp(name, e->name)) {
 			printk(KERN_NOTICE
 				"tracepoint %s busy\n", name);
@@ -631,25 +629,17 @@ void tracepoint_iter_reset(struct tracepoint_iter *iter)
 EXPORT_SYMBOL_GPL(tracepoint_iter_reset);
 
 #ifdef CONFIG_MODULES
-bool trace_module_has_bad_taint(struct module *mod)
-{
-	return mod->taints & ~((1 << TAINT_OOT_MODULE) | (1 << TAINT_CRAP));
-}
-
 static int tracepoint_module_coming(struct module *mod)
 {
 	struct tp_module *tp_mod, *iter;
 	int ret = 0;
-
-	if (!mod->num_tracepoints)
-		return 0;
 
 	/*
 	 * We skip modules that taint the kernel, especially those with different
 	 * module headers (for forced load), to make sure we don't cause a crash.
 	 * Staging and out-of-tree GPL modules are fine.
 	 */
-	if (trace_module_has_bad_taint(mod))
+	if (mod->taints & ~((1 << TAINT_OOT_MODULE) | (1 << TAINT_CRAP)))
 		return 0;
 	mutex_lock(&tracepoints_mutex);
 	tp_mod = kmalloc(sizeof(struct tp_module), GFP_KERNEL);
@@ -687,9 +677,6 @@ static int tracepoint_module_going(struct module *mod)
 {
 	struct tp_module *pos;
 
-	if (!mod->num_tracepoints)
-		return 0;
-
 	mutex_lock(&tracepoints_mutex);
 	tracepoint_update_probe_range(mod->tracepoints_ptrs,
 		mod->tracepoints_ptrs + mod->num_tracepoints);
@@ -713,17 +700,23 @@ static int tracepoint_module_going(struct module *mod)
 int tracepoint_module_notify(struct notifier_block *self,
 			     unsigned long val, void *data)
 {
+#ifdef CONFIG_TRACEPOINTS
 	struct module *mod = data;
+#endif
 	int ret = 0;
 
 	switch (val) {
 	case MODULE_STATE_COMING:
+#ifdef CONFIG_TRACEPOINTS
 		ret = tracepoint_module_coming(mod);
+#endif
 		break;
 	case MODULE_STATE_LIVE:
 		break;
 	case MODULE_STATE_GOING:
+#ifdef CONFIG_TRACEPOINTS
 		ret = tracepoint_module_going(mod);
+#endif
 		break;
 	}
 	return ret;

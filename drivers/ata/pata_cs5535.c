@@ -207,10 +207,21 @@ static struct pci_driver cs5535_pci_driver = {
 #endif
 };
 
-module_pci_driver(cs5535_pci_driver);
+static int __init cs5535_init(void)
+{
+	return pci_register_driver(&cs5535_pci_driver);
+}
+
+static void __exit cs5535_exit(void)
+{
+	pci_unregister_driver(&cs5535_pci_driver);
+}
 
 MODULE_AUTHOR("Alan Cox, Jens Altmann, Wolfgan Zuleger, Alexander Kiausch");
 MODULE_DESCRIPTION("low-level driver for the NS/AMD 5535");
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(pci, cs5535);
 MODULE_VERSION(DRV_VERSION);
+
+module_init(cs5535_init);
+module_exit(cs5535_exit);

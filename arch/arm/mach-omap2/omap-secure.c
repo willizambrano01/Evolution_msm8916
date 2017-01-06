@@ -18,7 +18,7 @@
 #include <asm/cacheflush.h>
 #include <asm/memblock.h>
 
-#include "omap-secure.h"
+#include <mach/omap-secure.h>
 
 static phys_addr_t omap_secure_memblock_base;
 
@@ -60,8 +60,8 @@ int __init omap_secure_ram_reserve_memblock(void)
 {
 	u32 size = OMAP_SECURE_RAM_STORAGE;
 
-	size = ALIGN(size, SECTION_SIZE);
-	omap_secure_memblock_base = arm_memblock_steal(size, SECTION_SIZE);
+	size = ALIGN(size, SZ_1M);
+	omap_secure_memblock_base = arm_memblock_steal(size, SZ_1M);
 
 	return 0;
 }

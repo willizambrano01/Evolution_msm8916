@@ -18,7 +18,6 @@
 struct mmc_cid {
 	unsigned int		manfid;
 	char			prod_name[8];
-	unsigned char		prv;
 	unsigned int		serial;
 	unsigned short		oemid;
 	unsigned short		year;
@@ -98,21 +97,19 @@ struct mmc_ext_csd {
 	bool			hpi_en;			/* HPI enablebit */
 	bool			hpi;			/* HPI support bit */
 	unsigned int		hpi_cmd;		/* cmd used as HPI */
-	bool			ffu_capable;		/* FFU support */
-	bool			ffu_mode_op;		/* FFU mode operation */
 	bool			bkops;		/* background support bit */
 	bool			bkops_en;	/* background enable bit */
 	unsigned int            data_sector_size;       /* 512 bytes or 4KB */
 	unsigned int            data_tag_unit_size;     /* DATA TAG UNIT size */
 	unsigned int		boot_ro_lock;		/* ro lock support */
 	bool			boot_ro_lockable;
-	u8			raw_exception_status;	/* 54 */
+	u8			raw_exception_status;	/* 53 */
 	u8			raw_partition_support;	/* 160 */
 	u8			raw_rpmb_size_mult;	/* 168 */
 	u8			raw_erased_mem_count;	/* 181 */
 	u8			raw_ext_csd_structure;	/* 194 */
 	u8			raw_card_type;		/* 196 */
-	u8			raw_drive_strength;	/* 197 */
+	u8			raw_driver_strength;	/* 197 */
 	u8			out_of_int_time;	/* 198 */
 	u8			raw_s_a_timeout;		/* 217 */
 	u8			raw_hc_erase_gap_size;	/* 221 */
@@ -185,7 +182,6 @@ struct sd_switch_caps {
 #define SD_SET_CURRENT_LIMIT_400	1
 #define SD_SET_CURRENT_LIMIT_600	2
 #define SD_SET_CURRENT_LIMIT_800	3
-#define SD_SET_CURRENT_NO_CHANGE	(-1)
 
 #define SD_MAX_CURRENT_200	(1 << SD_SET_CURRENT_LIMIT_200)
 #define SD_MAX_CURRENT_400	(1 << SD_SET_CURRENT_LIMIT_400)
@@ -219,6 +215,20 @@ struct mmc_queue;
 
 #define SDIO_MAX_FUNCS		7
 
+enum mmc_packed_stop_reasons {
+	EXCEEDS_SEGMENTS = 0,
+	EXCEEDS_SECTORS,
+	WRONG_DATA_DIR,
+	FLUSH_OR_DISCARD,
+	EMPTY_QUEUE,
+	REL_WRITE,
+	THRESHOLD,
+	LARGE_SEC_ALIGN,
+	RANDOM,
+	FUA,
+	MAX_REASONS,
+};
+
 enum mmc_blk_status {
 	MMC_BLK_SUCCESS = 0,
 	MMC_BLK_PARTIAL,
@@ -233,20 +243,6 @@ enum mmc_blk_status {
 	MMC_BLK_URGENT_DONE,
 	MMC_BLK_NO_REQ_TO_STOP,
 	MMC_BLK_BUS_ERR,
-};
-
-enum mmc_packed_stop_reasons {
-	EXCEEDS_SEGMENTS = 0,
-	EXCEEDS_SECTORS,
-	WRONG_DATA_DIR,
-	FLUSH_OR_DISCARD,
-	EMPTY_QUEUE,
-	REL_WRITE,
-	THRESHOLD,
-	LARGE_SEC_ALIGN,
-	RANDOM,
-	FUA,
-	MAX_REASONS,
 };
 
 struct mmc_wr_pack_stats {
@@ -336,6 +332,10 @@ struct mmc_bkops_info {
 #define BKOPS_SIZE_PERCENTAGE_TO_QUEUE_DELAYED_WORK 1 /* 1% */
 };
 
+enum mmc_pon_type {
+	MMC_LONG_PON = 1,
+	MMC_SHRT_PON,
+};
 /*
  * MMC device
  */
@@ -376,11 +376,12 @@ struct mmc_card {
 #define MMC_QUIRK_LONG_READ_TIME (1<<9)		/* Data read time > CSD says */
 #define MMC_QUIRK_SEC_ERASE_TRIM_BROKEN (1<<10)	/* Skip secure for erase/trim */
 						/* byte mode */
-#define MMC_QUIRK_INAND_DATA_TIMEOUT  (1<<11)   /* For incorrect data timeout */
+#define MMC_QUIRK_INAND_DATA_TIMEOUT  (1<<8)    /* For incorrect data timeout */
 /* To avoid eMMC device getting broken permanently due to HPI feature */
-#define MMC_QUIRK_BROKEN_HPI (1 << 12)
+#define MMC_QUIRK_BROKEN_HPI (1 << 11)
  /* Skip data-timeout advertised by card */
-#define MMC_QUIRK_BROKEN_DATA_TIMEOUT	(1<<13)
+#define MMC_QUIRK_BROKEN_DATA_TIMEOUT	(1<<12)
+
 #define MMC_QUIRK_CACHE_DISABLE (1 << 14)       /* prevent cache enable */
 #define MMC_QUIRK_SLOW_HPI_RESPONSE (1 << 30)   /* wait between STOP and HPI */
 #define MMC_QUIRK_RETRY_FLUSH_TIMEOUT (1 << 31) /* requeue flush command timeouts */
@@ -423,15 +424,13 @@ struct mmc_card {
 	struct device_attribute rpm_attrib;
 	unsigned int		idle_timeout;
 	struct notifier_block        reboot_notify;
-	bool issue_long_pon;
+	enum mmc_pon_type pon_type;
 	u8 *cached_ext_csd;
 
 #define MMC_ERROR_FAILURE_RATIO	10		/* give up on cards with too many failures/successes */
 #define MMC_ERROR_FORGIVE_RATIO	10		/* forgive cards with enough successes/failures */
-#define MMC_ERROR_DROP_THRESHOLD 3		/* drop cards whose requests we have had to give up on */
 	unsigned int		failures;	/* number of recent request failures */
 	unsigned int		successes;	/* successful requests since 1st recorded failure  */
-	unsigned int		drop_score;	/* number of times we have given up on the request */
 #define MMC_ERROR_MAX_TIME_MS	10000LL		/* give up after 10 seconds of trouble */
 	ktime_t			failure_time;	/* time of the first failure */
 #define MMC_THROTTLE_BACK_THRESHOLD 2
@@ -453,7 +452,7 @@ static inline void mmc_part_add(struct mmc_card *card, unsigned int size,
 	card->nr_parts++;
 }
 
-static inline bool mmc_large_sector(struct mmc_card *card)
+static inline bool mmc_large_sec(struct mmc_card *card)
 {
 	return card->ext_csd.data_sector_size == 4096;
 }
@@ -495,7 +494,6 @@ struct mmc_fixup {
 #define CID_MANFID_MICRON	0x13
 #define CID_MANFID_SAMSUNG	0x15
 #define CID_MANFID_SANDISK2	0x45
-#define CID_MANFID_KINGSTON	0x70
 #define CID_MANFID_HYNIX	0x90
 #define CID_MANFID_MICRON2	0xfe
 
@@ -704,5 +702,5 @@ extern struct mmc_wr_pack_stats *mmc_blk_get_packed_statistics(
 			struct mmc_card *card);
 extern void mmc_blk_init_packed_statistics(struct mmc_card *card);
 extern void mmc_blk_disable_wr_packing(struct mmc_queue *mq);
-extern int mmc_send_long_pon(struct mmc_card *card);
+extern int mmc_send_pon(struct mmc_card *card);
 #endif /* LINUX_MMC_CARD_H */

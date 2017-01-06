@@ -655,8 +655,8 @@ static struct snd_soc_codec_driver soc_codec_dev_ak4671 = {
 	.num_dapm_routes = ARRAY_SIZE(ak4671_intercon),
 };
 
-static int ak4671_i2c_probe(struct i2c_client *client,
-			    const struct i2c_device_id *id)
+static int __devinit ak4671_i2c_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct ak4671_priv *ak4671;
 	int ret;
@@ -674,7 +674,7 @@ static int ak4671_i2c_probe(struct i2c_client *client,
 	return ret;
 }
 
-static int ak4671_i2c_remove(struct i2c_client *client)
+static __devexit int ak4671_i2c_remove(struct i2c_client *client)
 {
 	snd_soc_unregister_codec(&client->dev);
 	return 0;
@@ -692,11 +692,21 @@ static struct i2c_driver ak4671_i2c_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe = ak4671_i2c_probe,
-	.remove = ak4671_i2c_remove,
+	.remove = __devexit_p(ak4671_i2c_remove),
 	.id_table = ak4671_i2c_id,
 };
 
-module_i2c_driver(ak4671_i2c_driver);
+static int __init ak4671_modinit(void)
+{
+	return i2c_add_driver(&ak4671_i2c_driver);
+}
+module_init(ak4671_modinit);
+
+static void __exit ak4671_exit(void)
+{
+	i2c_del_driver(&ak4671_i2c_driver);
+}
+module_exit(ak4671_exit);
 
 MODULE_DESCRIPTION("ASoC AK4671 codec driver");
 MODULE_AUTHOR("Joonyoung Shim <jy0922.shim@samsung.com>");

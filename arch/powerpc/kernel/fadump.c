@@ -55,9 +55,9 @@ int crash_mem_ranges;
 int __init early_init_dt_scan_fw_dump(unsigned long node,
 			const char *uname, int depth, void *data)
 {
-	const __be32 *sections;
+	__be32 *sections;
 	int i, num_sections;
-	int size;
+	unsigned long size;
 	const int *token;
 
 	if (depth != 1 || strcmp(uname, "rtas") != 0)
@@ -289,7 +289,8 @@ int __init fadump_reserve_mem(void)
 		else
 			memory_limit = memblock_end_of_DRAM();
 		printk(KERN_INFO "Adjusted memory_limit for firmware-assisted"
-				" dump, now %#016llx\n", memory_limit);
+				" dump, now %#016llx\n",
+				(unsigned long long)memory_limit);
 	}
 	if (memory_limit)
 		memory_boundary = memory_limit;
@@ -1045,7 +1046,10 @@ static void fadump_release_memory(unsigned long begin, unsigned long end)
 		if (addr <= ra_end && ((addr + PAGE_SIZE) > ra_start))
 			continue;
 
-		free_reserved_page(pfn_to_page(addr >> PAGE_SHIFT));
+		ClearPageReserved(pfn_to_page(addr >> PAGE_SHIFT));
+		init_page_count(pfn_to_page(addr >> PAGE_SHIFT));
+		free_page((unsigned long)__va(addr));
+		totalram_pages++;
 	}
 }
 

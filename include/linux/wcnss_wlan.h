@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013,2015 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,12 +28,9 @@ enum wcnss_hw_type {
 };
 
 struct wcnss_wlan_config {
-	int	use_48mhz_xo;
-	int	is_pronto_vt;
+	int		use_48mhz_xo;
 	int	is_pronto_v3;
-	void __iomem	*msm_wcnss_base;
 	int	iris_id;
-	int	vbatt;
 };
 
 enum {
@@ -42,20 +39,6 @@ enum {
 	WCNSS_XO_INVALID,
 };
 
-enum {
-	WCNSS_WLAN_DATA2,
-	WCNSS_WLAN_DATA1,
-	WCNSS_WLAN_DATA0,
-	WCNSS_WLAN_SET,
-	WCNSS_WLAN_CLK,
-	WCNSS_WLAN_MAX_GPIO,
-};
-
-#define WCNSS_VBATT_THRESHOLD           3500000
-#define WCNSS_VBATT_GUARD               20000
-#define WCNSS_VBATT_HIGH                3700000
-#define WCNSS_VBATT_LOW                 3300000
-#define WCNSS_VBATT_INITIAL             3000000
 #define WCNSS_WLAN_IRQ_INVALID -1
 #define HAVE_WCNSS_SUSPEND_RESUME_NOTIFY 1
 #define HAVE_WCNSS_RESET_INTR 1
@@ -63,23 +46,11 @@ enum {
 #define HAVE_CBC_DONE 1
 #define HAVE_WCNSS_RX_BUFF_COUNT 1
 #define WLAN_MAC_ADDR_SIZE (6)
-#define WLAN_RF_REG_ADDR_START_OFFSET	0x3
-#define WLAN_RF_REG_DATA_START_OFFSET	0xf
-#define WLAN_RF_READ_REG_CMD		0x3
-#define WLAN_RF_WRITE_REG_CMD		0x2
-#define WLAN_RF_READ_CMD_MASK		0x3fff
-#define WLAN_RF_CLK_WAIT_CYCLE		2
-#define WLAN_RF_PREPARE_CMD_DATA	5
-#define WLAN_RF_READ_DATA		6
-#define WLAN_RF_DATA_LEN		3
-#define WLAN_RF_DATA0_SHIFT		0
-#define WLAN_RF_DATA1_SHIFT		1
-#define WLAN_RF_DATA2_SHIFT		2
 #define PRONTO_PMU_OFFSET       0x1004
 #define WCNSS_PMU_CFG_GC_BUS_MUX_SEL_TOP   BIT(5)
 
-struct device *wcnss_wlan_get_device(void);
 void wcnss_get_monotonic_boottime(struct timespec *ts);
+struct device *wcnss_wlan_get_device(void);
 struct resource *wcnss_wlan_get_memory_map(struct device *dev);
 int wcnss_wlan_get_dxe_tx_irq(struct device *dev);
 int wcnss_wlan_get_dxe_rx_irq(struct device *dev);
@@ -93,7 +64,6 @@ void wcnss_unregister_thermal_mitigation(
 				void (*tm_notify)(struct device *dev, int));
 struct platform_device *wcnss_get_platform_device(void);
 struct wcnss_wlan_config *wcnss_get_wlan_config(void);
-void wcnss_set_iris_xo_mode(int iris_xo_mode_set);
 int wcnss_wlan_power(struct device *dev,
 				struct wcnss_wlan_config *cfg,
 				enum wcnss_opcode opcode,
@@ -101,6 +71,7 @@ int wcnss_wlan_power(struct device *dev,
 int wcnss_req_power_on_lock(char *driver_name);
 int wcnss_free_power_on_lock(char *driver_name);
 unsigned int wcnss_get_serial_number(void);
+void wcnss_flush_delayed_boot_votes(void);
 int wcnss_get_wlan_mac_address(char mac_addr[WLAN_MAC_ADDR_SIZE]);
 void wcnss_allow_suspend(void);
 void wcnss_prevent_suspend(void);
@@ -124,7 +95,6 @@ int wcnss_wlan_iris_xo_mode(void);
 void wcnss_flush_work(struct work_struct *work);
 void wcnss_flush_delayed_work(struct delayed_work *dwork);
 int wcnss_get_iris_name(char *iris_version);
-void wcnss_en_wlan_led_trigger(void);
 void wcnss_dump_stack(struct task_struct *task);
 
 #ifdef CONFIG_WCNSS_REGISTER_DUMP_ON_BITE
@@ -139,6 +109,7 @@ int wcnss_set_wlan_unsafe_channel(
 int wcnss_get_wlan_unsafe_channel(
 				u16 *unsafe_ch_list, u16 buffer_size,
 				u16 *ch_count);
+const char *wcnss_get_nv_file_name(void);
 #define wcnss_wlan_get_drvdata(dev) dev_get_drvdata(dev)
 #define wcnss_wlan_set_drvdata(dev, data) dev_set_drvdata((dev), (data))
 /* WLAN driver uses these names */

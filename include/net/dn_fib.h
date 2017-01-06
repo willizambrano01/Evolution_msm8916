@@ -1,9 +1,24 @@
 #ifndef _NET_DN_FIB_H
 #define _NET_DN_FIB_H
 
-#include <linux/netlink.h>
-
-extern const struct nla_policy rtm_dn_policy[];
+/* WARNING: The ordering of these elements must match ordering
+ *          of RTA_* rtnetlink attribute numbers.
+ */
+struct dn_kern_rta {
+        void            *rta_dst;
+        void            *rta_src;
+        int             *rta_iif;
+        int             *rta_oif;
+        void            *rta_gw;
+        u32             *rta_priority;
+        void            *rta_prefsrc;
+        struct rtattr   *rta_mx;
+        struct rtattr   *rta_mp;
+        unsigned char   *rta_protoinfo;
+        u32             *rta_flow;
+        struct rta_cacheinfo *rta_ci;
+	struct rta_session *rta_sess;
+};
 
 struct dn_fib_res {
 	struct fib_rule *r;
@@ -16,7 +31,7 @@ struct dn_fib_res {
 
 struct dn_fib_nh {
 	struct net_device	*nh_dev;
-	unsigned int		nh_flags;
+	unsigned		nh_flags;
 	unsigned char		nh_scope;
 	int			nh_weight;
 	int			nh_power;
@@ -30,7 +45,7 @@ struct dn_fib_info {
 	int 			fib_treeref;
 	atomic_t		fib_clntref;
 	int			fib_dead;
-	unsigned int		fib_flags;
+	unsigned		fib_flags;
 	int			fib_protocol;
 	__le16			fib_prefsrc;
 	__u32			fib_priority;
@@ -78,10 +93,10 @@ struct dn_fib_table {
 	u32 n;
 
 	int (*insert)(struct dn_fib_table *t, struct rtmsg *r, 
-			struct nlattr *attrs[], struct nlmsghdr *n,
+			struct dn_kern_rta *rta, struct nlmsghdr *n, 
 			struct netlink_skb_parms *req);
 	int (*delete)(struct dn_fib_table *t, struct rtmsg *r,
-			struct nlattr *attrs[], struct nlmsghdr *n,
+			struct dn_kern_rta *rta, struct nlmsghdr *n,
 			struct netlink_skb_parms *req);
 	int (*lookup)(struct dn_fib_table *t, const struct flowidn *fld,
 			struct dn_fib_res *res);
@@ -101,12 +116,13 @@ extern void dn_fib_cleanup(void);
 extern int dn_fib_ioctl(struct socket *sock, unsigned int cmd, 
 			unsigned long arg);
 extern struct dn_fib_info *dn_fib_create_info(const struct rtmsg *r, 
-				struct nlattr *attrs[],
+				struct dn_kern_rta *rta, 
 				const struct nlmsghdr *nlh, int *errp);
 extern int dn_fib_semantic_match(int type, struct dn_fib_info *fi, 
 			const struct flowidn *fld,
 			struct dn_fib_res *res);
 extern void dn_fib_release_info(struct dn_fib_info *fi);
+extern __le16 dn_fib_get_attr16(struct rtattr *attr, int attrlen, int type);
 extern void dn_fib_flush(void);
 extern void dn_fib_select_multipath(const struct flowidn *fld,
 					struct dn_fib_res *res);
@@ -124,7 +140,7 @@ extern void dn_fib_table_cleanup(void);
  */
 extern void dn_fib_rules_init(void);
 extern void dn_fib_rules_cleanup(void);
-extern unsigned int dnet_addr_type(__le16 addr);
+extern unsigned dnet_addr_type(__le16 addr);
 extern int dn_fib_lookup(struct flowidn *fld, struct dn_fib_res *res);
 
 extern int dn_fib_dump(struct sk_buff *skb, struct netlink_callback *cb);

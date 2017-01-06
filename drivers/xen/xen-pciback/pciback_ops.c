@@ -136,6 +136,7 @@ int xen_pcibk_enable_msi(struct xen_pcibk_device *pdev,
 			 struct pci_dev *dev, struct xen_pci_op *op)
 {
 	struct xen_pcibk_dev_data *dev_data;
+	int otherend = pdev->xdev->otherend_id;
 	int status;
 
 	if (unlikely(verbose_request))
@@ -144,9 +145,8 @@ int xen_pcibk_enable_msi(struct xen_pcibk_device *pdev,
 	status = pci_enable_msi(dev);
 
 	if (status) {
-		pr_warn_ratelimited(DRV_NAME ": %s: error enabling MSI for guest %u: err %d\n",
-				    pci_name(dev), pdev->xdev->otherend_id,
-				    status);
+		printk(KERN_ERR "error enable msi for guest %x status %x\n",
+			otherend, status);
 		op->value = 0;
 		return XEN_PCI_ERR_op_failed;
 	}
@@ -224,10 +224,10 @@ int xen_pcibk_enable_msix(struct xen_pcibk_device *pdev,
 						pci_name(dev), i,
 						op->msix_entries[i].vector);
 		}
-	} else
-		pr_warn_ratelimited(DRV_NAME ": %s: error enabling MSI-X for guest %u: err %d!\n",
-				    pci_name(dev), pdev->xdev->otherend_id,
-				    result);
+	} else {
+		printk(KERN_WARNING DRV_NAME ": %s: failed to enable MSI-X: err %d!\n",
+			pci_name(dev), result);
+	}
 	kfree(entries);
 
 	op->value = result;
@@ -345,9 +345,9 @@ void xen_pcibk_do_op(struct work_struct *data)
 	notify_remote_via_irq(pdev->evtchn_irq);
 
 	/* Mark that we're done. */
-	smp_mb__before_atomic(); /* /after/ clearing PCIF_active */
+	smp_mb__before_clear_bit(); /* /after/ clearing PCIF_active */
 	clear_bit(_PDEVF_op_active, &pdev->flags);
-	smp_mb__after_atomic(); /* /before/ final check for work */
+	smp_mb__after_clear_bit(); /* /before/ final check for work */
 
 	/* Check to see if the driver domain tried to start another request in
 	 * between clearing _XEN_PCIF_active and clearing _PDEVF_op_active.

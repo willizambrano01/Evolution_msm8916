@@ -1,7 +1,7 @@
 /*
  *  IBM System z Huge TLB Page Support for Kernel.
  *
- *    Copyright IBM Corp. 2007
+ *    Copyright 2007 IBM Corp.
  *    Author(s): Gerald Schaefer <gerald.schaefer@de.ibm.com>
  */
 
@@ -39,7 +39,7 @@ int arch_prepare_hugepage(struct page *page)
 	if (!ptep)
 		return -ENOMEM;
 
-	pte_val(pte) = addr;
+	pte = mk_pte(page, PAGE_RW);
 	for (i = 0; i < PTRS_PER_PTE; i++) {
 		set_pte_at(&init_mm, addr + i * PAGE_SIZE, ptep + i, pte);
 		pte_val(pte) += PAGE_SIZE;
@@ -58,8 +58,6 @@ void arch_release_hugepage(struct page *page)
 	ptep = (pte_t *) page[1].index;
 	if (!ptep)
 		return;
-	clear_table((unsigned long *) ptep, _PAGE_TYPE_EMPTY,
-		    PTRS_PER_PTE * sizeof(pte_t));
 	page_table_free(&init_mm, (unsigned long *) ptep);
 	page[1].index = 0;
 }
@@ -115,11 +113,6 @@ int pmd_huge(pmd_t pmd)
 int pud_huge(pud_t pud)
 {
 	return 0;
-}
-
-int pmd_huge_support(void)
-{
-	return 1;
 }
 
 struct page *follow_huge_pmd(struct mm_struct *mm, unsigned long address,

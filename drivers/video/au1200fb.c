@@ -1233,6 +1233,7 @@ static int au1200fb_fb_blank(int blank_mode, struct fb_info *fbi)
  * method mainly to allow the use of the TLB streaming flag (CCA=6)
  */
 static int au1200fb_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
+
 {
 	struct au1200fb_device *fbdev = info->par;
 
@@ -1648,7 +1649,7 @@ out:
 }
 
 /* AU1200 LCD controller device driver */
-static int au1200fb_drv_probe(struct platform_device *dev)
+static int __devinit au1200fb_drv_probe(struct platform_device *dev)
 {
 	struct au1200fb_device *fbdev;
 	struct au1200fb_platdata *pd;
@@ -1773,7 +1774,7 @@ failed:
 	return ret;
 }
 
-static int au1200fb_drv_remove(struct platform_device *dev)
+static int __devexit au1200fb_drv_remove(struct platform_device *dev)
 {
 	struct au1200fb_platdata *pd = platform_get_drvdata(dev);
 	struct au1200fb_device *fbdev;
@@ -1851,7 +1852,7 @@ static struct platform_driver au1200fb_driver = {
 		.pm	= AU1200FB_PMOPS,
 	},
 	.probe		= au1200fb_drv_probe,
-	.remove		= au1200fb_drv_remove,
+	.remove		= __devexit_p(au1200fb_drv_remove),
 };
 
 /*-------------------------------------------------------------------------*/

@@ -66,13 +66,20 @@ static void __init socrates_pic_init(void)
  */
 static void __init socrates_setup_arch(void)
 {
+#ifdef CONFIG_PCI
+	struct device_node *np;
+#endif
+
 	if (ppc_md.progress)
 		ppc_md.progress("socrates_setup_arch()", 0);
 
-	fsl_pci_assign_primary();
+#ifdef CONFIG_PCI
+	for_each_compatible_node(np, "pci", "fsl,mpc8540-pci")
+		fsl_add_bridge(np, 1);
+#endif
 }
 
-machine_arch_initcall(socrates, mpc85xx_common_publish_devices);
+machine_device_initcall(socrates, mpc85xx_common_publish_devices);
 
 /*
  * Called very early, device-tree isn't unflattened

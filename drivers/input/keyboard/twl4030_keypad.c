@@ -271,7 +271,7 @@ static irqreturn_t do_kp_irq(int irq, void *_kp)
 	return IRQ_HANDLED;
 }
 
-static int twl4030_kp_program(struct twl4030_keypad *kp)
+static int __devinit twl4030_kp_program(struct twl4030_keypad *kp)
 {
 	u8 reg;
 	int i;
@@ -328,7 +328,7 @@ static int twl4030_kp_program(struct twl4030_keypad *kp)
  * Registers keypad device with input subsystem
  * and configures TWL4030 keypad registers
  */
-static int twl4030_kp_probe(struct platform_device *pdev)
+static int __devinit twl4030_kp_probe(struct platform_device *pdev)
 {
 	struct twl4030_keypad_data *pdata = pdev->dev.platform_data;
 	const struct matrix_keymap_data *keymap_data;
@@ -361,6 +361,14 @@ static int twl4030_kp_probe(struct platform_device *pdev)
 	kp->irq = platform_get_irq(pdev, 0);
 
 	/* setup input device */
+	__set_bit(EV_KEY, input->evbit);
+
+	/* Enable auto repeat feature of Linux input subsystem */
+	if (pdata->rep)
+		__set_bit(EV_REP, input->evbit);
+
+	input_set_capability(input, EV_MSC, MSC_SCAN);
+
 	input->name		= "TWL4030 Keypad";
 	input->phys		= "twl4030_keypad/input0";
 	input->dev.parent	= &pdev->dev;
@@ -370,19 +378,12 @@ static int twl4030_kp_probe(struct platform_device *pdev)
 	input->id.product	= 0x0001;
 	input->id.version	= 0x0003;
 
-	error = matrix_keypad_build_keymap(keymap_data, NULL,
-					   TWL4030_MAX_ROWS,
-					   1 << TWL4030_ROW_SHIFT,
-					   kp->keymap, input);
-	if (error) {
-		dev_err(kp->dbg_dev, "Failed to build keymap\n");
-		goto err1;
-	}
+	input->keycode		= kp->keymap;
+	input->keycodesize	= sizeof(kp->keymap[0]);
+	input->keycodemax	= ARRAY_SIZE(kp->keymap);
 
-	input_set_capability(input, EV_MSC, MSC_SCAN);
-	/* Enable auto repeat feature of Linux input subsystem */
-	if (pdata->rep)
-		__set_bit(EV_REP, input->evbit);
+	matrix_keypad_build_keymap(keymap_data, TWL4030_ROW_SHIFT,
+				   input->keycode, input->keybit);
 
 	error = input_register_device(input);
 	if (error) {
@@ -432,7 +433,7 @@ err1:
 	return error;
 }
 
-static int twl4030_kp_remove(struct platform_device *pdev)
+static int __devexit twl4030_kp_remove(struct platform_device *pdev)
 {
 	struct twl4030_keypad *kp = platform_get_drvdata(pdev);
 
@@ -452,7 +453,7 @@ static int twl4030_kp_remove(struct platform_device *pdev)
 
 static struct platform_driver twl4030_kp_driver = {
 	.probe		= twl4030_kp_probe,
-	.remove		= twl4030_kp_remove,
+	.remove		= __devexit_p(twl4030_kp_remove),
 	.driver		= {
 		.name	= "twl4030_keypad",
 		.owner	= THIS_MODULE,

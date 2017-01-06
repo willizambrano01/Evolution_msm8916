@@ -40,11 +40,11 @@
 #include <asm/mach/irq.h>
 
 #include <mach/pxa25x.h>
-#include <linux/platform_data/mmc-pxamci.h>
+#include <mach/mmc.h>
 #include <mach/udc.h>
-#include <linux/platform_data/irda-pxaficp.h>
+#include <mach/irda.h>
 #include <mach/poodle.h>
-#include <linux/platform_data/video-pxafb.h>
+#include <mach/pxafb.h>
 
 #include <asm/hardware/scoop.h>
 #include <asm/hardware/locomo.h>
@@ -422,7 +422,7 @@ static struct i2c_board_info __initdata poodle_i2c_devices[] = {
 
 static void poodle_poweroff(void)
 {
-	pxa_restart(REBOOT_HARD, NULL);
+	pxa_restart('h', NULL);
 }
 
 static void __init poodle_init(void)
@@ -469,7 +469,7 @@ MACHINE_START(POODLE, "SHARP Poodle")
 	.nr_irqs	= POODLE_NR_IRQS,	/* 4 for LoCoMo */
 	.init_irq	= pxa25x_init_irq,
 	.handle_irq	= pxa25x_handle_irq,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.init_machine	= poodle_init,
 	.restart	= pxa_restart,
 MACHINE_END

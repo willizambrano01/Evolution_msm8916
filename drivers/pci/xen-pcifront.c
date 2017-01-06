@@ -21,7 +21,6 @@
 #include <linux/bitops.h>
 #include <linux/time.h>
 
-#include <asm/xen/swiotlb-xen.h>
 #define INVALID_GRANT_REF (0)
 #define INVALID_EVTCHN    (-1)
 
@@ -237,7 +236,7 @@ static int pcifront_bus_write(struct pci_bus *bus, unsigned int devfn,
 	return errno_to_pcibios_err(do_pci_op(pdev, &op));
 }
 
-static struct pci_ops pcifront_bus_ops = {
+struct pci_ops pcifront_bus_ops = {
 	.read = pcifront_bus_read,
 	.write = pcifront_bus_write,
 };
@@ -412,7 +411,7 @@ static int pcifront_claim_resource(struct pci_dev *dev, void *data)
 	return 0;
 }
 
-static int pcifront_scan_bus(struct pcifront_device *pdev,
+static int __devinit pcifront_scan_bus(struct pcifront_device *pdev,
 				unsigned int domain, unsigned int bus,
 				struct pci_bus *b)
 {
@@ -441,7 +440,7 @@ static int pcifront_scan_bus(struct pcifront_device *pdev,
 	return 0;
 }
 
-static int pcifront_scan_root(struct pcifront_device *pdev,
+static int __devinit pcifront_scan_root(struct pcifront_device *pdev,
 				 unsigned int domain, unsigned int bus)
 {
 	struct pci_bus *b;
@@ -503,7 +502,7 @@ err_out:
 	return err;
 }
 
-static int pcifront_rescan_root(struct pcifront_device *pdev,
+static int __devinit pcifront_rescan_root(struct pcifront_device *pdev,
 				   unsigned int domain, unsigned int bus)
 {
 	int err;
@@ -655,9 +654,9 @@ static void pcifront_do_aer(struct work_struct *data)
 	notify_remote_via_evtchn(pdev->evtchn);
 
 	/*in case of we lost an aer request in four lines time_window*/
-	smp_mb__before_atomic();
+	smp_mb__before_clear_bit();
 	clear_bit(_PDEVB_op_active, &pdev->flags);
-	smp_mb__after_atomic();
+	smp_mb__after_clear_bit();
 
 	schedule_pcifront_aer_op(pdev);
 
@@ -669,7 +668,7 @@ static irqreturn_t pcifront_handler_aer(int irq, void *dev)
 	schedule_pcifront_aer_op(pdev);
 	return IRQ_HANDLED;
 }
-static int pcifront_connect_and_init_dma(struct pcifront_device *pdev)
+static int pcifront_connect(struct pcifront_device *pdev)
 {
 	int err = 0;
 
@@ -678,16 +677,13 @@ static int pcifront_connect_and_init_dma(struct pcifront_device *pdev)
 	if (!pcifront_dev) {
 		dev_info(&pdev->xdev->dev, "Installing PCI frontend\n");
 		pcifront_dev = pdev;
-	} else
+	} else {
+		dev_err(&pdev->xdev->dev, "PCI frontend already installed!\n");
 		err = -EEXIST;
+	}
 
 	spin_unlock(&pcifront_dev_lock);
 
-	if (!err && !swiotlb_nr_tbl()) {
-		err = pci_xen_swiotlb_init_late();
-		if (err)
-			dev_err(&pdev->xdev->dev, "Could not setup SWIOTLB!\n");
-	}
 	return err;
 }
 
@@ -833,7 +829,7 @@ out:
 	return err;
 }
 
-static int pcifront_try_connect(struct pcifront_device *pdev)
+static int __devinit pcifront_try_connect(struct pcifront_device *pdev)
 {
 	int err = -EFAULT;
 	int i, num_roots, len;
@@ -846,10 +842,10 @@ static int pcifront_try_connect(struct pcifront_device *pdev)
 	    XenbusStateInitialised)
 		goto out;
 
-	err = pcifront_connect_and_init_dma(pdev);
-	if (err && err != -EEXIST) {
+	err = pcifront_connect(pdev);
+	if (err) {
 		xenbus_dev_fatal(pdev->xdev, err,
-				 "Error setting up PCI Frontend");
+				 "Error connecting PCI Frontend");
 		goto out;
 	}
 
@@ -923,7 +919,7 @@ out:
 	return err;
 }
 
-static int pcifront_attach_devices(struct pcifront_device *pdev)
+static int __devinit pcifront_attach_devices(struct pcifront_device *pdev)
 {
 	int err = -EFAULT;
 	int i, num_roots, len;
@@ -986,6 +982,7 @@ static int pcifront_detach_devices(struct pcifront_device *pdev)
 	int err = 0;
 	int i, num_devs;
 	unsigned int domain, bus, slot, func;
+	struct pci_bus *pci_bus;
 	struct pci_dev *pci_dev;
 	char str[64];
 
@@ -1035,8 +1032,13 @@ static int pcifront_detach_devices(struct pcifront_device *pdev)
 			goto out;
 		}
 
-		pci_dev = pci_get_domain_bus_and_slot(domain, bus,
-				PCI_DEVFN(slot, func));
+		pci_bus = pci_find_bus(domain, bus);
+		if (!pci_bus) {
+			dev_dbg(&pdev->xdev->dev, "Cannot get bus %04x:%02x\n",
+				domain, bus);
+			continue;
+		}
+		pci_dev = pci_get_slot(pci_bus, PCI_DEVFN(slot, func));
 		if (!pci_dev) {
 			dev_dbg(&pdev->xdev->dev,
 				"Cannot get PCI device %04x:%02x:%02x.%d\n",
@@ -1067,16 +1069,13 @@ static void __init_refok pcifront_backend_changed(struct xenbus_device *xdev,
 	case XenbusStateInitialising:
 	case XenbusStateInitWait:
 	case XenbusStateInitialised:
+	case XenbusStateClosed:
 		break;
 
 	case XenbusStateConnected:
 		pcifront_try_connect(pdev);
 		break;
 
-	case XenbusStateClosed:
-		if (xdev->state == XenbusStateClosed)
-			break;
-		/* Missed the backend's CLOSING state -- fallthrough */
 	case XenbusStateClosing:
 		dev_warn(&xdev->dev, "backend going away!\n");
 		pcifront_try_disconnect(pdev);

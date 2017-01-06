@@ -1,3 +1,4 @@
+
 /******************************************************************************
  *
  * Module Name: exmisc - ACPI AML (p-code) execution - specific opcodes
@@ -5,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2013, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -143,8 +144,8 @@ acpi_ex_get_object_reference(union acpi_operand_object *obj_desc,
  *
  * FUNCTION:    acpi_ex_concat_template
  *
- * PARAMETERS:  operand0            - First source object
- *              operand1            - Second source object
+ * PARAMETERS:  Operand0            - First source object
+ *              Operand1            - Second source object
  *              actual_return_desc  - Where to place the return object
  *              walk_state          - Current walk state
  *
@@ -228,8 +229,8 @@ acpi_ex_concat_template(union acpi_operand_object *operand0,
  *
  * FUNCTION:    acpi_ex_do_concatenate
  *
- * PARAMETERS:  operand0            - First source object
- *              operand1            - Second source object
+ * PARAMETERS:  Operand0            - First source object
+ *              Operand1            - Second source object
  *              actual_return_desc  - Where to place the return object
  *              walk_state          - Current walk state
  *
@@ -253,7 +254,7 @@ acpi_ex_do_concatenate(union acpi_operand_object *operand0,
 	ACPI_FUNCTION_TRACE(ex_do_concatenate);
 
 	/*
-	 * Convert the second operand if necessary. The first operand
+	 * Convert the second operand if necessary.  The first operand
 	 * determines the type of the second operand, (See the Data Types
 	 * section of the ACPI specification.)  Both object types are
 	 * guaranteed to be either Integer/String/Buffer by the operand
@@ -396,9 +397,9 @@ acpi_ex_do_concatenate(union acpi_operand_object *operand0,
  *
  * FUNCTION:    acpi_ex_do_math_op
  *
- * PARAMETERS:  opcode              - AML opcode
- *              integer0            - Integer operand #0
- *              integer1            - Integer operand #1
+ * PARAMETERS:  Opcode              - AML opcode
+ *              Integer0            - Integer operand #0
+ *              Integer1            - Integer operand #1
  *
  * RETURN:      Integer result of the operation
  *
@@ -478,9 +479,9 @@ u64 acpi_ex_do_math_op(u16 opcode, u64 integer0, u64 integer1)
  *
  * FUNCTION:    acpi_ex_do_logical_numeric_op
  *
- * PARAMETERS:  opcode              - AML opcode
- *              integer0            - Integer operand #0
- *              integer1            - Integer operand #1
+ * PARAMETERS:  Opcode              - AML opcode
+ *              Integer0            - Integer operand #0
+ *              Integer1            - Integer operand #1
  *              logical_result      - TRUE/FALSE result of the operation
  *
  * RETURN:      Status
@@ -533,9 +534,9 @@ acpi_ex_do_logical_numeric_op(u16 opcode,
  *
  * FUNCTION:    acpi_ex_do_logical_op
  *
- * PARAMETERS:  opcode              - AML opcode
- *              operand0            - operand #0
- *              operand1            - operand #1
+ * PARAMETERS:  Opcode              - AML opcode
+ *              Operand0            - operand #0
+ *              Operand1            - operand #1
  *              logical_result      - TRUE/FALSE result of the operation
  *
  * RETURN:      Status
@@ -572,7 +573,7 @@ acpi_ex_do_logical_op(u16 opcode,
 	ACPI_FUNCTION_TRACE(ex_do_logical_op);
 
 	/*
-	 * Convert the second operand if necessary. The first operand
+	 * Convert the second operand if necessary.  The first operand
 	 * determines the type of the second operand, (See the Data Types
 	 * section of the ACPI 3.0+ specification.)  Both object types are
 	 * guaranteed to be either Integer/String/Buffer by the operand

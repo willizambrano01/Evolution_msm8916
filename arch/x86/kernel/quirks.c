@@ -8,7 +8,7 @@
 
 #if defined(CONFIG_X86_IO_APIC) && defined(CONFIG_SMP) && defined(CONFIG_PCI)
 
-static void quirk_intel_irqbalance(struct pci_dev *dev)
+static void __devinit quirk_intel_irqbalance(struct pci_dev *dev)
 {
 	u8 config;
 	u16 word;
@@ -354,22 +354,18 @@ static void ati_force_hpet_resume(void)
 
 static u32 ati_ixp4x0_rev(struct pci_dev *dev)
 {
-	int err = 0;
-	u32 d = 0;
-	u8  b = 0;
+	u32 d;
+	u8  b;
 
-	err = pci_read_config_byte(dev, 0xac, &b);
+	pci_read_config_byte(dev, 0xac, &b);
 	b &= ~(1<<5);
-	err |= pci_write_config_byte(dev, 0xac, b);
-	err |= pci_read_config_dword(dev, 0x70, &d);
+	pci_write_config_byte(dev, 0xac, b);
+	pci_read_config_dword(dev, 0x70, &d);
 	d |= 1<<8;
-	err |= pci_write_config_dword(dev, 0x70, d);
-	err |= pci_read_config_dword(dev, 0x8, &d);
+	pci_write_config_dword(dev, 0x70, d);
+	pci_read_config_dword(dev, 0x8, &d);
 	d &= 0xff;
 	dev_printk(KERN_DEBUG, &dev->dev, "SB4X0 revision 0x%x\n", d);
-
-	WARN_ON_ONCE(err);
-
 	return d;
 }
 
@@ -516,7 +512,7 @@ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_ATI, PCI_DEVICE_ID_ATI_SBX00_SMBUS,
 
 #if defined(CONFIG_PCI) && defined(CONFIG_NUMA)
 /* Set correct numa_node information for AMD NB functions */
-static void quirk_amd_nb_node(struct pci_dev *dev)
+static void __init quirk_amd_nb_node(struct pci_dev *dev)
 {
 	struct pci_dev *nb_ht;
 	unsigned int devfn;
@@ -529,7 +525,7 @@ static void quirk_amd_nb_node(struct pci_dev *dev)
 		return;
 
 	pci_read_config_dword(nb_ht, 0x60, &val);
-	node = pcibus_to_node(dev->bus) | (val & 7);
+	node = val & 7;
 	/*
 	 * Some hardware may return an invalid node ID,
 	 * so check it first:

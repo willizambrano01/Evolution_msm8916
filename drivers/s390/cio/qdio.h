@@ -1,5 +1,7 @@
 /*
- * Copyright IBM Corp. 2000, 2009
+ * linux/drivers/s390/cio/qdio.h
+ *
+ * Copyright 2000,2009 IBM Corp.
  * Author(s): Utz Bacher <utz.bacher@de.ibm.com>
  *	      Jan Glauber <jang@linux.vnet.ibm.com>
  */

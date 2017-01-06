@@ -169,18 +169,15 @@ void ecryptfs_put_lower_file(struct inode *inode)
 	}
 }
 
-enum {
-	ecryptfs_opt_sig, ecryptfs_opt_ecryptfs_sig,
-	ecryptfs_opt_cipher, ecryptfs_opt_ecryptfs_cipher,
-	ecryptfs_opt_ecryptfs_key_bytes,
-	ecryptfs_opt_passthrough, ecryptfs_opt_xattr_metadata,
-	ecryptfs_opt_encrypted_view, ecryptfs_opt_fnek_sig,
-	ecryptfs_opt_fn_cipher, ecryptfs_opt_fn_cipher_key_bytes,
-	ecryptfs_opt_unlink_sigs, ecryptfs_opt_mount_auth_tok_only,
-	ecryptfs_opt_check_dev_ruid,
-	ecryptfs_opt_no_new_encrypted,
-	ecryptfs_opt_err
-};
+enum { ecryptfs_opt_sig, ecryptfs_opt_ecryptfs_sig,
+       ecryptfs_opt_cipher, ecryptfs_opt_ecryptfs_cipher,
+       ecryptfs_opt_ecryptfs_key_bytes,
+       ecryptfs_opt_passthrough, ecryptfs_opt_xattr_metadata,
+       ecryptfs_opt_encrypted_view, ecryptfs_opt_fnek_sig,
+       ecryptfs_opt_fn_cipher, ecryptfs_opt_fn_cipher_key_bytes,
+       ecryptfs_opt_unlink_sigs, ecryptfs_opt_mount_auth_tok_only,
+       ecryptfs_opt_check_dev_ruid,
+       ecryptfs_opt_err };
 
 static const match_table_t tokens = {
 	{ecryptfs_opt_sig, "sig=%s"},
@@ -197,7 +194,6 @@ static const match_table_t tokens = {
 	{ecryptfs_opt_unlink_sigs, "ecryptfs_unlink_sigs"},
 	{ecryptfs_opt_mount_auth_tok_only, "ecryptfs_mount_auth_tok_only"},
 	{ecryptfs_opt_check_dev_ruid, "ecryptfs_check_dev_ruid"},
-	{ecryptfs_opt_no_new_encrypted, "no_new_encrypted"},
 	{ecryptfs_opt_err, NULL}
 };
 
@@ -392,9 +388,6 @@ static int ecryptfs_parse_options(struct ecryptfs_sb_info *sbi, char *options,
 			mount_crypt_stat->flags |=
 				ECRYPTFS_GLOBAL_MOUNT_AUTH_TOK_ONLY;
 			break;
-		case ecryptfs_opt_no_new_encrypted:
-		    mount_crypt_stat->flags |= ECRYPTFS_NO_NEW_ENCRYPTED;
-		    break;
 		case ecryptfs_opt_check_dev_ruid:
 			*check_ruid = 1;
 			break;
@@ -520,7 +513,7 @@ static struct dentry *ecryptfs_mount(struct file_system_type *fs_type, int flags
 		goto out;
 	}
 
-	s = sget(fs_type, NULL, set_anon_super, flags, NULL);
+	s = sget(fs_type, NULL, set_anon_super, NULL);
 	if (IS_ERR(s)) {
 		rc = PTR_ERR(s);
 		goto out;
@@ -552,12 +545,11 @@ static struct dentry *ecryptfs_mount(struct file_system_type *fs_type, int flags
 		goto out_free;
 	}
 
-	if (check_ruid && !uid_eq(path.dentry->d_inode->i_uid, current_uid())) {
+	if (check_ruid && path.dentry->d_inode->i_uid != current_uid()) {
 		rc = -EPERM;
 		printk(KERN_ERR "Mount of device (uid: %d) not owned by "
 		       "requested user (uid: %d)\n",
-			i_uid_read(path.dentry->d_inode),
-			from_kuid(&init_user_ns, current_uid()));
+		       path.dentry->d_inode->i_uid, current_uid());
 		goto out_free;
 	}
 
@@ -574,6 +566,13 @@ static struct dentry *ecryptfs_mount(struct file_system_type *fs_type, int flags
 	s->s_maxbytes = path.dentry->d_sb->s_maxbytes;
 	s->s_blocksize = path.dentry->d_sb->s_blocksize;
 	s->s_magic = ECRYPTFS_SUPER_MAGIC;
+	s->s_stack_depth = path.dentry->d_sb->s_stack_depth + 1;
+
+	rc = -EINVAL;
+	if (s->s_stack_depth > FILESYSTEM_MAX_STACK_DEPTH) {
+		printk(KERN_ERR "eCryptfs: maximum fs stacking depth exceeded\n");
+		goto out_free;
+	}
 
 	inode = ecryptfs_get_inode(path.dentry->d_inode, s);
 	rc = PTR_ERR(inode);
@@ -636,7 +635,6 @@ static struct file_system_type ecryptfs_fs_type = {
 	.kill_sb = ecryptfs_kill_block_super,
 	.fs_flags = 0
 };
-MODULE_ALIAS_FS("ecryptfs");
 
 /**
  * inode_info_init_once
@@ -713,17 +711,16 @@ static struct ecryptfs_cache_info {
 		.name = "ecryptfs_key_tfm_cache",
 		.size = sizeof(struct ecryptfs_key_tfm),
 	},
+	{
+		.cache = &ecryptfs_open_req_cache,
+		.name = "ecryptfs_open_req_cache",
+		.size = sizeof(struct ecryptfs_open_req),
+	},
 };
 
 static void ecryptfs_free_kmem_caches(void)
 {
 	int i;
-
-	/*
-	 * Make sure all delayed rcu free inodes are flushed before we
-	 * destroy cache.
-	 */
-	rcu_barrier();
 
 	for (i = 0; i < ARRAY_SIZE(ecryptfs_cache_infos); i++) {
 		struct ecryptfs_cache_info *info;

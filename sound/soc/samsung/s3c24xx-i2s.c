@@ -23,8 +23,9 @@
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
 
+#include <mach/regs-gpio.h>
 #include <mach/dma.h>
-#include "regs-iis.h"
+#include <plat/regs-iis.h>
 
 #include "dma.h"
 #include "s3c24xx-i2s.h"
@@ -390,9 +391,12 @@ static int s3c24xx_i2s_probe(struct snd_soc_dai *dai)
 	}
 	clk_enable(s3c24xx_i2s.iis_clk);
 
-	/* Configure the I2S pins (GPE0...GPE4) in correct mode */
-	s3c_gpio_cfgall_range(S3C2410_GPE(0), 5, S3C_GPIO_SFN(2),
-			      S3C_GPIO_PULL_NONE);
+	/* Configure the I2S pins in correct mode */
+	s3c2410_gpio_cfgpin(S3C2410_GPE0, S3C2410_GPE0_I2SLRCK);
+	s3c2410_gpio_cfgpin(S3C2410_GPE1, S3C2410_GPE1_I2SSCLK);
+	s3c2410_gpio_cfgpin(S3C2410_GPE2, S3C2410_GPE2_CDCLK);
+	s3c2410_gpio_cfgpin(S3C2410_GPE3, S3C2410_GPE3_I2SSDI);
+	s3c2410_gpio_cfgpin(S3C2410_GPE4, S3C2410_GPE4_I2SSDO);
 
 	writel(S3C2410_IISCON_IISEN, s3c24xx_i2s.regs + S3C2410_IISCON);
 
@@ -465,43 +469,20 @@ static struct snd_soc_dai_driver s3c24xx_i2s_dai = {
 	.ops = &s3c24xx_i2s_dai_ops,
 };
 
-static const struct snd_soc_component_driver s3c24xx_i2s_component = {
-	.name		= "s3c24xx-i2s",
-};
-
-static int s3c24xx_iis_dev_probe(struct platform_device *pdev)
+static __devinit int s3c24xx_iis_dev_probe(struct platform_device *pdev)
 {
-	int ret = 0;
-
-	ret = snd_soc_register_component(&pdev->dev, &s3c24xx_i2s_component,
-					 &s3c24xx_i2s_dai, 1);
-	if (ret) {
-		pr_err("failed to register the dai\n");
-		return ret;
-	}
-
-	ret = asoc_dma_platform_register(&pdev->dev);
-	if (ret) {
-		pr_err("failed to register the dma: %d\n", ret);
-		goto err;
-	}
-
-	return 0;
-err:
-	snd_soc_unregister_component(&pdev->dev);
-	return ret;
+	return snd_soc_register_dai(&pdev->dev, &s3c24xx_i2s_dai);
 }
 
-static int s3c24xx_iis_dev_remove(struct platform_device *pdev)
+static __devexit int s3c24xx_iis_dev_remove(struct platform_device *pdev)
 {
-	asoc_dma_platform_unregister(&pdev->dev);
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dai(&pdev->dev);
 	return 0;
 }
 
 static struct platform_driver s3c24xx_iis_driver = {
 	.probe  = s3c24xx_iis_dev_probe,
-	.remove = s3c24xx_iis_dev_remove,
+	.remove = __devexit_p(s3c24xx_iis_dev_remove),
 	.driver = {
 		.name = "s3c24xx-iis",
 		.owner = THIS_MODULE,

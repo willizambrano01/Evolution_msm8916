@@ -38,10 +38,10 @@
 
 #include <mach/pxa27x.h>
 #include <mach/magician.h>
-#include <linux/platform_data/video-pxafb.h>
-#include <linux/platform_data/mmc-pxamci.h>
-#include <linux/platform_data/irda-pxaficp.h>
-#include <linux/platform_data/usb-ohci-pxa27x.h>
+#include <mach/pxafb.h>
+#include <mach/mmc.h>
+#include <mach/irda.h>
+#include <mach/ohci.h>
 
 #include "devices.h"
 #include "generic.h"
@@ -579,8 +579,12 @@ static struct platform_device power_supply = {
  */
 
 static struct regulator_consumer_supply bq24022_consumers[] = {
-	REGULATOR_SUPPLY("vbus_draw", NULL),
-	REGULATOR_SUPPLY("ac_draw", NULL),
+	{
+		.supply = "vbus_draw",
+	},
+	{
+		.supply = "ac_draw",
+	},
 };
 
 static struct regulator_init_data bq24022_init_data = {
@@ -633,8 +637,9 @@ static struct platform_device bq24022 = {
 static int magician_mci_init(struct device *dev,
 				irq_handler_t detect_irq, void *data)
 {
-	return request_irq(IRQ_MAGICIAN_SD, detect_irq, IRQF_DISABLED,
-			   "mmc card detect", data);
+	return request_irq(IRQ_MAGICIAN_SD, detect_irq,
+				IRQF_DISABLED | IRQF_SAMPLE_RANDOM,
+				"mmc card detect", data);
 }
 
 static void magician_mci_exit(struct device *dev, void *data)
@@ -774,6 +779,6 @@ MACHINE_START(MAGICIAN, "HTC Magician")
 	.init_irq = pxa27x_init_irq,
 	.handle_irq = pxa27x_handle_irq,
 	.init_machine = magician_init,
-	.init_time	= pxa_timer_init,
+	.timer = &pxa_timer,
 	.restart	= pxa_restart,
 MACHINE_END

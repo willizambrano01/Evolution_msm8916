@@ -632,10 +632,21 @@ static struct pci_driver amd_pci_driver = {
 #endif
 };
 
-module_pci_driver(amd_pci_driver);
+static int __init amd_init(void)
+{
+	return pci_register_driver(&amd_pci_driver);
+}
+
+static void __exit amd_exit(void)
+{
+	pci_unregister_driver(&amd_pci_driver);
+}
 
 MODULE_AUTHOR("Alan Cox");
 MODULE_DESCRIPTION("low-level driver for AMD and Nvidia PATA IDE");
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(pci, amd);
 MODULE_VERSION(DRV_VERSION);
+
+module_init(amd_init);
+module_exit(amd_exit);

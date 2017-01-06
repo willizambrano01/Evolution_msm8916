@@ -1,7 +1,8 @@
 /*
+ *  arch/s390/lib/spinlock.c
  *    Out of line spinlock code.
  *
- *    Copyright IBM Corp. 2004, 2006
+ *    Copyright (C) IBM Corp. 2004, 2006
  *    Author(s): Martin Schwidefsky (schwidefsky@de.ibm.com)
  */
 

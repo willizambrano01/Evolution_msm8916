@@ -21,31 +21,19 @@
 #include <linux/mmc/host.h>
 #include <linux/mmc/mmc.h>
 #include <linux/mmc/sdio.h>
-#include <linux/mmc/slot-gpio.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
-#include <linux/pinctrl/consumer.h>
-#include <linux/platform_data/mmc-esdhc-imx.h>
+#include <mach/esdhc.h>
 #include "sdhci-pltfm.h"
 #include "sdhci-esdhc.h"
 
-#define	ESDHC_CTRL_D3CD			0x08
+#define	SDHCI_CTRL_D3CD			0x08
 /* VENDOR SPEC register */
-#define ESDHC_VENDOR_SPEC		0xc0
-#define  ESDHC_VENDOR_SPEC_SDIO_QUIRK	(1 << 1)
-#define ESDHC_WTMK_LVL			0x44
-#define ESDHC_MIX_CTRL			0x48
-#define  ESDHC_MIX_CTRL_AC23EN		(1 << 7)
-/* Bits 3 and 6 are not SDHCI standard definitions */
-#define  ESDHC_MIX_CTRL_SDHCI_MASK	0xb7
-
-/*
- * Our interpretation of the SDHCI_HOST_CONTROL register
- */
-#define ESDHC_CTRL_4BITBUS		(0x1 << 1)
-#define ESDHC_CTRL_8BITBUS		(0x2 << 1)
-#define ESDHC_CTRL_BUSWIDTH_MASK	(0x3 << 1)
+#define SDHCI_VENDOR_SPEC		0xC0
+#define  SDHCI_VENDOR_SPEC_SDIO_QUIRK	0x00000002
+#define SDHCI_WTMK_LVL			0x44
+#define SDHCI_MIX_CTRL			0x48
 
 /*
  * There is an INT DMA ERR mis-match between eSDHC and STD SDHC SPEC:
@@ -53,7 +41,7 @@
  * but bit28 is used as the INT DMA ERR in fsl eSDHC design.
  * Define this macro DMA error INT for fsl eSDHC
  */
-#define ESDHC_INT_VENDOR_SPEC_DMA_ERR	(1 << 28)
+#define SDHCI_INT_VENDOR_SPEC_DMA_ERR	0x10000000
 
 /*
  * The CMDTYPE of the CMD register (offset 0xE) should be set to
@@ -80,17 +68,7 @@ struct pltfm_imx_data {
 	int flags;
 	u32 scratchpad;
 	enum imx_esdhc_type devtype;
-	struct pinctrl *pinctrl;
 	struct esdhc_platform_data boarddata;
-	struct clk *clk_ipg;
-	struct clk *clk_ahb;
-	struct clk *clk_per;
-	enum {
-		NO_CMD_PENDING,      /* no multiblock command pending*/
-		MULTIBLK_IN_PROCESS, /* exact multiblock cmd in process */
-		WAIT_FOR_INT,        /* sent CMD12, waiting for response INT */
-	} multiblock_status;
-
 };
 
 static struct platform_device_id imx_esdhc_devtype[] = {
@@ -162,7 +140,20 @@ static u32 esdhc_readl_le(struct sdhci_host *host, int reg)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct pltfm_imx_data *imx_data = pltfm_host->priv;
+	struct esdhc_platform_data *boarddata = &imx_data->boarddata;
+
+	/* fake CARD_PRESENT flag */
 	u32 val = readl(host->ioaddr + reg);
+
+	if (unlikely((reg == SDHCI_PRESENT_STATE)
+			&& gpio_is_valid(boarddata->cd_gpio))) {
+		if (gpio_get_value(boarddata->cd_gpio))
+			/* no card, if a valid gpio says so... */
+			val &= ~SDHCI_CARD_PRESENT;
+		else
+			/* ... in all other cases assume card is present */
+			val |= SDHCI_CARD_PRESENT;
+	}
 
 	if (unlikely(reg == SDHCI_CAPABILITIES)) {
 		/* In FSL esdhc IC module, only bit20 is used to indicate the
@@ -179,21 +170,9 @@ static u32 esdhc_readl_le(struct sdhci_host *host, int reg)
 	}
 
 	if (unlikely(reg == SDHCI_INT_STATUS)) {
-		if (val & ESDHC_INT_VENDOR_SPEC_DMA_ERR) {
-			val &= ~ESDHC_INT_VENDOR_SPEC_DMA_ERR;
+		if (val & SDHCI_INT_VENDOR_SPEC_DMA_ERR) {
+			val &= ~SDHCI_INT_VENDOR_SPEC_DMA_ERR;
 			val |= SDHCI_INT_ADMA_ERROR;
-		}
-
-		/*
-		 * mask off the interrupt we get in response to the manually
-		 * sent CMD12
-		 */
-		if ((imx_data->multiblock_status == WAIT_FOR_INT) &&
-		    ((val & SDHCI_INT_RESPONSE) == SDHCI_INT_RESPONSE)) {
-			val &= ~SDHCI_INT_RESPONSE;
-			writel(SDHCI_INT_RESPONSE, host->ioaddr +
-						   SDHCI_INT_STATUS);
-			imx_data->multiblock_status = NO_CMD_PENDING;
 		}
 	}
 
@@ -204,9 +183,17 @@ static void esdhc_writel_le(struct sdhci_host *host, u32 val, int reg)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct pltfm_imx_data *imx_data = pltfm_host->priv;
+	struct esdhc_platform_data *boarddata = &imx_data->boarddata;
 	u32 data;
 
 	if (unlikely(reg == SDHCI_INT_ENABLE || reg == SDHCI_SIGNAL_ENABLE)) {
+		if (boarddata->cd_type == ESDHC_CD_GPIO)
+			/*
+			 * These interrupts won't work with a custom
+			 * card_detect gpio (only applied to mx25/35)
+			 */
+			val &= ~(SDHCI_INT_CARD_REMOVE | SDHCI_INT_CARD_INSERT);
+
 		if (val & SDHCI_INT_CARD_INT) {
 			/*
 			 * Clear and then set D3CD bit to avoid missing the
@@ -217,9 +204,9 @@ static void esdhc_writel_le(struct sdhci_host *host, u32 val, int reg)
 			 * re-sample it by the following steps.
 			 */
 			data = readl(host->ioaddr + SDHCI_HOST_CONTROL);
-			data &= ~ESDHC_CTRL_D3CD;
+			data &= ~SDHCI_CTRL_D3CD;
 			writel(data, host->ioaddr + SDHCI_HOST_CONTROL);
-			data |= ESDHC_CTRL_D3CD;
+			data |= SDHCI_CTRL_D3CD;
 			writel(data, host->ioaddr + SDHCI_HOST_CONTROL);
 		}
 	}
@@ -228,24 +215,15 @@ static void esdhc_writel_le(struct sdhci_host *host, u32 val, int reg)
 				&& (reg == SDHCI_INT_STATUS)
 				&& (val & SDHCI_INT_DATA_END))) {
 			u32 v;
-			v = readl(host->ioaddr + ESDHC_VENDOR_SPEC);
-			v &= ~ESDHC_VENDOR_SPEC_SDIO_QUIRK;
-			writel(v, host->ioaddr + ESDHC_VENDOR_SPEC);
-
-			if (imx_data->multiblock_status == MULTIBLK_IN_PROCESS)
-			{
-				/* send a manual CMD12 with RESPTYP=none */
-				data = MMC_STOP_TRANSMISSION << 24 |
-				       SDHCI_CMD_ABORTCMD << 16;
-				writel(data, host->ioaddr + SDHCI_TRANSFER_MODE);
-				imx_data->multiblock_status = WAIT_FOR_INT;
-			}
+			v = readl(host->ioaddr + SDHCI_VENDOR_SPEC);
+			v &= ~SDHCI_VENDOR_SPEC_SDIO_QUIRK;
+			writel(v, host->ioaddr + SDHCI_VENDOR_SPEC);
 	}
 
 	if (unlikely(reg == SDHCI_INT_ENABLE || reg == SDHCI_SIGNAL_ENABLE)) {
 		if (val & SDHCI_INT_ADMA_ERROR) {
 			val &= ~SDHCI_INT_ADMA_ERROR;
-			val |= ESDHC_INT_VENDOR_SPEC_DMA_ERR;
+			val |= SDHCI_INT_VENDOR_SPEC_DMA_ERR;
 		}
 	}
 
@@ -278,47 +256,37 @@ static void esdhc_writew_le(struct sdhci_host *host, u16 val, int reg)
 
 	switch (reg) {
 	case SDHCI_TRANSFER_MODE:
+		/*
+		 * Postpone this write, we must do it together with a
+		 * command write that is down below.
+		 */
 		if ((imx_data->flags & ESDHC_FLAG_MULTIBLK_NO_INT)
 				&& (host->cmd->opcode == SD_IO_RW_EXTENDED)
 				&& (host->cmd->data->blocks > 1)
 				&& (host->cmd->data->flags & MMC_DATA_READ)) {
 			u32 v;
-			v = readl(host->ioaddr + ESDHC_VENDOR_SPEC);
-			v |= ESDHC_VENDOR_SPEC_SDIO_QUIRK;
-			writel(v, host->ioaddr + ESDHC_VENDOR_SPEC);
+			v = readl(host->ioaddr + SDHCI_VENDOR_SPEC);
+			v |= SDHCI_VENDOR_SPEC_SDIO_QUIRK;
+			writel(v, host->ioaddr + SDHCI_VENDOR_SPEC);
 		}
-
-		if (is_imx6q_usdhc(imx_data)) {
-			u32 m = readl(host->ioaddr + ESDHC_MIX_CTRL);
-			/* Swap AC23 bit */
-			if (val & SDHCI_TRNS_AUTO_CMD23) {
-				val &= ~SDHCI_TRNS_AUTO_CMD23;
-				val |= ESDHC_MIX_CTRL_AC23EN;
-			}
-			m = val | (m & ~ESDHC_MIX_CTRL_SDHCI_MASK);
-			writel(m, host->ioaddr + ESDHC_MIX_CTRL);
-		} else {
-			/*
-			 * Postpone this write, we must do it together with a
-			 * command write that is down below.
-			 */
-			imx_data->scratchpad = val;
-		}
+		imx_data->scratchpad = val;
 		return;
 	case SDHCI_COMMAND:
-		if (host->cmd->opcode == MMC_STOP_TRANSMISSION)
+		if ((host->cmd->opcode == MMC_STOP_TRANSMISSION ||
+		     host->cmd->opcode == MMC_SET_BLOCK_COUNT) &&
+	            (imx_data->flags & ESDHC_FLAG_MULTIBLK_NO_INT))
 			val |= SDHCI_CMD_ABORTCMD;
 
-		if ((host->cmd->opcode == MMC_SET_BLOCK_COUNT) &&
-		    (imx_data->flags & ESDHC_FLAG_MULTIBLK_NO_INT))
-			imx_data->multiblock_status = MULTIBLK_IN_PROCESS;
-
-		if (is_imx6q_usdhc(imx_data))
+		if (is_imx6q_usdhc(imx_data)) {
+			u32 m = readl(host->ioaddr + SDHCI_MIX_CTRL);
+			m = imx_data->scratchpad | (m & 0xffff0000);
+			writel(m, host->ioaddr + SDHCI_MIX_CTRL);
 			writel(val << 16,
 			       host->ioaddr + SDHCI_TRANSFER_MODE);
-		else
+		} else {
 			writel(val << 16 | imx_data->scratchpad,
 			       host->ioaddr + SDHCI_TRANSFER_MODE);
+		}
 		return;
 	case SDHCI_BLOCK_SIZE:
 		val &= ~SDHCI_MAKE_BLKSZ(0x7, 0);
@@ -329,10 +297,7 @@ static void esdhc_writew_le(struct sdhci_host *host, u16 val, int reg)
 
 static void esdhc_writeb_le(struct sdhci_host *host, u8 val, int reg)
 {
-	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct pltfm_imx_data *imx_data = pltfm_host->priv;
 	u32 new_val;
-	u32 mask;
 
 	switch (reg) {
 	case SDHCI_POWER_CONTROL:
@@ -342,25 +307,16 @@ static void esdhc_writeb_le(struct sdhci_host *host, u8 val, int reg)
 		 */
 		return;
 	case SDHCI_HOST_CONTROL:
-		/* FSL messed up here, so we need to manually compose it. */
-		new_val = val & SDHCI_CTRL_LED;
-		/* ensure the endianness */
+		/* FSL messed up here, so we can just keep those three */
+		new_val = val & (SDHCI_CTRL_LED | \
+				SDHCI_CTRL_4BITBUS | \
+				SDHCI_CTRL_D3CD);
+		/* ensure the endianess */
 		new_val |= ESDHC_HOST_CONTROL_LE;
-		/* bits 8&9 are reserved on mx25 */
-		if (!is_imx25_esdhc(imx_data)) {
-			/* DMA mode bits are shifted */
-			new_val |= (val & SDHCI_CTRL_DMA_MASK) << 5;
-		}
+		/* DMA mode bits are shifted */
+		new_val |= (val & SDHCI_CTRL_DMA_MASK) << 5;
 
-		/*
-		 * Do not touch buswidth bits here. This is done in
-		 * esdhc_pltfm_bus_width.
-		 * Do not touch the D3CD bit either which is used for the
-		 * SDIO interrupt errata workaround.
-		 */
-		mask = 0xffff & ~(ESDHC_CTRL_BUSWIDTH_MASK | ESDHC_CTRL_D3CD);
-
-		esdhc_clrset_le(host, mask, new_val, reg);
+		esdhc_clrset_le(host, 0xffff, new_val, reg);
 		return;
 	}
 	esdhc_clrset_le(host, 0xff, val, reg);
@@ -373,15 +329,15 @@ static void esdhc_writeb_le(struct sdhci_host *host, u8 val, int reg)
 	 * circuit relies on.  To work around it, we turn the clocks on back
 	 * to keep card detection circuit functional.
 	 */
-	if ((reg == SDHCI_SOFTWARE_RESET) && (val & 1)) {
+	if ((reg == SDHCI_SOFTWARE_RESET) && (val & 1))
 		esdhc_clrset_le(host, 0x7, 0x7, ESDHC_SYSTEM_CONTROL);
-		/*
-		 * The reset on usdhc fails to clear MIX_CTRL register.
-		 * Do it manually here.
-		 */
-		if (is_imx6q_usdhc(imx_data))
-			writel(0, host->ioaddr + ESDHC_MIX_CTRL);
-	}
+}
+
+static unsigned int esdhc_pltfm_get_max_clock(struct sdhci_host *host)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+
+	return clk_get_rate(pltfm_host->clk);
 }
 
 static unsigned int esdhc_pltfm_get_min_clock(struct sdhci_host *host)
@@ -399,7 +355,8 @@ static unsigned int esdhc_pltfm_get_ro(struct sdhci_host *host)
 
 	switch (boarddata->wp_type) {
 	case ESDHC_WP_GPIO:
-		return mmc_gpio_get_ro(host->mmc);
+		if (gpio_is_valid(boarddata->wp_gpio))
+			return gpio_get_value(boarddata->wp_gpio);
 	case ESDHC_WP_CONTROLLER:
 		return !(readl(host->ioaddr + SDHCI_PRESENT_STATE) &
 			       SDHCI_WRITE_PROTECT);
@@ -410,42 +367,19 @@ static unsigned int esdhc_pltfm_get_ro(struct sdhci_host *host)
 	return -ENOSYS;
 }
 
-static int esdhc_pltfm_bus_width(struct sdhci_host *host, int width)
-{
-	u32 ctrl;
-
-	switch (width) {
-	case MMC_BUS_WIDTH_8:
-		ctrl = ESDHC_CTRL_8BITBUS;
-		break;
-	case MMC_BUS_WIDTH_4:
-		ctrl = ESDHC_CTRL_4BITBUS;
-		break;
-	default:
-		ctrl = 0;
-		break;
-	}
-
-	esdhc_clrset_le(host, ESDHC_CTRL_BUSWIDTH_MASK, ctrl,
-			SDHCI_HOST_CONTROL);
-
-	return 0;
-}
-
-static const struct sdhci_ops sdhci_esdhc_ops = {
+static struct sdhci_ops sdhci_esdhc_ops = {
 	.read_l = esdhc_readl_le,
 	.read_w = esdhc_readw_le,
 	.write_l = esdhc_writel_le,
 	.write_w = esdhc_writew_le,
 	.write_b = esdhc_writeb_le,
 	.set_clock = esdhc_set_clock,
-	.get_max_clock = sdhci_pltfm_clk_get_max_clock,
+	.get_max_clock = esdhc_pltfm_get_max_clock,
 	.get_min_clock = esdhc_pltfm_get_min_clock,
 	.get_ro = esdhc_pltfm_get_ro,
-	.platform_bus_width = esdhc_pltfm_bus_width,
 };
 
-static const struct sdhci_pltfm_data sdhci_esdhc_imx_pdata = {
+static struct sdhci_pltfm_data sdhci_esdhc_imx_pdata = {
 	.quirks = ESDHC_DEFAULT_QUIRKS | SDHCI_QUIRK_NO_HISPD_BIT
 			| SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC
 			| SDHCI_QUIRK_BROKEN_ADMA_ZEROLEN_DESC
@@ -453,8 +387,16 @@ static const struct sdhci_pltfm_data sdhci_esdhc_imx_pdata = {
 	.ops = &sdhci_esdhc_ops,
 };
 
+static irqreturn_t cd_irq(int irq, void *data)
+{
+	struct sdhci_host *sdhost = (struct sdhci_host *)data;
+
+	tasklet_schedule(&sdhost->card_tasklet);
+	return IRQ_HANDLED;
+};
+
 #ifdef CONFIG_OF
-static int
+static int __devinit
 sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
 			 struct esdhc_platform_data *boarddata)
 {
@@ -463,7 +405,7 @@ sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
 	if (!np)
 		return -ENODEV;
 
-	if (of_get_property(np, "non-removable", NULL))
+	if (of_get_property(np, "fsl,card-wired", NULL))
 		boarddata->cd_type = ESDHC_CD_PERMANENT;
 
 	if (of_get_property(np, "fsl,cd-controller", NULL))
@@ -480,8 +422,6 @@ sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
 	if (gpio_is_valid(boarddata->wp_gpio))
 		boarddata->wp_type = ESDHC_WP_GPIO;
 
-	of_property_read_u32(np, "bus-width", &boarddata->max_bus_width);
-
 	return 0;
 }
 #else
@@ -493,13 +433,14 @@ sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
 }
 #endif
 
-static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
+static int __devinit sdhci_esdhc_imx_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id =
 			of_match_device(imx_esdhc_dt_ids, &pdev->dev);
 	struct sdhci_pltfm_host *pltfm_host;
 	struct sdhci_host *host;
 	struct esdhc_platform_data *boarddata;
+	struct clk *clk;
 	int err;
 	struct pltfm_imx_data *imx_data;
 
@@ -509,10 +450,10 @@ static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
 
 	pltfm_host = sdhci_priv(host);
 
-	imx_data = devm_kzalloc(&pdev->dev, sizeof(*imx_data), GFP_KERNEL);
+	imx_data = kzalloc(sizeof(struct pltfm_imx_data), GFP_KERNEL);
 	if (!imx_data) {
 		err = -ENOMEM;
-		goto free_sdhci;
+		goto err_imx_data;
 	}
 
 	if (of_id)
@@ -520,35 +461,14 @@ static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
 	imx_data->devtype = pdev->id_entry->driver_data;
 	pltfm_host->priv = imx_data;
 
-	imx_data->clk_ipg = devm_clk_get(&pdev->dev, "ipg");
-	if (IS_ERR(imx_data->clk_ipg)) {
-		err = PTR_ERR(imx_data->clk_ipg);
-		goto free_sdhci;
+	clk = clk_get(mmc_dev(host->mmc), NULL);
+	if (IS_ERR(clk)) {
+		dev_err(mmc_dev(host->mmc), "clk err\n");
+		err = PTR_ERR(clk);
+		goto err_clk_get;
 	}
-
-	imx_data->clk_ahb = devm_clk_get(&pdev->dev, "ahb");
-	if (IS_ERR(imx_data->clk_ahb)) {
-		err = PTR_ERR(imx_data->clk_ahb);
-		goto free_sdhci;
-	}
-
-	imx_data->clk_per = devm_clk_get(&pdev->dev, "per");
-	if (IS_ERR(imx_data->clk_per)) {
-		err = PTR_ERR(imx_data->clk_per);
-		goto free_sdhci;
-	}
-
-	pltfm_host->clk = imx_data->clk_per;
-
-	clk_prepare_enable(imx_data->clk_per);
-	clk_prepare_enable(imx_data->clk_ipg);
-	clk_prepare_enable(imx_data->clk_ahb);
-
-	imx_data->pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
-	if (IS_ERR(imx_data->pinctrl)) {
-		err = PTR_ERR(imx_data->pinctrl);
-		goto disable_clk;
-	}
+	clk_prepare_enable(clk);
+	pltfm_host->clk = clk;
 
 	host->quirks |= SDHCI_QUIRK_BROKEN_TIMEOUT_VAL;
 
@@ -565,14 +485,14 @@ static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
 	 * to something insane.  Change it back here.
 	 */
 	if (is_imx6q_usdhc(imx_data))
-		writel(0x08100810, host->ioaddr + ESDHC_WTMK_LVL);
+		writel(0x08100810, host->ioaddr + SDHCI_WTMK_LVL);
 
 	boarddata = &imx_data->boarddata;
 	if (sdhci_esdhc_imx_probe_dt(pdev, boarddata) < 0) {
 		if (!host->mmc->parent->platform_data) {
 			dev_err(mmc_dev(host->mmc), "no board data!\n");
 			err = -EINVAL;
-			goto disable_clk;
+			goto no_board_data;
 		}
 		imx_data->boarddata = *((struct esdhc_platform_data *)
 					host->mmc->parent->platform_data);
@@ -580,23 +500,35 @@ static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
 
 	/* write_protect */
 	if (boarddata->wp_type == ESDHC_WP_GPIO) {
-		err = mmc_gpio_request_ro(host->mmc, boarddata->wp_gpio);
+		err = gpio_request_one(boarddata->wp_gpio, GPIOF_IN, "ESDHC_WP");
 		if (err) {
-			dev_err(mmc_dev(host->mmc),
-				"failed to request write-protect gpio!\n");
-			goto disable_clk;
+			dev_warn(mmc_dev(host->mmc),
+				 "no write-protect pin available!\n");
+			boarddata->wp_gpio = -EINVAL;
 		}
-		host->mmc->caps2 |= MMC_CAP2_RO_ACTIVE_HIGH;
+	} else {
+		boarddata->wp_gpio = -EINVAL;
 	}
 
 	/* card_detect */
+	if (boarddata->cd_type != ESDHC_CD_GPIO)
+		boarddata->cd_gpio = -EINVAL;
+
 	switch (boarddata->cd_type) {
 	case ESDHC_CD_GPIO:
-		err = mmc_gpio_request_cd(host->mmc, boarddata->cd_gpio);
+		err = gpio_request_one(boarddata->cd_gpio, GPIOF_IN, "ESDHC_CD");
 		if (err) {
 			dev_err(mmc_dev(host->mmc),
-				"failed to request card-detect gpio!\n");
-			goto disable_clk;
+				"no card-detect pin available!\n");
+			goto no_card_detect_pin;
+		}
+
+		err = request_irq(gpio_to_irq(boarddata->cd_gpio), cd_irq,
+				 IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING,
+				 mmc_hostname(host->mmc), host);
+		if (err) {
+			dev_err(mmc_dev(host->mmc), "request irq error\n");
+			goto no_card_detect_irq;
 		}
 		/* fall through */
 
@@ -613,46 +545,52 @@ static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
 		break;
 	}
 
-	switch (boarddata->max_bus_width) {
-	case 8:
-		host->mmc->caps |= MMC_CAP_8_BIT_DATA | MMC_CAP_4_BIT_DATA;
-		break;
-	case 4:
-		host->mmc->caps |= MMC_CAP_4_BIT_DATA;
-		break;
-	case 1:
-	default:
-		host->quirks |= SDHCI_QUIRK_FORCE_1_BIT_DATA;
-		break;
-	}
-
 	err = sdhci_add_host(host);
 	if (err)
-		goto disable_clk;
+		goto err_add_host;
 
 	return 0;
 
-disable_clk:
-	clk_disable_unprepare(imx_data->clk_per);
-	clk_disable_unprepare(imx_data->clk_ipg);
-	clk_disable_unprepare(imx_data->clk_ahb);
-free_sdhci:
+err_add_host:
+	if (gpio_is_valid(boarddata->cd_gpio))
+		free_irq(gpio_to_irq(boarddata->cd_gpio), host);
+no_card_detect_irq:
+	if (gpio_is_valid(boarddata->cd_gpio))
+		gpio_free(boarddata->cd_gpio);
+	if (gpio_is_valid(boarddata->wp_gpio))
+		gpio_free(boarddata->wp_gpio);
+no_card_detect_pin:
+no_board_data:
+	clk_disable_unprepare(pltfm_host->clk);
+	clk_put(pltfm_host->clk);
+err_clk_get:
+	kfree(imx_data);
+err_imx_data:
 	sdhci_pltfm_free(pdev);
 	return err;
 }
 
-static int sdhci_esdhc_imx_remove(struct platform_device *pdev)
+static int __devexit sdhci_esdhc_imx_remove(struct platform_device *pdev)
 {
 	struct sdhci_host *host = platform_get_drvdata(pdev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct pltfm_imx_data *imx_data = pltfm_host->priv;
+	struct esdhc_platform_data *boarddata = &imx_data->boarddata;
 	int dead = (readl(host->ioaddr + SDHCI_INT_STATUS) == 0xffffffff);
 
 	sdhci_remove_host(host, dead);
 
-	clk_disable_unprepare(imx_data->clk_per);
-	clk_disable_unprepare(imx_data->clk_ipg);
-	clk_disable_unprepare(imx_data->clk_ahb);
+	if (gpio_is_valid(boarddata->wp_gpio))
+		gpio_free(boarddata->wp_gpio);
+
+	if (gpio_is_valid(boarddata->cd_gpio)) {
+		free_irq(gpio_to_irq(boarddata->cd_gpio), host);
+		gpio_free(boarddata->cd_gpio);
+	}
+
+	clk_disable_unprepare(pltfm_host->clk);
+	clk_put(pltfm_host->clk);
+	kfree(imx_data);
 
 	sdhci_pltfm_free(pdev);
 
@@ -668,7 +606,7 @@ static struct platform_driver sdhci_esdhc_imx_driver = {
 	},
 	.id_table	= imx_esdhc_devtype,
 	.probe		= sdhci_esdhc_imx_probe,
-	.remove		= sdhci_esdhc_imx_remove,
+	.remove		= __devexit_p(sdhci_esdhc_imx_remove),
 };
 
 module_platform_driver(sdhci_esdhc_imx_driver);

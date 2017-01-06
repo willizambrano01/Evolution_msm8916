@@ -1,6 +1,6 @@
 /* drivers/tty/n_smux.c
  *
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -25,10 +25,10 @@
 #include <linux/types.h>
 #include <linux/platform_device.h>
 #include <linux/delay.h>
-#include <linux/ipc_logging.h>
-#include <linux/platform_data/msm_serial_hs.h>
-#include <soc/qcom/subsystem_restart.h>
-#include <soc/qcom/subsystem_notif.h>
+#include <mach/subsystem_notif.h>
+#include <mach/subsystem_restart.h>
+#include <mach/msm_serial_hs.h>
+#include <mach/msm_ipc_logging.h>
 #include "smux_private.h"
 #include "smux_loopback.h"
 
@@ -3278,7 +3278,7 @@ int msm_smux_close(uint8_t lcid)
 int msm_smux_write(uint8_t lcid, void *pkt_priv, const void *data, int len)
 {
 	struct smux_lch_t *ch;
-	struct smux_pkt_t *pkt;
+	struct smux_pkt_t *pkt = NULL;
 	int tx_ready = 0;
 	unsigned long flags;
 	int ret;
@@ -3905,7 +3905,7 @@ static int __init smux_init(void)
 		return ret;
 	}
 
-	log_ctx = ipc_log_context_create(1, "smux", 0);
+	log_ctx = ipc_log_context_create(1, "smux");
 	if (!log_ctx) {
 		SMUX_ERR("%s: unable to create log context\n", __func__);
 		disable_ipc_logging = 1;

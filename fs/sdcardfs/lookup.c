@@ -111,8 +111,13 @@ struct inode *sdcardfs_iget(struct super_block *sb, struct inode *lower_inode, u
 		return ERR_PTR(err);
 	}
 	/* if found a cached inode, then just return it */
-	if (!(inode->i_state & I_NEW))
+	if (!(inode->i_state & I_NEW)) {
+		/* There can only be one alias, as we don't permit hard links
+		 * This ensures we do not keep stale dentries that would later
+		 * cause confusion. */
+		d_prune_aliases(inode);
 		return inode;
+	}
 
 	/* initialize new inode */
 	info = SDCARDFS_I(inode);
@@ -213,14 +218,14 @@ out:
  * Fills in lower_parent_path with <dentry,mnt> on success.
  */
 static struct dentry *__sdcardfs_lookup(struct dentry *dentry,
-		unsigned int flags, struct path *lower_parent_path, userid_t id)
+		struct nameidata *nd, struct path *lower_parent_path, userid_t id)
 {
 	int err = 0;
 	struct vfsmount *lower_dir_mnt;
 	struct dentry *lower_dir_dentry = NULL;
 	struct dentry *lower_dentry;
 	const char *name;
-	struct path lower_path;
+	struct nameidata lower_nd;
 	struct qstr this;
 	struct sdcardfs_sb_info *sbi;
 
@@ -238,13 +243,13 @@ static struct dentry *__sdcardfs_lookup(struct dentry *dentry,
 	lower_dir_mnt = lower_parent_path->mnt;
 	/* Use vfs_path_lookup to check if the dentry exists or not */
 	err = vfs_path_lookup(lower_dir_dentry, lower_dir_mnt, name, 0,
-				&lower_path);
+				&lower_nd.path);
 	/* check for other cases */
 	if (err == -ENOENT) {
 		struct dentry *child;
 		struct dentry *match = NULL;
 		spin_lock(&lower_dir_dentry->d_lock);
-		list_for_each_entry(child, &lower_dir_dentry->d_subdirs, d_u.d_child) {
+		list_for_each_entry(child, &lower_dir_dentry->d_subdirs, d_child) {
 			if (child && child->d_inode) {
 				if (strcasecmp(child->d_name.name, name)==0) {
 					match = dget(child);
@@ -257,7 +262,7 @@ static struct dentry *__sdcardfs_lookup(struct dentry *dentry,
 			err = vfs_path_lookup(lower_dir_dentry,
 						lower_dir_mnt,
 						match->d_name.name, 0,
-						&lower_path);
+						&lower_nd.path);
 			dput(match);
 		}
 	}
@@ -275,7 +280,7 @@ static struct dentry *__sdcardfs_lookup(struct dentry *dentry,
 			 * and the base obbpath will be copyed to the lower_path variable.
 			 * if an error returned, there's no change in the lower_path
 			 * 		returns: -ERRNO if error (0: no error) */
-			err = setup_obb_dentry(dentry, &lower_path);
+			err = setup_obb_dentry(dentry, &lower_nd.path);
 
 			if(err) {
 				/* if the sbi->obbpath is not available, we can optionally
@@ -289,8 +294,8 @@ static struct dentry *__sdcardfs_lookup(struct dentry *dentry,
 			}
 		}
 
-		sdcardfs_set_lower_path(dentry, &lower_path);
-		err = sdcardfs_interpose(dentry, dentry->d_sb, &lower_path, id);
+		sdcardfs_set_lower_path(dentry, &lower_nd.path);
+		err = sdcardfs_interpose(dentry, dentry->d_sb, &lower_nd.path, id);
 		if (err) /* path_put underlying path on error */
 			sdcardfs_put_reset_lower_path(dentry);
 		goto out;
@@ -319,16 +324,19 @@ static struct dentry *__sdcardfs_lookup(struct dentry *dentry,
 	d_add(lower_dentry, NULL); /* instantiate and hash */
 
 setup_lower:
-	lower_path.dentry = lower_dentry;
-	lower_path.mnt = mntget(lower_dir_mnt);
-	sdcardfs_set_lower_path(dentry, &lower_path);
+	lower_nd.path.dentry = lower_dentry;
+	lower_nd.path.mnt = mntget(lower_dir_mnt);
+	sdcardfs_set_lower_path(dentry, &lower_nd.path);
 
 	/*
 	 * If the intent is to create a file, then don't return an error, so
 	 * the VFS will continue the process of making this negative dentry
 	 * into a positive one.
 	 */
-	if (flags & (LOOKUP_CREATE|LOOKUP_RENAME_TARGET))
+	if (nd) {
+		if (nd->flags & (LOOKUP_CREATE|LOOKUP_RENAME_TARGET))
+			err = 0;
+	} else
 		err = 0;
 
 out:
@@ -347,7 +355,7 @@ out:
  * @nd : nameidata of parent inode
  */
 struct dentry *sdcardfs_lookup(struct inode *dir, struct dentry *dentry,
-			     unsigned int flags)
+			     struct nameidata *nd)
 {
 	struct dentry *ret = NULL, *parent;
 	struct path lower_parent_path;
@@ -376,7 +384,7 @@ struct dentry *sdcardfs_lookup(struct inode *dir, struct dentry *dentry,
 		goto out;
 	}
 
-	ret = __sdcardfs_lookup(dentry, flags, &lower_parent_path, SDCARDFS_I(dir)->userid);
+	ret = __sdcardfs_lookup(dentry, nd, &lower_parent_path, SDCARDFS_I(dir)->userid);
 	if (IS_ERR(ret))
 	{
 		goto out;

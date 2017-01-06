@@ -17,7 +17,7 @@ data and perform operation on the slabs. By default slabinfo only lists
 slabs that have data in them. See "slabinfo -h" for more options when
 running the command. slabinfo can be compiled with
 
-gcc -o slabinfo tools/vm/slabinfo.c
+gcc -o slabinfo tools/slub/slabinfo.c
 
 Some of the modes of operation of slabinfo require that slub debugging
 be enabled on the command line. F.e. no tracking information will be
@@ -251,10 +251,6 @@ terminating 0. That zero has overwritten the first byte of the Redzone field.
 After reporting the details of the issue encountered the FIX SLUB message
 tells us that SLUB has restored the Redzone to its proper value and then
 system operations continue.
-
-If it is required to only report the details of the issue and panic immediately
-after in order to possibly catch any scribblers one can set the
-CONFIG_DEBUG_SLUB_PANIC_ON option.
 
 Emergency operations:
 ---------------------

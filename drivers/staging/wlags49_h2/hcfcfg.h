@@ -1,4 +1,5 @@
 
+//   vim:tw=110:ts=4:
 #ifndef HCFCFG_H
 #define HCFCFG_H 1
 
@@ -21,7 +22,7 @@
 * hcfcfg.tpl list all #defines which must be specified to:
 *   adjust the HCF functions defined in HCF.C to the characteristics of a specific environment
 *		o maximum sizes for messages
-*		o Endianness
+*		o Endianess
 *	Compiler specific macros
 *		o port I/O macros
 *		o type definitions

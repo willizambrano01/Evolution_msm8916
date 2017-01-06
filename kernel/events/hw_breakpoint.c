@@ -111,16 +111,14 @@ static unsigned int max_task_bp_pinned(int cpu, enum bp_type_idx type)
  * Count the number of breakpoints of the same type and same task.
  * The given event must be not on the list.
  */
-static int task_bp_pinned(int cpu, struct perf_event *bp, enum bp_type_idx type)
+static int task_bp_pinned(struct perf_event *bp, enum bp_type_idx type)
 {
 	struct task_struct *tsk = bp->hw.bp_target;
 	struct perf_event *iter;
 	int count = 0;
 
 	list_for_each_entry(iter, &bp_task_head, hw.bp_list) {
-		if (iter->hw.bp_target == tsk &&
-		    find_slot_idx(iter) == type &&
-		    (iter->cpu < 0 || cpu == iter->cpu))
+		if (iter->hw.bp_target == tsk && find_slot_idx(iter) == type)
 			count += hw_breakpoint_weight(iter);
 	}
 
@@ -143,20 +141,20 @@ fetch_bp_busy_slots(struct bp_busy_slots *slots, struct perf_event *bp,
 		if (!tsk)
 			slots->pinned += max_task_bp_pinned(cpu, type);
 		else
-			slots->pinned += task_bp_pinned(cpu, bp, type);
+			slots->pinned += task_bp_pinned(bp, type);
 		slots->flexible = per_cpu(nr_bp_flexible[type], cpu);
 
 		return;
 	}
 
-	for_each_possible_cpu(cpu) {
+	for_each_online_cpu(cpu) {
 		unsigned int nr;
 
 		nr = per_cpu(nr_cpu_bp_pinned[type], cpu);
 		if (!tsk)
 			nr += max_task_bp_pinned(cpu, type);
 		else
-			nr += task_bp_pinned(cpu, bp, type);
+			nr += task_bp_pinned(bp, type);
 
 		if (nr > slots->pinned)
 			slots->pinned = nr;
@@ -190,7 +188,7 @@ static void toggle_bp_task_slot(struct perf_event *bp, int cpu, bool enable,
 	int old_idx = 0;
 	int idx = 0;
 
-	old_count = task_bp_pinned(cpu, bp, type);
+	old_count = task_bp_pinned(bp, type);
 	old_idx = old_count - 1;
 	idx = old_idx + weight;
 
@@ -235,7 +233,7 @@ toggle_bp_slot(struct perf_event *bp, bool enable, enum bp_type_idx type,
 	if (cpu >= 0) {
 		toggle_bp_task_slot(bp, cpu, enable, type, weight);
 	} else {
-		for_each_possible_cpu(cpu)
+		for_each_online_cpu(cpu)
 			toggle_bp_task_slot(bp, cpu, enable, type, weight);
 	}
 
@@ -455,16 +453,7 @@ int modify_user_hw_breakpoint(struct perf_event *bp, struct perf_event_attr *att
 	int old_type = bp->attr.bp_type;
 	int err = 0;
 
-	/*
-	 * modify_user_hw_breakpoint can be invoked with IRQs disabled and hence it
-	 * will not be possible to raise IPIs that invoke __perf_event_disable.
-	 * So call the function directly after making sure we are targeting the
-	 * current task.
-	 */
-	if (irqs_disabled() && bp->ctx && bp->ctx->task == current)
-		__perf_event_disable(bp);
-	else
-		perf_event_disable(bp);
+	perf_event_disable(bp);
 
 	bp->attr.bp_addr = attr->bp_addr;
 	bp->attr.bp_type = attr->bp_type;
@@ -677,7 +666,7 @@ int __init init_hw_breakpoint(void)
  err_alloc:
 	for_each_possible_cpu(err_cpu) {
 		for (i = 0; i < TYPE_MAX; i++)
-			kfree(per_cpu(nr_task_bp_pinned[i], err_cpu));
+			kfree(per_cpu(nr_task_bp_pinned[i], cpu));
 		if (err_cpu == cpu)
 			break;
 	}

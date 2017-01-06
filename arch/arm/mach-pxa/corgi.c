@@ -46,8 +46,8 @@
 #include <asm/mach/irq.h>
 
 #include <mach/pxa25x.h>
-#include <linux/platform_data/irda-pxaficp.h>
-#include <linux/platform_data/mmc-pxamci.h>
+#include <mach/irda.h>
+#include <mach/mmc.h>
 #include <mach/udc.h>
 #include <mach/corgi.h>
 #include <mach/sharpsl_pm.h>
@@ -663,16 +663,16 @@ static void corgi_poweroff(void)
 		/* Green LED off tells the bootloader to halt */
 		gpio_set_value(CORGI_GPIO_LED_GREEN, 0);
 
-	pxa_restart(REBOOT_HARD, NULL);
+	pxa_restart('h', NULL);
 }
 
-static void corgi_restart(enum reboot_mode mode, const char *cmd)
+static void corgi_restart(char mode, const char *cmd)
 {
 	if (!machine_is_corgi())
 		/* Green LED on tells the bootloader to reboot */
 		gpio_set_value(CORGI_GPIO_LED_GREEN, 1);
 
-	pxa_restart(REBOOT_HARD, cmd);
+	pxa_restart('h', cmd);
 }
 
 static void __init corgi_init(void)
@@ -733,7 +733,7 @@ MACHINE_START(CORGI, "SHARP Corgi")
 	.init_irq	= pxa25x_init_irq,
 	.handle_irq	= pxa25x_handle_irq,
 	.init_machine	= corgi_init,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.restart	= corgi_restart,
 MACHINE_END
 #endif
@@ -746,7 +746,7 @@ MACHINE_START(SHEPHERD, "SHARP Shepherd")
 	.init_irq	= pxa25x_init_irq,
 	.handle_irq	= pxa25x_handle_irq,
 	.init_machine	= corgi_init,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.restart	= corgi_restart,
 MACHINE_END
 #endif
@@ -759,7 +759,7 @@ MACHINE_START(HUSKY, "SHARP Husky")
 	.init_irq	= pxa25x_init_irq,
 	.handle_irq	= pxa25x_handle_irq,
 	.init_machine	= corgi_init,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.restart	= corgi_restart,
 MACHINE_END
 #endif

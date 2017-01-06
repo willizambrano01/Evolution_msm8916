@@ -19,7 +19,7 @@
  */
 
 #include "sdcardfs.h"
-#include <linux/hashtable.h>
+#include "linux/hashtable.h"
 #include <linux/delay.h>
 
 
@@ -32,8 +32,8 @@
 #define STRING_BUF_SIZE		(512)
 
 struct hashtable_entry {
-	struct hlist_node hlist;
-	void *key;
+        struct hlist_node hlist;
+        void *key;
 	unsigned int value;
 };
 
@@ -45,7 +45,6 @@ struct sb_list {
 struct packagelist_data {
 	DECLARE_HASHTABLE(package_to_appid,8);
 	spinlock_t hashtable_lock;
-
 };
 
 static struct packagelist_data *pkgl_data_all;
@@ -68,11 +67,12 @@ appid_t get_appid(void *pkgl_id, const char *app_name)
 {
 	struct packagelist_data *pkgl_dat = pkgl_data_all;
 	struct hashtable_entry *hash_cur;
+	struct hlist_node *h_n;
 	unsigned int hash = str_hash(app_name);
 	appid_t ret_id;
 
 	spin_lock(&pkgl_dat->hashtable_lock);
-	hash_for_each_possible(pkgl_dat->package_to_appid, hash_cur, hlist, hash) {
+	hash_for_each_possible(pkgl_dat->package_to_appid, hash_cur, h_n, hlist, hash) {
 		if (!strcasecmp(app_name, hash_cur->key)) {
 			ret_id = (appid_t)hash_cur->value;
 			spin_unlock(&pkgl_dat->hashtable_lock);
@@ -125,9 +125,10 @@ static int insert_str_to_int_lock(struct packagelist_data *pkgl_dat, char *key,
 {
 	struct hashtable_entry *hash_cur;
 	struct hashtable_entry *new_entry;
+	struct hlist_node *h_n;
 	unsigned int hash = str_hash(key);
 
-	hash_for_each_possible(pkgl_dat->package_to_appid, hash_cur, hlist, hash) {
+	hash_for_each_possible(pkgl_dat->package_to_appid, hash_cur, h_n, hlist, hash) {
 		if (!strcasecmp(key, hash_cur->key)) {
 			hash_cur->value = value;
 			return 0;
@@ -176,10 +177,11 @@ static void remove_str_to_int(struct packagelist_data *pkgl_dat, const char *key
 {
 	struct sdcardfs_sb_info *sbinfo;
 	struct hashtable_entry *hash_cur;
+	struct hlist_node *h_n;
 	unsigned int hash = str_hash(key);
 	mutex_lock(&sdcardfs_super_list_lock);
 	spin_lock(&pkgl_data_all->hashtable_lock);
-	hash_for_each_possible(pkgl_dat->package_to_appid, hash_cur, hlist, hash) {
+	hash_for_each_possible(pkgl_dat->package_to_appid, hash_cur, h_n, hlist, hash) {
 		if (!strcasecmp(key, hash_cur->key)) {
 			remove_str_to_int_lock(hash_cur);
 			break;
@@ -198,12 +200,15 @@ static void remove_str_to_int(struct packagelist_data *pkgl_dat, const char *key
 static void remove_all_hashentrys(struct packagelist_data *pkgl_dat)
 {
 	struct hashtable_entry *hash_cur;
+	struct hlist_node *h_n;
 	struct hlist_node *h_t;
 	int i;
+
 	spin_lock(&pkgl_data_all->hashtable_lock);
-	hash_for_each_safe(pkgl_dat->package_to_appid, i, h_t, hash_cur, hlist)
-		remove_str_to_int_lock(hash_cur);
+	hash_for_each_safe(pkgl_dat->package_to_appid, i, h_t, h_n, hash_cur, hlist)
+                remove_str_to_int_lock(hash_cur);
 	spin_unlock(&pkgl_data_all->hashtable_lock);
+
 	hash_init(pkgl_dat->package_to_appid);
 }
 
@@ -213,7 +218,7 @@ static struct packagelist_data * packagelist_create(void)
 
 	pkgl_dat = kmalloc(sizeof(*pkgl_dat), GFP_KERNEL | __GFP_ZERO);
 	if (!pkgl_dat) {
-                printk(KERN_ERR "sdcardfs: Failed to create hash\n");
+               printk(KERN_ERR "sdcardfs: Failed to create hash\n");
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -225,7 +230,9 @@ static struct packagelist_data * packagelist_create(void)
 
 static void packagelist_destroy(struct packagelist_data *pkgl_dat)
 {
+	spin_lock(&pkgl_dat->hashtable_lock);
 	remove_all_hashentrys(pkgl_dat);
+	spin_unlock(&pkgl_dat->hashtable_lock);
 	printk(KERN_INFO "sdcardfs: destroyed packagelist pkgld\n");
 	kfree(pkgl_dat);
 }
@@ -303,7 +310,6 @@ static struct config_item_type package_appid_type = {
 	.ct_owner	= THIS_MODULE,
 };
 
-
 struct sdcardfs_packages {
 	struct config_group group;
 };
@@ -346,12 +352,13 @@ static ssize_t packages_attr_show(struct config_item *item,
 {
 	struct hashtable_entry *hash_cur;
 	struct hlist_node *h_t;
+	struct hlist_node *h_n;
 	int i;
 	int count = 0, written = 0;
 	char errormsg[] = "<truncated>\n";
 
 	spin_lock(&pkgl_data_all->hashtable_lock);
-	hash_for_each_safe(pkgl_data_all->package_to_appid, i, h_t, hash_cur, hlist) {
+	hash_for_each_safe(pkgl_data_all->package_to_appid, i, h_t, h_n, hash_cur, hlist) {
 		written = scnprintf(page + count, PAGE_SIZE - sizeof(errormsg) - count, "%s %d\n", (char *)hash_cur->key, hash_cur->value);
 		if (count + written == PAGE_SIZE - sizeof(errormsg)) {
 			count += scnprintf(page + count, PAGE_SIZE - count, errormsg);
@@ -361,12 +368,12 @@ static ssize_t packages_attr_show(struct config_item *item,
 	}
 	spin_unlock(&pkgl_data_all->hashtable_lock);
 
+
 	return count;
 }
 
 static void sdcardfs_packages_release(struct config_item *item)
 {
-
 	printk(KERN_INFO "sdcardfs: destroyed something?\n");
 	kfree(to_sdcardfs_packages(item));
 }

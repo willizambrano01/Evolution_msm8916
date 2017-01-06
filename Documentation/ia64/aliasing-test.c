@@ -132,7 +132,6 @@ static int read_rom(char *path)
 
 	rc = write(fd, "1", 2);
 	if (rc <= 0) {
-		close(fd);
 		perror("write");
 		return -1;
 	}

@@ -29,10 +29,11 @@
 
 #include <asm/assembler.h>
 
-#include "soc.h"
+#include <mach/hardware.h>
+
 #include "iomap.h"
 #include "sdrc.h"
-#include "cm3xxx.h"
+#include "cm2xxx_3xxx.h"
 
 /*
  * This file needs be built unconditionally as ARM to interoperate correctly

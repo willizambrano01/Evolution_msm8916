@@ -97,10 +97,11 @@ static inline u16 ft1000_read_fifo_len(struct net_device *dev)
 {
 	struct ft1000_info *info = netdev_priv(dev);
 
-	if (info->AsicID == ELECTRABUZZ_ID)
+	if (info->AsicID == ELECTRABUZZ_ID) {
 		return (ft1000_read_reg(dev, FT1000_REG_UFIFO_STAT) - 16);
-	else
+	} else {
 		return (ft1000_read_reg(dev, FT1000_REG_MAG_UFSR) - 16);
+	}
 }
 
 //---------------------------------------------------------------------------
@@ -115,7 +116,7 @@ static inline u16 ft1000_read_fifo_len(struct net_device *dev)
 //     value  - value of dpram
 //
 //---------------------------------------------------------------------------
-u16 ft1000_read_dpram(struct net_device *dev, int offset)
+u16 ft1000_read_dpram(struct net_device * dev, int offset)
 {
 	struct ft1000_info *info = netdev_priv(dev);
 	unsigned long flags;
@@ -328,12 +329,11 @@ static void ft1000_disable_interrupts(struct net_device *dev)
 static void ft1000_reset_asic(struct net_device *dev)
 {
 	struct ft1000_info *info = netdev_priv(dev);
-	struct ft1000_pcmcia *pcmcia = info->priv;
 	u16 tempword;
 
 	DEBUG(1, "ft1000_hw:ft1000_reset_asic called\n");
 
-	(*info->ft1000_reset) (pcmcia->link);
+	(*info->ft1000_reset) (info->link);
 
 	// Let's use the register provided by the Magnemite ASIC to reset the
 	// ASIC and DSP.
@@ -1398,13 +1398,12 @@ static int ft1000_parse_dpram_msg(struct net_device *dev)
 static void ft1000_flush_fifo(struct net_device *dev, u16 DrvErrNum)
 {
 	struct ft1000_info *info = netdev_priv(dev);
-	struct ft1000_pcmcia *pcmcia = info->priv;
 	u16 i;
 	u32 templong;
 	u16 tempword;
 
 	DEBUG(1, "ft1000:ft1000_hw:ft1000_flush_fifo called\n");
-	if (pcmcia->PktIntfErr > MAX_PH_ERR) {
+	if (info->PktIntfErr > MAX_PH_ERR) {
 		if (info->AsicID == ELECTRABUZZ_ID) {
 			info->DSP_TIME[0] =
 				ft1000_read_dpram(dev, FT1000_DSP_TIMER0);
@@ -1493,7 +1492,7 @@ static void ft1000_flush_fifo(struct net_device *dev, u16 DrvErrNum)
 							FIFO_FLUSH_BADCNT;
 					} else {
 						// Let's assume that we really flush the FIFO
-						pcmcia->PktIntfErr++;
+						info->PktIntfErr++;
 						return;
 					}
 				} else {
@@ -1524,7 +1523,7 @@ static void ft1000_flush_fifo(struct net_device *dev, u16 DrvErrNum)
 			DEBUG(0, "FT1000_REG_MAG_DFSR = 0x%x\n", tempword);
 		}
 		if (DrvErrNum) {
-			pcmcia->PktIntfErr++;
+			info->PktIntfErr++;
 		}
 	}
 }
@@ -1733,7 +1732,6 @@ static int ft1000_copy_up_pkt(struct net_device *dev)
 static int ft1000_copy_down_pkt(struct net_device *dev, u16 * packet, u16 len)
 {
 	struct ft1000_info *info = netdev_priv(dev);
-	struct ft1000_pcmcia *pcmcia = info->priv;
 	union {
 		struct pseudo_hdr blk;
 		u16 buff[sizeof(struct pseudo_hdr) >> 1];
@@ -1783,7 +1781,7 @@ static int ft1000_copy_down_pkt(struct net_device *dev, u16 * packet, u16 len)
 	pseudo.blk.control = 0;
 	pseudo.blk.rsvd1 = 0;
 	pseudo.blk.seq_num = 0;
-	pseudo.blk.rsvd2 = pcmcia->packetseqnum++;
+	pseudo.blk.rsvd2 = info->packetseqnum++;
 	pseudo.blk.qos_class = 0;
 	/* Calculate pseudo header checksum */
 	pseudo.blk.checksum = pseudo.buff[0];
@@ -1999,43 +1997,42 @@ static irqreturn_t ft1000_interrupt(int irq, void *dev_id)
 	inttype = ft1000_read_reg(dev, FT1000_REG_SUP_ISR);
 
     // Make sure we process all interrupt before leaving the ISR due to the edge trigger interrupt type
-	while (inttype) {
-		if (inttype & ISR_DOORBELL_PEND)
-			ft1000_parse_dpram_msg(dev);
-
-		if (inttype & ISR_RCV) {
-			DEBUG(1, "Data in FIFO\n");
-
-			cnt = 0;
-			do {
-				// Check if we have packets in the Downlink FIFO
-				if (info->AsicID == ELECTRABUZZ_ID) {
-					tempword =
-					ft1000_read_reg(dev,
-							FT1000_REG_DFIFO_STAT);
-				} else {
-					tempword =
-					ft1000_read_reg(dev,
-							FT1000_REG_MAG_DFSR);
-				}
-				if (tempword & 0x1f) {
-					ft1000_copy_up_pkt(dev);
-				} else {
-					break;
-				}
-				cnt++;
-			} while (cnt < MAX_RCV_LOOP);
-
-		}
-		// clear interrupts
-		tempword = ft1000_read_reg(dev, FT1000_REG_SUP_ISR);
-		DEBUG(1, "ft1000_hw: interrupt status register = 0x%x\n", tempword);
-		ft1000_write_reg(dev, FT1000_REG_SUP_ISR, tempword);
-
-		// Read interrupt type
-		inttype = ft1000_read_reg (dev, FT1000_REG_SUP_ISR);
-		DEBUG(1,"ft1000_hw: interrupt status register after clear = 0x%x\n",inttype);
+    while (inttype) {
+	if (inttype & ISR_DOORBELL_PEND) {
+		ft1000_parse_dpram_msg(dev);
 	}
+
+	if (inttype & ISR_RCV) {
+		DEBUG(1, "Data in FIFO\n");
+
+		cnt = 0;
+		do {
+			// Check if we have packets in the Downlink FIFO
+			if (info->AsicID == ELECTRABUZZ_ID) {
+				tempword =
+					ft1000_read_reg(dev, FT1000_REG_DFIFO_STAT);
+			} else {
+				tempword =
+					ft1000_read_reg(dev, FT1000_REG_MAG_DFSR);
+			}
+			if (tempword & 0x1f) {
+				ft1000_copy_up_pkt(dev);
+			} else {
+				break;
+			}
+			cnt++;
+		} while (cnt < MAX_RCV_LOOP);
+
+	}
+	// clear interrupts
+	tempword = ft1000_read_reg(dev, FT1000_REG_SUP_ISR);
+	DEBUG(1, "ft1000_hw: interrupt status register = 0x%x\n", tempword);
+	ft1000_write_reg(dev, FT1000_REG_SUP_ISR, tempword);
+
+        // Read interrupt type
+        inttype = ft1000_read_reg (dev, FT1000_REG_SUP_ISR);
+        DEBUG(1,"ft1000_hw: interrupt status register after clear = 0x%x\n",inttype);
+    }
 	ft1000_enable_interrupts(dev);
 	return IRQ_HANDLED;
 }
@@ -2061,8 +2058,6 @@ void stop_ft1000_card(struct net_device *dev)
 		kfree(ptr);
 	}
 
-	kfree(info->priv);
-
 	if (info->registered) {
 		unregister_netdev(dev);
 		info->registered = 0;
@@ -2082,12 +2077,11 @@ static void ft1000_get_drvinfo(struct net_device *dev,
 	struct ft1000_info *ft_info;
 	ft_info = netdev_priv(dev);
 
-	strlcpy(info->driver, "ft1000", sizeof(info->driver));
-	snprintf(info->bus_info, sizeof(info->bus_info), "PCMCIA 0x%lx",
+	snprintf(info->driver, 32, "ft1000");
+	snprintf(info->bus_info, ETHTOOL_BUSINFO_LEN, "PCMCIA 0x%lx",
 		 dev->base_addr);
-	snprintf(info->fw_version, sizeof(info->fw_version), "%d.%d.%d.%d",
-		 ft_info->DspVer[0], ft_info->DspVer[1], ft_info->DspVer[2],
-		 ft_info->DspVer[3]);
+	snprintf(info->fw_version, 32, "%d.%d.%d.%d", ft_info->DspVer[0],
+		 ft_info->DspVer[1], ft_info->DspVer[2], ft_info->DspVer[3]);
 }
 
 static u32 ft1000_get_link(struct net_device *dev)
@@ -2106,7 +2100,6 @@ struct net_device *init_ft1000_card(struct pcmcia_device *link,
 						void *ft1000_reset)
 {
 	struct ft1000_info *info;
-	struct ft1000_pcmcia *pcmcia;
 	struct net_device *dev;
 
 	static const struct net_device_ops ft1000ops =		// Slavius 21.10.2009 due to kernel changes
@@ -2148,13 +2141,10 @@ struct net_device *init_ft1000_card(struct pcmcia_device *link,
 
 	memset(&info->stats, 0, sizeof(struct net_device_stats));
 
-	info->priv = kzalloc(sizeof(struct ft1000_pcmcia), GFP_KERNEL);
-	pcmcia = info->priv;
-	pcmcia->link = link;
-
 	spin_lock_init(&info->dpram_lock);
 	info->DrvErrNum = 0;
 	info->registered = 1;
+	info->link = link;
 	info->ft1000_reset = ft1000_reset;
 	info->mediastate = 0;
 	info->fifo_cnt = 0;

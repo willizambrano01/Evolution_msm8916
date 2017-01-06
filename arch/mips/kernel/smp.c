@@ -37,7 +37,6 @@
 #include <linux/atomic.h>
 #include <asm/cpu.h>
 #include <asm/processor.h>
-#include <asm/idle.h>
 #include <asm/r4k-timer.h>
 #include <asm/mmu_context.h>
 #include <asm/time.h>
@@ -84,7 +83,6 @@ static inline void set_cpu_sibling_map(int cpu)
 }
 
 struct plat_smp_ops *mp_ops;
-EXPORT_SYMBOL(mp_ops);
 
 __cpuinit void register_smp_ops(struct plat_smp_ops *ops)
 {
@@ -104,13 +102,11 @@ asmlinkage __cpuinit void start_secondary(void)
 
 #ifdef CONFIG_MIPS_MT_SMTC
 	/* Only do cpu_probe for first TC of CPU */
-	if ((read_c0_tcbind() & TCBIND_CURTC) != 0)
-		__cpu_name[smp_processor_id()] = __cpu_name[0];
-	else
+	if ((read_c0_tcbind() & TCBIND_CURTC) == 0)
 #endif /* CONFIG_MIPS_MT_SMTC */
 	cpu_probe();
 	cpu_report();
-	per_cpu_trap_init(false);
+	per_cpu_trap_init();
 	mips_clockevent_init();
 	mp_ops->init_secondary();
 
@@ -126,22 +122,14 @@ asmlinkage __cpuinit void start_secondary(void)
 
 	notify_cpu_starting(cpu);
 
-	set_cpu_online(cpu, true);
-
+	mp_ops->smp_finish();
 	set_cpu_sibling_map(cpu);
 
 	cpu_set(cpu, cpu_callin_map);
 
-	synchronise_count_slave(cpu);
+	synchronise_count_slave();
 
-	/*
-	 * irq will be enabled in ->smp_finish(), enabling it too early
-	 * is dangerous.
-	 */
-	WARN_ON_ONCE(!irqs_disabled());
-	mp_ops->smp_finish();
-
-	cpu_startup_entry(CPUHP_ONLINE);
+	cpu_idle();
 }
 
 /*
@@ -175,6 +163,7 @@ void smp_send_stop(void)
 void __init smp_cpus_done(unsigned int max_cpus)
 {
 	mp_ops->cpus_done();
+	synchronise_count_master();
 }
 
 /* called from main before smp_init() */
@@ -190,16 +179,68 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 }
 
 /* preload SMP state for boot cpu */
-void smp_prepare_boot_cpu(void)
+void __devinit smp_prepare_boot_cpu(void)
 {
 	set_cpu_possible(0, true);
 	set_cpu_online(0, true);
 	cpu_set(0, cpu_callin_map);
 }
 
-int __cpuinit __cpu_up(unsigned int cpu, struct task_struct *tidle)
+/*
+ * Called once for each "cpu_possible(cpu)".  Needs to spin up the cpu
+ * and keep control until "cpu_online(cpu)" is set.  Note: cpu is
+ * physical, not logical.
+ */
+static struct task_struct *cpu_idle_thread[NR_CPUS];
+
+struct create_idle {
+	struct work_struct work;
+	struct task_struct *idle;
+	struct completion done;
+	int cpu;
+};
+
+static void __cpuinit do_fork_idle(struct work_struct *work)
 {
-	mp_ops->boot_secondary(cpu, tidle);
+	struct create_idle *c_idle =
+		container_of(work, struct create_idle, work);
+
+	c_idle->idle = fork_idle(c_idle->cpu);
+	complete(&c_idle->done);
+}
+
+int __cpuinit __cpu_up(unsigned int cpu)
+{
+	struct task_struct *idle;
+
+	/*
+	 * Processor goes to start_secondary(), sets online flag
+	 * The following code is purely to make sure
+	 * Linux can schedule processes on this slave.
+	 */
+	if (!cpu_idle_thread[cpu]) {
+		/*
+		 * Schedule work item to avoid forking user task
+		 * Ported from arch/x86/kernel/smpboot.c
+		 */
+		struct create_idle c_idle = {
+			.cpu    = cpu,
+			.done   = COMPLETION_INITIALIZER_ONSTACK(c_idle.done),
+		};
+
+		INIT_WORK_ONSTACK(&c_idle.work, do_fork_idle);
+		schedule_work(&c_idle.work);
+		wait_for_completion(&c_idle.done);
+		idle = cpu_idle_thread[cpu] = c_idle.idle;
+
+		if (IS_ERR(idle))
+			panic(KERN_ERR "Fork failed for CPU %d", cpu);
+	} else {
+		idle = cpu_idle_thread[cpu];
+		init_idle(idle, cpu);
+	}
+
+	mp_ops->boot_secondary(cpu, idle);
 
 	/*
 	 * Trust is futile.  We should really have timeouts ...
@@ -207,7 +248,8 @@ int __cpuinit __cpu_up(unsigned int cpu, struct task_struct *tidle)
 	while (!cpu_isset(cpu, cpu_callin_map))
 		udelay(100);
 
-	synchronise_count_master(cpu);
+	set_cpu_online(cpu, true);
+
 	return 0;
 }
 
@@ -388,20 +430,3 @@ void flush_tlb_one(unsigned long vaddr)
 
 EXPORT_SYMBOL(flush_tlb_page);
 EXPORT_SYMBOL(flush_tlb_one);
-
-#if defined(CONFIG_KEXEC)
-void (*dump_ipi_function_ptr)(void *) = NULL;
-void dump_send_ipi(void (*dump_ipi_callback)(void *))
-{
-	int i;
-	int cpu = smp_processor_id();
-
-	dump_ipi_function_ptr = dump_ipi_callback;
-	smp_mb();
-	for_each_online_cpu(i)
-		if (i != cpu)
-			mp_ops->send_ipi_single(i, SMP_DUMP);
-
-}
-EXPORT_SYMBOL(dump_send_ipi);
-#endif

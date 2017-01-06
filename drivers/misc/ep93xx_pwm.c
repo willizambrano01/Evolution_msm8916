@@ -365,7 +365,18 @@ static struct platform_driver ep93xx_pwm_driver = {
 	.remove		= __exit_p(ep93xx_pwm_remove),
 };
 
-module_platform_driver_probe(ep93xx_pwm_driver, ep93xx_pwm_probe);
+static int __init ep93xx_pwm_init(void)
+{
+	return platform_driver_probe(&ep93xx_pwm_driver, ep93xx_pwm_probe);
+}
+
+static void __exit ep93xx_pwm_exit(void)
+{
+	platform_driver_unregister(&ep93xx_pwm_driver);
+}
+
+module_init(ep93xx_pwm_init);
+module_exit(ep93xx_pwm_exit);
 
 MODULE_AUTHOR("Matthieu Crapet <mcrapet@gmail.com>, "
 	      "H Hartley Sweeten <hsweeten@visionengravers.com>");

@@ -26,13 +26,10 @@
 /*
  * fill in basic accounting fields
  */
-void bacct_add_tsk(struct user_namespace *user_ns,
-		   struct pid_namespace *pid_ns,
-		   struct taskstats *stats, struct task_struct *tsk)
+void bacct_add_tsk(struct taskstats *stats, struct task_struct *tsk)
 {
 	const struct cred *tcred;
 	struct timespec uptime, ts;
-	cputime_t utime, stime, utimescaled, stimescaled;
 	u64 ac_etime;
 
 	BUILD_BUG_ON(TS_COMM_LEN < TASK_COMM_LEN);
@@ -58,23 +55,18 @@ void bacct_add_tsk(struct user_namespace *user_ns,
 		stats->ac_flag |= AXSIG;
 	stats->ac_nice	 = task_nice(tsk);
 	stats->ac_sched	 = tsk->policy;
-	stats->ac_pid	 = task_pid_nr_ns(tsk, pid_ns);
+	stats->ac_pid	 = tsk->pid;
 	rcu_read_lock();
 	tcred = __task_cred(tsk);
-	stats->ac_uid	 = from_kuid_munged(user_ns, tcred->uid);
-	stats->ac_gid	 = from_kgid_munged(user_ns, tcred->gid);
+	stats->ac_uid	 = tcred->uid;
+	stats->ac_gid	 = tcred->gid;
 	stats->ac_ppid	 = pid_alive(tsk) ?
-		task_tgid_nr_ns(rcu_dereference(tsk->real_parent), pid_ns) : 0;
+				rcu_dereference(tsk->real_parent)->tgid : 0;
 	rcu_read_unlock();
-
-	task_cputime(tsk, &utime, &stime);
-	stats->ac_utime = cputime_to_usecs(utime);
-	stats->ac_stime = cputime_to_usecs(stime);
-
-	task_cputime_scaled(tsk, &utimescaled, &stimescaled);
-	stats->ac_utimescaled = cputime_to_usecs(utimescaled);
-	stats->ac_stimescaled = cputime_to_usecs(stimescaled);
-
+	stats->ac_utime = cputime_to_usecs(tsk->utime);
+	stats->ac_stime = cputime_to_usecs(tsk->stime);
+	stats->ac_utimescaled = cputime_to_usecs(tsk->utimescaled);
+	stats->ac_stimescaled = cputime_to_usecs(tsk->stimescaled);
 	stats->ac_minflt = tsk->min_flt;
 	stats->ac_majflt = tsk->maj_flt;
 
@@ -121,8 +113,11 @@ void xacct_add_tsk(struct taskstats *stats, struct task_struct *p)
 #undef KB
 #undef MB
 
-static void __acct_update_integrals(struct task_struct *tsk,
-				    cputime_t utime, cputime_t stime)
+/**
+ * acct_update_integrals - update mm integral fields in task_struct
+ * @tsk: task_struct for accounting
+ */
+void acct_update_integrals(struct task_struct *tsk)
 {
 	if (likely(tsk->mm)) {
 		cputime_t time, dtime;
@@ -131,7 +126,7 @@ static void __acct_update_integrals(struct task_struct *tsk,
 		u64 delta;
 
 		local_irq_save(flags);
-		time = stime + utime;
+		time = tsk->stime + tsk->utime;
 		dtime = time - tsk->acct_timexpd;
 		jiffies_to_timeval(cputime_to_jiffies(dtime), &value);
 		delta = value.tv_sec;
@@ -145,27 +140,6 @@ static void __acct_update_integrals(struct task_struct *tsk,
 	out:
 		local_irq_restore(flags);
 	}
-}
-
-/**
- * acct_update_integrals - update mm integral fields in task_struct
- * @tsk: task_struct for accounting
- */
-void acct_update_integrals(struct task_struct *tsk)
-{
-	cputime_t utime, stime;
-
-	task_cputime(tsk, &utime, &stime);
-	__acct_update_integrals(tsk, utime, stime);
-}
-
-/**
- * acct_account_cputime - update mm integral after cputime update
- * @tsk: task_struct for accounting
- */
-void acct_account_cputime(struct task_struct *tsk)
-{
-	__acct_update_integrals(tsk, tsk->utime, tsk->stime);
 }
 
 /**

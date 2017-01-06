@@ -305,8 +305,7 @@ int mtrr_add_page(unsigned long base, unsigned long size,
 		return -EINVAL;
 	}
 
-	if ((base | (base + size - 1)) >>
-	    (boot_cpu_data.x86_phys_bits - PAGE_SHIFT)) {
+	if (base & size_or_mask || size & size_or_mask) {
 		pr_warning("mtrr: base or size exceeds the MTRR width\n");
 		return -EINVAL;
 	}
@@ -584,7 +583,6 @@ static struct syscore_ops mtrr_syscore_ops = {
 
 int __initdata changed_by_mtrr_cleanup;
 
-#define SIZE_OR_MASK_BITS(n)  (~((1ULL << ((n) - PAGE_SHIFT)) - 1))
 /**
  * mtrr_bp_init - initialize mtrrs on the boot CPU
  *
@@ -602,13 +600,13 @@ void __init mtrr_bp_init(void)
 
 	if (cpu_has_mtrr) {
 		mtrr_if = &generic_mtrr_ops;
-		size_or_mask = SIZE_OR_MASK_BITS(36);
+		size_or_mask = 0xff000000;			/* 36 bits */
 		size_and_mask = 0x00f00000;
 		phys_addr = 36;
 
 		/*
 		 * This is an AMD specific MSR, but we assume(hope?) that
-		 * Intel will implement it too when they extend the address
+		 * Intel will implement it to when they extend the address
 		 * bus of the Xeon.
 		 */
 		if (cpuid_eax(0x80000000) >= 0x80000008) {
@@ -621,7 +619,7 @@ void __init mtrr_bp_init(void)
 			     boot_cpu_data.x86_mask == 0x4))
 				phys_addr = 36;
 
-			size_or_mask = SIZE_OR_MASK_BITS(phys_addr);
+			size_or_mask = ~((1ULL << (phys_addr - PAGE_SHIFT)) - 1);
 			size_and_mask = ~size_or_mask & 0xfffff00000ULL;
 		} else if (boot_cpu_data.x86_vendor == X86_VENDOR_CENTAUR &&
 			   boot_cpu_data.x86 == 6) {
@@ -629,7 +627,7 @@ void __init mtrr_bp_init(void)
 			 * VIA C* family have Intel style MTRRs,
 			 * but don't support PAE
 			 */
-			size_or_mask = SIZE_OR_MASK_BITS(32);
+			size_or_mask = 0xfff00000;		/* 32 bits */
 			size_and_mask = 0;
 			phys_addr = 32;
 		}
@@ -639,21 +637,21 @@ void __init mtrr_bp_init(void)
 			if (cpu_has_k6_mtrr) {
 				/* Pre-Athlon (K6) AMD CPU MTRRs */
 				mtrr_if = mtrr_ops[X86_VENDOR_AMD];
-				size_or_mask = SIZE_OR_MASK_BITS(32);
+				size_or_mask = 0xfff00000;	/* 32 bits */
 				size_and_mask = 0;
 			}
 			break;
 		case X86_VENDOR_CENTAUR:
 			if (cpu_has_centaur_mcr) {
 				mtrr_if = mtrr_ops[X86_VENDOR_CENTAUR];
-				size_or_mask = SIZE_OR_MASK_BITS(32);
+				size_or_mask = 0xfff00000;	/* 32 bits */
 				size_and_mask = 0;
 			}
 			break;
 		case X86_VENDOR_CYRIX:
 			if (cpu_has_cyrix_arr) {
 				mtrr_if = mtrr_ops[X86_VENDOR_CYRIX];
-				size_or_mask = SIZE_OR_MASK_BITS(32);
+				size_or_mask = 0xfff00000;	/* 32 bits */
 				size_and_mask = 0;
 			}
 			break;
@@ -697,16 +695,11 @@ void mtrr_ap_init(void)
 }
 
 /**
- * Save current fixed-range MTRR state of the first cpu in cpu_online_mask.
+ * Save current fixed-range MTRR state of the BSP
  */
 void mtrr_save_state(void)
 {
-	int first_cpu;
-
-	get_online_cpus();
-	first_cpu = cpumask_first(cpu_online_mask);
-	smp_call_function_single(first_cpu, mtrr_save_fixed_ranges, NULL, 1);
-	put_online_cpus();
+	smp_call_function_single(0, mtrr_save_fixed_ranges, NULL, 1);
 }
 
 void set_mtrr_aps_delayed_init(void)

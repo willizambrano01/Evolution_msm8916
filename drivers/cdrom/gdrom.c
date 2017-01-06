@@ -503,11 +503,12 @@ static int gdrom_bdops_open(struct block_device *bdev, fmode_t mode)
 	return ret;
 }
 
-static void gdrom_bdops_release(struct gendisk *disk, fmode_t mode)
+static int gdrom_bdops_release(struct gendisk *disk, fmode_t mode)
 {
 	mutex_lock(&gdrom_mutex);
 	cdrom_release(gd.cd_info, mode);
 	mutex_unlock(&gdrom_mutex);
+	return 0;
 }
 
 static unsigned int gdrom_bdops_check_events(struct gendisk *disk,
@@ -556,7 +557,7 @@ static irqreturn_t gdrom_dma_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int gdrom_set_interrupt_handlers(void)
+static int __devinit gdrom_set_interrupt_handlers(void)
 {
 	int err;
 
@@ -680,7 +681,7 @@ static void gdrom_request(struct request_queue *rq)
 }
 
 /* Print string identifying GD ROM device */
-static int gdrom_outputversion(void)
+static int __devinit gdrom_outputversion(void)
 {
 	struct gdrom_id *id;
 	char *model_name, *manuf_name, *firmw_ver;
@@ -714,7 +715,7 @@ free_id:
 }
 
 /* set the default mode for DMA transfer */
-static int gdrom_init_dma_mode(void)
+static int __devinit gdrom_init_dma_mode(void)
 {
 	__raw_writeb(0x13, GDROM_ERROR_REG);
 	__raw_writeb(0x22, GDROM_INTSEC_REG);
@@ -735,7 +736,7 @@ static int gdrom_init_dma_mode(void)
 	return 0;
 }
 
-static void probe_gdrom_setupcd(void)
+static void __devinit probe_gdrom_setupcd(void)
 {
 	gd.cd_info->ops = &gdrom_ops;
 	gd.cd_info->capacity = 1;
@@ -744,7 +745,7 @@ static void probe_gdrom_setupcd(void)
 		CDC_SELECT_DISC;
 }
 
-static void probe_gdrom_setupdisk(void)
+static void __devinit probe_gdrom_setupdisk(void)
 {
 	gd.disk->major = gdrom_major;
 	gd.disk->first_minor = 1;
@@ -752,7 +753,7 @@ static void probe_gdrom_setupdisk(void)
 	strcpy(gd.disk->disk_name, GDROM_DEV_NAME);
 }
 
-static int probe_gdrom_setupqueue(void)
+static int __devinit probe_gdrom_setupqueue(void)
 {
 	blk_queue_logical_block_size(gd.gdrom_rq, GDROM_HARD_SECTOR);
 	/* using DMA so memory will need to be contiguous */
@@ -767,7 +768,7 @@ static int probe_gdrom_setupqueue(void)
  * register this as a block device and as compliant with the
  * universal CD Rom driver interface
  */
-static int probe_gdrom(struct platform_device *devptr)
+static int __devinit probe_gdrom(struct platform_device *devptr)
 {
 	int err;
 	/* Start the device */
@@ -837,9 +838,9 @@ probe_fail_no_mem:
 	return err;
 }
 
-static int remove_gdrom(struct platform_device *devptr)
+static int __devexit remove_gdrom(struct platform_device *devptr)
 {
-	flush_work(&work);
+	flush_work_sync(&work);
 	blk_cleanup_queue(gd.gdrom_rq);
 	free_irq(HW_EVENT_GDROM_CMD, &gd);
 	free_irq(HW_EVENT_GDROM_DMA, &gd);
@@ -853,7 +854,7 @@ static int remove_gdrom(struct platform_device *devptr)
 
 static struct platform_driver gdrom_driver = {
 	.probe = probe_gdrom,
-	.remove = remove_gdrom,
+	.remove = __devexit_p(remove_gdrom),
 	.driver = {
 			.name = GDROM_DEV_NAME,
 	},

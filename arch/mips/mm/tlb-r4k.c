@@ -13,7 +13,6 @@
 #include <linux/smp.h>
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
-#include <linux/module.h>
 
 #include <asm/cpu.h>
 #include <asm/bootinfo.h>
@@ -95,7 +94,6 @@ void local_flush_tlb_all(void)
 	FLUSH_ITLB;
 	EXIT_CRITICAL(flags);
 }
-EXPORT_SYMBOL(local_flush_tlb_all);
 
 /* All entries common to a mm share an asid.  To effectively flush
    these entries, we just bump the asid. */
@@ -122,11 +120,18 @@ void local_flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 
 	if (cpu_context(cpu, mm) != 0) {
 		unsigned long size, flags;
+		int huge = is_vm_hugetlb_page(vma);
 
 		ENTER_CRITICAL(flags);
-		start = round_down(start, PAGE_SIZE << 1);
-		end = round_up(end, PAGE_SIZE << 1);
-		size = (end - start) >> (PAGE_SHIFT + 1);
+		if (huge) {
+			start = round_down(start, HPAGE_SIZE);
+			end = round_up(end, HPAGE_SIZE);
+			size = (end - start) >> HPAGE_SHIFT;
+		} else {
+			start = round_down(start, PAGE_SIZE << 1);
+			end = round_up(end, PAGE_SIZE << 1);
+			size = (end - start) >> (PAGE_SHIFT + 1);
+		}
 		if (size <= current_cpu_data.tlbsize/2) {
 			int oldpid = read_c0_entryhi();
 			int newpid = cpu_asid(cpu, mm);
@@ -135,7 +140,10 @@ void local_flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 				int idx;
 
 				write_c0_entryhi(start | newpid);
-				start += (PAGE_SIZE << 1);
+				if (huge)
+					start += HPAGE_SIZE;
+				else
+					start += (PAGE_SIZE << 1);
 				mtc0_tlbw_hazard();
 				tlb_probe();
 				tlb_probe_hazard();
@@ -297,7 +305,7 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	pudp = pud_offset(pgdp, address);
 	pmdp = pmd_offset(pudp, address);
 	idx = read_c0_index();
-#ifdef CONFIG_MIPS_HUGE_TLB_SUPPORT
+#ifdef CONFIG_HUGETLB_PAGE
 	/* this could be a huge page  */
 	if (pmd_huge(*pmdp)) {
 		unsigned long lo;
@@ -312,7 +320,6 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 			tlb_write_random();
 		else
 			tlb_write_indexed();
-		tlbw_use_hazard();
 		write_c0_pagemask(PM_DEFAULT_MASK);
 	} else
 #endif
@@ -369,26 +376,6 @@ void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
 	EXIT_CRITICAL(flags);
 }
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-
-int __init has_transparent_hugepage(void)
-{
-	unsigned int mask;
-	unsigned long flags;
-
-	ENTER_CRITICAL(flags);
-	write_c0_pagemask(PM_HUGE_MASK);
-	back_to_back_c0_hazard();
-	mask = read_c0_pagemask();
-	write_c0_pagemask(PM_DEFAULT_MASK);
-
-	EXIT_CRITICAL(flags);
-
-	return mask == PM_HUGE_MASK;
-}
-
-#endif /* CONFIG_TRANSPARENT_HUGEPAGE  */
-
 static int __cpuinitdata ntlb;
 static int __init set_ntlb(char *str)
 {
@@ -414,7 +401,7 @@ void __cpuinit tlb_init(void)
 	    current_cpu_type() == CPU_R14000)
 		write_c0_framemask(0);
 
-	if (cpu_has_rixi) {
+	if (kernel_uses_smartmips_rixi) {
 		/*
 		 * Enable the no read, no exec bits, and enable large virtual
 		 * address.
@@ -426,7 +413,7 @@ void __cpuinit tlb_init(void)
 		write_c0_pagegrain(pg);
 	}
 
-	/* From this point on the ARC firmware is dead.	 */
+        /* From this point on the ARC firmware is dead.  */
 	local_flush_tlb_all();
 
 	/* Did I tell you that ARC SUCKS?  */

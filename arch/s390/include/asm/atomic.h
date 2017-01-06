@@ -1,5 +1,8 @@
+#ifndef __ARCH_S390_ATOMIC__
+#define __ARCH_S390_ATOMIC__
+
 /*
- * Copyright IBM Corp. 1999, 2009
+ * Copyright 1999,2009 IBM Corp.
  * Author(s): Martin Schwidefsky <schwidefsky@de.ibm.com>,
  *	      Denis Joseph Barrow,
  *	      Arnd Bergmann <arndb@de.ibm.com>,
@@ -9,9 +12,6 @@
  * s390 uses 'Compare And Swap' for atomicity in SMP environment.
  *
  */
-
-#ifndef __ARCH_S390_ATOMIC__
-#define __ARCH_S390_ATOMIC__
 
 #include <linux/compiler.h>
 #include <linux/types.h>

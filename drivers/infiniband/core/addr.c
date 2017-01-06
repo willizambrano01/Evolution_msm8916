@@ -129,7 +129,7 @@ int rdma_translate_ip(struct sockaddr *addr, struct rdma_dev_addr *dev_addr)
 		dev_put(dev);
 		break;
 
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	case AF_INET6:
 		rcu_read_lock();
 		for_each_netdev_rcu(&init_net, dev) {
@@ -152,11 +152,13 @@ static void set_timeout(unsigned long time)
 {
 	unsigned long delay;
 
+	cancel_delayed_work(&work);
+
 	delay = time - jiffies;
 	if ((long)delay <= 0)
 		delay = 1;
 
-	mod_delayed_work(addr_wq, &work, delay);
+	queue_delayed_work(addr_wq, &work, delay);
 }
 
 static void queue_req(struct addr_req *req)
@@ -241,7 +243,7 @@ out:
 	return ret;
 }
 
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 static int addr6_resolve(struct sockaddr_in6 *src_in,
 			 struct sockaddr_in6 *dst_in,
 			 struct rdma_dev_addr *addr)

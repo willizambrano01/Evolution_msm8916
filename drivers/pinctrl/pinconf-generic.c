@@ -12,7 +12,6 @@
 #define pr_fmt(fmt) "generic pinconfig core: " fmt
 
 #include <linux/kernel.h>
-#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/device.h>
 #include <linux/slab.h>
@@ -35,7 +34,7 @@ struct pin_config_item {
 
 #define PCONFDUMP(a, b, c) { .param = a, .display = b, .format = c }
 
-static struct pin_config_item conf_items[] = {
+struct pin_config_item conf_items[] = {
 	PCONFDUMP(PIN_CONFIG_BIAS_DISABLE, "input bias disabled", NULL),
 	PCONFDUMP(PIN_CONFIG_BIAS_HIGH_IMPEDANCE, "input bias high impedance", NULL),
 	PCONFDUMP(PIN_CONFIG_BIAS_BUS_HOLD, "input bias bus hold", NULL),
@@ -47,10 +46,9 @@ static struct pin_config_item conf_items[] = {
 	PCONFDUMP(PIN_CONFIG_DRIVE_OPEN_DRAIN, "output drive open drain", NULL),
 	PCONFDUMP(PIN_CONFIG_DRIVE_OPEN_SOURCE, "output drive open source", NULL),
 	PCONFDUMP(PIN_CONFIG_DRIVE_STRENGTH, "output drive strength", "mA"),
-	PCONFDUMP(PIN_CONFIG_INPUT_ENABLE, "input enabled", NULL),
 	PCONFDUMP(PIN_CONFIG_INPUT_SCHMITT_ENABLE, "input schmitt enabled", NULL),
 	PCONFDUMP(PIN_CONFIG_INPUT_SCHMITT, "input schmitt trigger", NULL),
-	PCONFDUMP(PIN_CONFIG_INPUT_DEBOUNCE, "input debounce", "usec"),
+	PCONFDUMP(PIN_CONFIG_INPUT_DEBOUNCE, "input debounce", "time units"),
 	PCONFDUMP(PIN_CONFIG_POWER_SOURCE, "pin power source", "selector"),
 	PCONFDUMP(PIN_CONFIG_SLEW_RATE, "slew rate", NULL),
 	PCONFDUMP(PIN_CONFIG_LOW_POWER_MODE, "pin low power", "mode"),
@@ -66,7 +64,7 @@ void pinconf_generic_dump_pin(struct pinctrl_dev *pctldev,
 	if (!ops->is_generic)
 		return;
 
-	for (i = 0; i < ARRAY_SIZE(conf_items); i++) {
+	for(i = 0; i < ARRAY_SIZE(conf_items); i++) {
 		unsigned long config;
 		int ret;
 
@@ -101,7 +99,7 @@ void pinconf_generic_dump_group(struct pinctrl_dev *pctldev,
 	if (!ops->is_generic)
 		return;
 
-	for (i = 0; i < ARRAY_SIZE(conf_items); i++) {
+	for(i = 0; i < ARRAY_SIZE(conf_items); i++) {
 		unsigned long config;
 		int ret;
 
@@ -127,19 +125,6 @@ void pinconf_generic_dump_group(struct pinctrl_dev *pctldev,
 	}
 }
 
-void pinconf_generic_dump_config(struct pinctrl_dev *pctldev,
-				 struct seq_file *s, unsigned long config)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(conf_items); i++) {
-		if (pinconf_to_config_param(config) != conf_items[i].param)
-			continue;
-		seq_printf(s, "%s: 0x%x", conf_items[i].display,
-			   pinconf_to_config_argument(config));
-	}
-}
-EXPORT_SYMBOL_GPL(pinconf_generic_dump_config);
 #endif
 
 #ifdef CONFIG_OF
@@ -160,16 +145,16 @@ static struct pinconf_generic_dt_params dt_params[] = {
 	{ "drive-open-drain", PIN_CONFIG_DRIVE_OPEN_DRAIN, 0 },
 	{ "drive-open-source", PIN_CONFIG_DRIVE_OPEN_SOURCE, 0 },
 	{ "drive-strength", PIN_CONFIG_DRIVE_STRENGTH, 0 },
-	{ "input-enable", PIN_CONFIG_INPUT_ENABLE, 1 },
-	{ "input-disable", PIN_CONFIG_INPUT_ENABLE, 0 },
 	{ "input-schmitt-enable", PIN_CONFIG_INPUT_SCHMITT_ENABLE, 1 },
 	{ "input-schmitt-disable", PIN_CONFIG_INPUT_SCHMITT_ENABLE, 0 },
+	{ "input-schmitt", PIN_CONFIG_INPUT_SCHMITT, 0 },
 	{ "input-debounce", PIN_CONFIG_INPUT_DEBOUNCE, 0 },
+	{ "power-source", PIN_CONFIG_POWER_SOURCE, 0 },
+	{ "slew-rate", PIN_CONFIG_SLEW_RATE, 0 },
 	{ "low-power-enable", PIN_CONFIG_LOW_POWER_MODE, 1 },
 	{ "low-power-disable", PIN_CONFIG_LOW_POWER_MODE, 0 },
 	{ "output-low", PIN_CONFIG_OUTPUT, 0, },
 	{ "output-high", PIN_CONFIG_OUTPUT, 1, },
-	{ "slew-rate", PIN_CONFIG_SLEW_RATE, 0},
 };
 
 /**

@@ -19,15 +19,20 @@
 #include <linux/io.h>
 
 #include <asm/smp_scu.h>
+#include <asm/hardware/gic.h>
 
 #include "core.h"
 
 extern void secondary_startup(void);
 
-static int __cpuinit highbank_boot_secondary(unsigned int cpu, struct task_struct *idle)
+void __cpuinit platform_secondary_init(unsigned int cpu)
 {
-	highbank_set_cpu_jump(cpu, secondary_startup);
-	arch_send_wakeup_ipi_mask(cpumask_of(cpu));
+	gic_secondary_init(0);
+}
+
+int __cpuinit boot_secondary(unsigned int cpu, struct task_struct *idle)
+{
+	gic_raise_softirq(cpumask_of(cpu), 0);
 	return 0;
 }
 
@@ -35,9 +40,11 @@ static int __cpuinit highbank_boot_secondary(unsigned int cpu, struct task_struc
  * Initialise the CPU possible map early - this describes the CPUs
  * which may be present or become present in the system.
  */
-static void __init highbank_smp_init_cpus(void)
+void __init smp_init_cpus(void)
 {
-	unsigned int i, ncores = 4;
+	unsigned int i, ncores;
+
+	ncores = scu_get_core_count(scu_base_addr);
 
 	/* sanity check */
 	if (ncores > NR_CPUS) {
@@ -50,19 +57,22 @@ static void __init highbank_smp_init_cpus(void)
 
 	for (i = 0; i < ncores; i++)
 		set_cpu_possible(i, true);
+
+	set_smp_cross_call(gic_raise_softirq);
 }
 
-static void __init highbank_smp_prepare_cpus(unsigned int max_cpus)
+void __init platform_smp_prepare_cpus(unsigned int max_cpus)
 {
-	if (scu_base_addr)
-		scu_enable(scu_base_addr);
-}
+	int i;
 
-struct smp_operations highbank_smp_ops __initdata = {
-	.smp_init_cpus		= highbank_smp_init_cpus,
-	.smp_prepare_cpus	= highbank_smp_prepare_cpus,
-	.smp_boot_secondary	= highbank_boot_secondary,
-#ifdef CONFIG_HOTPLUG_CPU
-	.cpu_die		= highbank_cpu_die,
-#endif
-};
+	scu_enable(scu_base_addr);
+
+	/*
+	 * Write the address of secondary startup into the jump table
+	 * The cores are in wfi and wait until they receive a soft interrupt
+	 * and a non-zero value to jump to. Then the secondary CPU branches
+	 * to this address.
+	 */
+	for (i = 1; i < max_cpus; i++)
+		highbank_set_cpu_jump(i, secondary_startup);
+}

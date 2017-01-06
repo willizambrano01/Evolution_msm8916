@@ -33,7 +33,6 @@ struct pinctrl_gpio_range;
  * @p: result of pinctrl_get() for this device
  * @hog_default: default state for pins hogged by this device
  * @hog_sleep: sleep state for pins hogged by this device
- * @mutex: mutex taken on each pin controller specific action
  * @device_root: debugfs root for this device
  */
 struct pinctrl_dev {
@@ -47,7 +46,6 @@ struct pinctrl_dev {
 	struct pinctrl *p;
 	struct pinctrl_state *hog_default;
 	struct pinctrl_state *hog_sleep;
-	struct mutex mutex;
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *device_root;
 #endif
@@ -74,7 +72,7 @@ struct pinctrl {
 
 /**
  * struct pinctrl_state - a pinctrl state for a device
- * @node: list node for struct pinctrl's @states field
+ * @node: list not for struct pinctrl's @states field
  * @name: the name of this state
  * @settings: a list of settings for this state
  */
@@ -170,7 +168,6 @@ struct pinctrl_maps {
 };
 
 struct pinctrl_dev *get_pinctrl_dev_from_devname(const char *dev_name);
-struct pinctrl_dev *get_pinctrl_dev_from_of_node(struct device_node *np);
 int pin_get_from_name(struct pinctrl_dev *pctldev, const char *name);
 const char *pin_get_name(struct pinctrl_dev *pctldev, const unsigned pin);
 int pinctrl_get_group_selector(struct pinctrl_dev *pctldev,
@@ -183,13 +180,14 @@ static inline struct pin_desc *pin_desc_get(struct pinctrl_dev *pctldev,
 }
 
 int pinctrl_register_map(struct pinctrl_map const *maps, unsigned num_maps,
-			 bool dup);
+			 bool dup, bool locked);
 void pinctrl_unregister_map(struct pinctrl_map const *map);
 
 extern int pinctrl_force_sleep(struct pinctrl_dev *pctldev);
 extern int pinctrl_force_default(struct pinctrl_dev *pctldev);
 
-extern struct mutex pinctrl_maps_mutex;
+extern struct mutex pinctrl_mutex;
+extern struct list_head pinctrldev_list;
 extern struct list_head pinctrl_maps;
 
 #define for_each_maps(_maps_node_, _i_, _map_) \

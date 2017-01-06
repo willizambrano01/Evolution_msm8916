@@ -19,6 +19,7 @@
 #include <linux/delay.h>
 #include <linux/seq_file.h>
 #include <linux/of_platform.h>
+#include <linux/memblock.h>
 
 #include <asm/time.h>
 #include <asm/machdep.h>
@@ -50,8 +51,15 @@ extern int uli_exclude_device(struct pci_controller *hose,
 static int mpc86xx_exclude_device(struct pci_controller *hose,
 				   u_char bus, u_char devfn)
 {
-	if (hose->dn == fsl_pci_primary)
+	struct device_node* node;	
+	struct resource rsrc;
+
+	node = hose->dn;
+	of_address_to_resource(node, 0, &rsrc);
+
+	if ((rsrc.start & 0xfffff) == 0x8000) {
 		return uli_exclude_device(hose, bus, devfn);
+	}
 
 	return PCIBIOS_SUCCESSFUL;
 }
@@ -61,11 +69,30 @@ static int mpc86xx_exclude_device(struct pci_controller *hose,
 static void __init
 mpc86xx_hpcn_setup_arch(void)
 {
+#ifdef CONFIG_PCI
+	struct device_node *np;
+	struct pci_controller *hose;
+#endif
+	dma_addr_t max = 0xffffffff;
+
 	if (ppc_md.progress)
 		ppc_md.progress("mpc86xx_hpcn_setup_arch()", 0);
 
 #ifdef CONFIG_PCI
+	for_each_compatible_node(np, "pci", "fsl,mpc8641-pcie") {
+		struct resource rsrc;
+		of_address_to_resource(np, 0, &rsrc);
+		if ((rsrc.start & 0xfffff) == 0x8000)
+			fsl_add_bridge(np, 1);
+		else
+			fsl_add_bridge(np, 0);
+		hose = pci_find_hose_for_OF_device(np);
+		max = min(max, hose->dma_window_base_cur +
+			  hose->dma_window_size);
+	}
+
 	ppc_md.pci_exclude_device = mpc86xx_exclude_device;
+
 #endif
 
 	printk("MPC86xx HPCN board from Freescale Semiconductor\n");
@@ -74,9 +101,13 @@ mpc86xx_hpcn_setup_arch(void)
 	mpc86xx_smp_init();
 #endif
 
-	fsl_pci_assign_primary();
-
-	swiotlb_detect_4g();
+#ifdef CONFIG_SWIOTLB
+	if (memblock_end_of_DRAM() > max) {
+		ppc_swiotlb_enable = 1;
+		set_pci_dma_ops(&swiotlb_dma_ops);
+		ppc_md.pci_dma_dev_setup = pci_dma_dev_setup_swiotlb;
+	}
+#endif
 }
 
 
@@ -131,7 +162,6 @@ static __initdata struct of_device_id of_bus_ids[] = {
 	{ .compatible = "simple-bus", },
 	{ .compatible = "fsl,srio", },
 	{ .compatible = "gianfar", },
-	{ .compatible = "fsl,mpc8641-pcie", },
 	{},
 };
 
@@ -141,7 +171,7 @@ static int __init declare_of_platform_devices(void)
 
 	return 0;
 }
-machine_arch_initcall(mpc86xx_hpcn, declare_of_platform_devices);
+machine_device_initcall(mpc86xx_hpcn, declare_of_platform_devices);
 machine_arch_initcall(mpc86xx_hpcn, swiotlb_setup_bus_notifier);
 
 define_machine(mpc86xx_hpcn) {

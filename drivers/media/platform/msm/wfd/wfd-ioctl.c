@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -294,11 +294,6 @@ static int wfd_allocate_input_buffers(struct wfd_device *wfd_dev,
 		mpair = kzalloc(sizeof(*mpair), GFP_KERNEL);
 		enc_mregion = kzalloc(sizeof(*enc_mregion), GFP_KERNEL);
 		mdp_mregion = kzalloc(sizeof(*enc_mregion), GFP_KERNEL);
-		if (!mpair || !enc_mregion || !mdp_mregion) {
-			WFD_MSG_ERR("%s: failed to alloc memory\n", __func__);
-			goto alloc_fail;
-		}
-
 		enc_mregion->size = ALIGN(inst->input_buf_size, SZ_4K);
 
 		rc = wfd_allocate_ion_buffer(wfd_dev->ion_client,
@@ -548,12 +543,6 @@ static int wfd_vidbuf_buf_init(struct vb2_buffer *vb)
 		(struct wfd_device *)video_drvdata(priv_data);
 	struct mem_info *minfo = vb2_plane_cookie(vb, 0);
 	struct mem_region mregion;
-
-	if (!minfo || !inst) {
-		WFD_MSG_ERR("%s: invalid arguments\n", __func__);
-		return -EINVAL;
-	}
-
 	mregion.fd = minfo->fd;
 	mregion.offset = minfo->offset;
 	mregion.cookie = (u32)vb;
@@ -766,12 +755,6 @@ static void wfd_vidbuf_buf_queue(struct vb2_buffer *vb)
 	struct wfd_inst *inst = file_to_inst(priv_data);
 	struct mem_region mregion;
 	struct mem_info *minfo = vb2_plane_cookie(vb, 0);
-
-	if (!minfo) {
-		WFD_MSG_ERR("%s: invalid minfo\n", __func__);
-		return;
-	}
-
 	mregion.fd = minfo->fd;
 	mregion.offset = minfo->offset;
 	mregion.cookie = (u32)vb;
@@ -950,10 +933,6 @@ static int wfd_register_out_buf(struct wfd_inst *inst,
 	if (!minfo) {
 		minfo_entry = kzalloc(sizeof(struct mem_info_entry),
 				GFP_KERNEL);
-		if (!minfo_entry) {
-			WFD_MSG_ERR("%s: failed to allocate mem\n", __func__);
-			return -EINVAL;
-		}
 		if (copy_from_user(&minfo_entry->minfo, (void *)b->reserved,
 					sizeof(struct mem_info))) {
 			WFD_MSG_ERR(" copy_from_user failed. Populate"
@@ -1252,16 +1231,15 @@ set_parm_fail:
 }
 
 static int wfdioc_subscribe_event(struct v4l2_fh *fh,
-		const struct v4l2_event_subscription *sub)
+		struct v4l2_event_subscription *sub)
 {
 	struct wfd_inst *inst = container_of(fh, struct wfd_inst,
 			event_handler);
-	return v4l2_event_subscribe(&inst->event_handler, sub, MAX_EVENTS,
-			NULL);
+	return v4l2_event_subscribe(&inst->event_handler, sub, MAX_EVENTS);
 }
 
 static int wfdioc_unsubscribe_event(struct v4l2_fh *fh,
-		const struct v4l2_event_subscription *sub)
+		struct v4l2_event_subscription *sub)
 {
 	struct wfd_inst *inst = container_of(fh, struct wfd_inst,
 			event_handler);
@@ -1446,7 +1424,6 @@ static struct vb2_mem_ops wfd_vb2_mem_ops = {
 
 int wfd_initialize_vb2_queue(struct vb2_queue *q, void *priv)
 {
-	q->timestamp_type = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	q->io_modes = VB2_USERPTR;
 	q->ops = &wfd_vidbuf_ops;
@@ -1713,7 +1690,7 @@ err_video_device_alloc:
 err_v4l2_registration:
 	return rc;
 }
-static int __wfd_probe(struct platform_device *pdev)
+static int __devinit __wfd_probe(struct platform_device *pdev)
 {
 	int rc = 0, c = 0;
 	struct wfd_device *wfd_dev; /* Should be taken as an array*/
@@ -1733,7 +1710,7 @@ static int __wfd_probe(struct platform_device *pdev)
 
 	pdev->dev.platform_data = (void *) wfd_dev;
 
-	ion_client = msm_ion_client_create("wfd");
+	ion_client = msm_ion_client_create(-1, "wfd");
 
 	rc = wfd_stats_setup();
 	if (rc) {
@@ -1794,7 +1771,7 @@ err_v4l2_probe:
 	return rc;
 }
 
-static int __wfd_remove(struct platform_device *pdev)
+static int __devexit __wfd_remove(struct platform_device *pdev)
 {
 	struct wfd_device *wfd_dev;
 	int c = 0;

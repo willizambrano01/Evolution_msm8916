@@ -11,7 +11,6 @@
 struct vmpressure {
 	unsigned long scanned;
 	unsigned long reclaimed;
-	unsigned long stall;
 	/* The lock is used to keep the scanned/reclaimed above in sync. */
 	struct mutex sr_lock;
 
@@ -31,7 +30,7 @@ extern void vmpressure(gfp_t gfp, struct mem_cgroup *memcg,
 		       unsigned long scanned, unsigned long reclaimed);
 extern void vmpressure_prio(gfp_t gfp, struct mem_cgroup *memcg, int prio);
 
-#ifdef CONFIG_MEMCG
+#ifdef CONFIG_CGROUP_MEM_RES_CTLR
 extern void vmpressure_init(struct vmpressure *vmpr);
 extern struct vmpressure *memcg_to_vmpressure(struct mem_cgroup *memcg);
 extern struct cgroup_subsys_state *vmpressure_to_css(struct vmpressure *vmpr);
@@ -46,5 +45,5 @@ static inline struct vmpressure *memcg_to_vmpressure(struct mem_cgroup *memcg)
 {
 	return NULL;
 }
-#endif /* CONFIG_MEMCG */
+#endif /* CONFIG_CGROUP_MEM_RES_CTLR */
 #endif /* __LINUX_VMPRESSURE_H */

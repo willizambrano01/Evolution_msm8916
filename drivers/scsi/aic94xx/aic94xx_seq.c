@@ -1228,7 +1228,8 @@ static int asd_seq_start_lseq(struct asd_ha_struct *asd_ha, int lseq)
 
 int asd_release_firmware(void)
 {
-	release_firmware(sequencer_fw);
+	if (sequencer_fw)
+		release_firmware(sequencer_fw);
 	return 0;
 }
 

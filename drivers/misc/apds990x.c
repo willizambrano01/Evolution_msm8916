@@ -700,6 +700,9 @@ static ssize_t apds990x_lux_calib_store(struct device *dev,
 	if (strict_strtoul(buf, 0, &value))
 		return -EINVAL;
 
+	if (chip->lux_calib > APDS_RANGE)
+		return -EINVAL;
+
 	chip->lux_calib = value;
 
 	return len;
@@ -1044,7 +1047,7 @@ static struct attribute_group apds990x_attribute_group[] = {
 	{.attrs = sysfs_attrs_ctrl },
 };
 
-static int apds990x_probe(struct i2c_client *client,
+static int __devinit apds990x_probe(struct i2c_client *client,
 				const struct i2c_device_id *id)
 {
 	struct apds990x_chip *chip;
@@ -1178,7 +1181,7 @@ fail1:
 	return err;
 }
 
-static int apds990x_remove(struct i2c_client *client)
+static int __devexit apds990x_remove(struct i2c_client *client)
 {
 	struct apds990x_chip *chip = i2c_get_clientdata(client);
 
@@ -1201,7 +1204,7 @@ static int apds990x_remove(struct i2c_client *client)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_PM
 static int apds990x_suspend(struct device *dev)
 {
 	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
@@ -1224,6 +1227,10 @@ static int apds990x_resume(struct device *dev)
 
 	return 0;
 }
+#else
+#define apds990x_suspend  NULL
+#define apds990x_resume	  NULL
+#define apds990x_shutdown NULL
 #endif
 
 #ifdef CONFIG_PM_RUNTIME
@@ -1268,7 +1275,7 @@ static struct i2c_driver apds990x_driver = {
 		.pm	= &apds990x_pm_ops,
 	},
 	.probe	  = apds990x_probe,
-	.remove	  = apds990x_remove,
+	.remove	  = __devexit_p(apds990x_remove),
 	.id_table = apds990x_id,
 };
 

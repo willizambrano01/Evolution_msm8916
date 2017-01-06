@@ -10,8 +10,7 @@
 
 struct usbip_vhci_driver *vhci_driver;
 
-static struct usbip_imported_device *
-imported_device_init(struct usbip_imported_device *idev, char *busid)
+static struct usbip_imported_device *imported_device_init(struct usbip_imported_device *idev, char *busid)
 {
 	struct sysfs_device *sudev;
 
@@ -30,16 +29,14 @@ imported_device_init(struct usbip_imported_device *idev, char *busid)
 		if (!strncmp(cdev->dev_path, idev->udev.path,
 			     strlen(idev->udev.path))) {
 			struct usbip_class_device *new_cdev;
-			/*
-			 * alloc and copy because dlist is linked
-			 * from only one list
-			 */
+
+			/* alloc and copy because dlist is linked from only one list */
 			new_cdev = calloc(1, sizeof(*new_cdev));
 			if (!new_cdev)
 				goto err;
 
 			memcpy(new_cdev, cdev, sizeof(*new_cdev));
-			dlist_unshift(idev->cdev_list, (void *) new_cdev);
+			dlist_unshift(idev->cdev_list, (void*) new_cdev);
 		}
 	}
 
@@ -62,10 +59,7 @@ static int parse_status(char *value)
 
 
 	/* skip a header line */
-	c = strchr(value, '\n');
-	if (!c)
-		return -1;
-	c++;
+	c = strchr(value, '\n') + 1;
 
 	while (*c != '\0') {
 		int port, status, speed, devid;
@@ -104,8 +98,7 @@ static int parse_status(char *value)
 				return -1;
 			}
 
-			if (idev->status != VDEV_ST_NULL
-			    && idev->status != VDEV_ST_NOTASSIGNED) {
+			if (idev->status != VDEV_ST_NULL && idev->status != VDEV_ST_NOTASSIGNED) {
 				idev = imported_device_init(idev, lbusid);
 				if (!idev) {
 					dbg("imported_device_init failed");
@@ -116,10 +109,7 @@ static int parse_status(char *value)
 
 
 		/* go to the next line */
-		c = strchr(c, '\n');
-		if (!c)
-			break;
-		c++;
+		c = strchr(c, '\n') + 1;
 	}
 
 	dbg("exit");
@@ -130,10 +120,8 @@ static int parse_status(char *value)
 
 static int check_usbip_device(struct sysfs_class_device *cdev)
 {
-	/* /sys/class/video4linux/video0/device */
-	char class_path[SYSFS_PATH_MAX];
-	/* /sys/devices/platform/vhci_hcd/usb6/6-1:1.1 */
-	char dev_path[SYSFS_PATH_MAX];
+	char class_path[SYSFS_PATH_MAX]; /* /sys/class/video4linux/video0/device */
+	char dev_path[SYSFS_PATH_MAX];	 /* /sys/devices/platform/vhci_hcd/usb6/6-1:1.1 */
 	int ret;
 	struct usbip_class_device *usbip_cdev;
 
@@ -276,17 +264,11 @@ static int get_nports(void)
 	    attr_status->method, attr_status->value);
 
 	/* skip a header line */
-	c = strchr(attr_status->value, '\n');
-	if (!c)
-		return 0;
-	c++;
+	c = strchr(attr_status->value, '\n') + 1;
 
 	while (*c != '\0') {
 		/* go to the next line */
-		c = strchr(c, '\n');
-		if (!c)
-			return nports;
-		c++;
+		c = strchr(c, '\n') + 1;
 		nports += 1;
 	}
 
@@ -295,25 +277,25 @@ static int get_nports(void)
 
 static int get_hc_busid(char *sysfs_mntpath, char *hc_busid)
 {
-	struct sysfs_driver *sdriver;
-	char sdriver_path[SYSFS_PATH_MAX];
+        struct sysfs_driver *sdriver;
+        char sdriver_path[SYSFS_PATH_MAX];
 
 	struct sysfs_device *hc_dev;
 	struct dlist *hc_devs;
 
 	int found = 0;
 
-	snprintf(sdriver_path, SYSFS_PATH_MAX, "%s/%s/%s/%s/%s", sysfs_mntpath,
-	SYSFS_BUS_NAME, USBIP_VHCI_BUS_TYPE, SYSFS_DRIVERS_NAME,
-	USBIP_VHCI_DRV_NAME);
+        snprintf(sdriver_path, SYSFS_PATH_MAX, "%s/%s/%s/%s/%s", sysfs_mntpath,
+		 SYSFS_BUS_NAME, USBIP_VHCI_BUS_TYPE, SYSFS_DRIVERS_NAME,
+		 USBIP_VHCI_DRV_NAME);
 
-	sdriver = sysfs_open_driver_path(sdriver_path);
-	if (!sdriver) {
+        sdriver = sysfs_open_driver_path(sdriver_path);
+        if (!sdriver) {
 		dbg("sysfs_open_driver_path failed: %s", sdriver_path);
-		dbg("make sure " USBIP_CORE_MOD_NAME ".ko and "
+                dbg("make sure " USBIP_CORE_MOD_NAME ".ko and "
 		    USBIP_VHCI_DRV_NAME ".ko are loaded!");
-		return -1;
-	}
+                return -1;
+        }
 
 	hc_devs = sysfs_get_driver_devices(sdriver);
 	if (!hc_devs) {

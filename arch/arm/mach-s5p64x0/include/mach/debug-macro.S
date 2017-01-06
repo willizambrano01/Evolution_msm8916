@@ -30,4 +30,4 @@
 #endif
 	.endm
 
-#include <debug/samsung.S>
+#include <plat/debug-macro.S>

@@ -53,13 +53,6 @@ enum headset_state_t {
 	SH_HEADSET_BUTTON_4
 };
 
-enum cover_detect_states {
-	STML0XX_HALL_NO_DETECT,
-	STML0XX_HALL_SOUTH_DETECT,
-	STML0XX_HALL_NORTH_DETECT,
-	STML0XX_HALL_NORTH_OR_SOUTH_DETECT
-};
-
 enum headset_state_t Headset_State = SH_HEADSET_REMOVED;
 
 irqreturn_t stml0xx_wake_isr(int irq, void *dev)
@@ -115,9 +108,6 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			(struct stml0xx_delayed_work_struct *)work;
 	struct stml0xx_data *ps_stml0xx = stml0xx_misc_data;
 	unsigned char buf[SPI_MSG_SIZE];
-
-	struct stml0xx_platform_data *pdata;
-	pdata = ps_stml0xx->pdata;
 
 	dev_dbg(&stml0xx_misc_data->spi->dev, "stml0xx_irq_wake_work_func");
 	mutex_lock(&ps_stml0xx->lock);
@@ -177,17 +167,20 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 	}
 	if (irq_status & M_COVER) {
 		int state = 0;
-		if ((pdata->cover_detect_polarity
-			& buf[WAKE_IRQ_IDX_COVER]) != 0)
-				state = 1;
+		if (buf[WAKE_IRQ_IDX_COVER] == STML0XX_HALL_NORTH)
+			state = 1;
+		else
+			state = 0;
+
 #ifdef CONFIG_MMI_HALL_NOTIFICATIONS
 		/* notify subscribers of cover state change */
 		mmi_hall_notify(MMI_HALL_FOLIO, state);
 #endif
+
 		input_report_switch(ps_stml0xx->input_dev, SW_LID, state);
 		input_sync(ps_stml0xx->input_dev);
 
-		dev_info(&stml0xx_misc_data->spi->dev,
+		dev_err(&stml0xx_misc_data->spi->dev,
 			"Cover status: %d", state);
 	}
 	if (irq_status & M_HEADSET) {
@@ -198,7 +191,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 		switch (Headset_State) {
 		case SH_HEADSET_BUTTON_1:
 			if (!(new_state & SH_HEADSET_BUTTON_1_DOWN)) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 1 released");
 				Headset_State = SH_HEADSET_INSERTED;
 				input_report_key(ps_stml0xx->input_dev,
@@ -209,7 +202,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			break;
 		case SH_HEADSET_BUTTON_2:
 			if (!(new_state & SH_HEADSET_BUTTON_2_DOWN)) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 2 released");
 				Headset_State = SH_HEADSET_INSERTED;
 				input_report_key(ps_stml0xx->input_dev,
@@ -220,7 +213,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			break;
 		case SH_HEADSET_BUTTON_3:
 			if (!(new_state & SH_HEADSET_BUTTON_3_DOWN)) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 3 released");
 				Headset_State = SH_HEADSET_INSERTED;
 				input_report_key(ps_stml0xx->input_dev,
@@ -231,7 +224,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			break;
 		case SH_HEADSET_BUTTON_4:
 			if (!(new_state & SH_HEADSET_BUTTON_4_DOWN)) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 4 released");
 				Headset_State = SH_HEADSET_INSERTED;
 				input_report_key(ps_stml0xx->input_dev,
@@ -245,7 +238,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 		}
 		if (Headset_State == SH_HEADPHONE_INSERTED) {
 			if (!(new_state & SH_HEADPHONE_DETECTED)) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headphone removed");
 				Headset_State = SH_HEADSET_REMOVED;
 				input_report_switch(ps_stml0xx->input_dev,
@@ -254,7 +247,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			}
 		} else if (Headset_State ==  SH_HEADSET_INSERTED) {
 			if (!(new_state & SH_HEADSET_DETECTED)) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset removed");
 				Headset_State = SH_HEADSET_REMOVED;
 				input_report_switch(ps_stml0xx->input_dev,
@@ -266,14 +259,14 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 		}
 		if (Headset_State == SH_HEADSET_REMOVED) {
 			if (new_state & SH_HEADPHONE_DETECTED) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headphone inserted");
 				Headset_State = SH_HEADPHONE_INSERTED;
 				input_report_switch(ps_stml0xx->input_dev,
 						SW_HEADPHONE_INSERT, 1);
 				input_sync(ps_stml0xx->input_dev);
 			} else if (new_state & SH_HEADSET_DETECTED) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset inserted");
 				Headset_State = SH_HEADSET_INSERTED;
 				input_report_switch(ps_stml0xx->input_dev,
@@ -285,7 +278,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 		}
 		if (Headset_State == SH_HEADSET_INSERTED) {
 			if (new_state & SH_HEADSET_BUTTON_1_DOWN) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 1 pressed");
 				Headset_State = SH_HEADSET_BUTTON_1;
 				input_report_key(ps_stml0xx->input_dev,
@@ -293,7 +286,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 					1);
 				input_sync(ps_stml0xx->input_dev);
 			} else if (new_state & SH_HEADSET_BUTTON_2_DOWN) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 2 pressed");
 				Headset_State = SH_HEADSET_BUTTON_2;
 				input_report_key(ps_stml0xx->input_dev,
@@ -301,7 +294,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 					1);
 				input_sync(ps_stml0xx->input_dev);
 			} else if (new_state & SH_HEADSET_BUTTON_3_DOWN) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 3 pressed");
 				Headset_State = SH_HEADSET_BUTTON_3;
 				input_report_key(ps_stml0xx->input_dev,
@@ -309,7 +302,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 					1);
 				input_sync(ps_stml0xx->input_dev);
 			} else if (new_state & SH_HEADSET_BUTTON_4_DOWN) {
-				dev_info(&stml0xx_misc_data->spi->dev,
+				dev_dbg(&stml0xx_misc_data->spi->dev,
 					"Headset button 4 pressed");
 				Headset_State = SH_HEADSET_BUTTON_4;
 				input_report_key(ps_stml0xx->input_dev,
@@ -348,12 +341,8 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			0,
 			stm_ws->ts_ns);
 
-		dev_info(&stml0xx_misc_data->spi->dev,
-			"Sending Stowed status %d, als %d, prox %d",
-			buf[WAKE_IRQ_IDX_STOWED],
-			STM16_TO_HOST(ALS_OFFSET,
-				&buf[WAKE_IRQ_IDX_STOWED_ALS]),
-			buf[WAKE_IRQ_IDX_PROX]);
+		dev_dbg(&stml0xx_misc_data->spi->dev,
+			"Sending Stowed status %d", buf[WAKE_IRQ_IDX_STOWED]);
 	}
 	if (irq_status & M_CAMERA_ACT) {
 		stml0xx_as_data_buffer_write(ps_stml0xx, DT_CAMERA_ACT,
@@ -361,21 +350,13 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 						2, 0, stm_ws->ts_ns);
 
 		dev_dbg(&stml0xx_misc_data->spi->dev,
-			"Sending Camera: %d", STM16_TO_HOST(CAMERA_OFFSET,
+			"Sending Camera: %d", STM16_TO_HOST(CAMERA_VALUE,
 					&buf[WAKE_IRQ_IDX_CAMERA]));
 
 		input_report_key(ps_stml0xx->input_dev, KEY_CAMERA, 1);
 		input_report_key(ps_stml0xx->input_dev, KEY_CAMERA, 0);
 		input_sync(ps_stml0xx->input_dev);
 		dev_dbg(&stml0xx_misc_data->spi->dev, "Report camkey toggle");
-	}
-	if (irq_status & M_CHOPCHOP) {
-		stml0xx_as_data_buffer_write(ps_stml0xx, DT_CHOPCHOP,
-						0,
-						0, 0, stm_ws->ts_ns);
-
-		dev_dbg(&stml0xx_misc_data->spi->dev,
-			"Sending Chopchop event");
 	}
 	if (irq_status & M_SIM) {
 		stml0xx_as_data_buffer_write(
@@ -390,39 +371,8 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 		stml0xx_g_wake_sensor_state &= (~M_SIM);
 
 		dev_dbg(&stml0xx_misc_data->spi->dev,
-			"Sending SIM Value=%d", STM16_TO_HOST(SIM_OFFSET,
+			"Sending SIM Value=%d", STM16_TO_HOST(SIM_DATA,
 					&buf[WAKE_IRQ_IDX_SIM]));
-	}
-	if (irq_status & M_LIFT) {
-		stml0xx_as_data_buffer_write(
-			ps_stml0xx,
-			DT_LIFT,
-			&buf[WAKE_IRQ_IDX_LIFT],
-			12,
-			0,
-			stm_ws->ts_ns);
-
-		dev_dbg(&stml0xx_misc_data->spi->dev,
-			"Lift triggered. Dist=%d. ZRot=%d. GravDiff=%d.\n",
-			STM32_TO_HOST(LIFT_DISTANCE_OFFSET,
-					&buf[WAKE_IRQ_IDX_LIFT]),
-			STM32_TO_HOST(LIFT_ROTATION_OFFSET,
-					&buf[WAKE_IRQ_IDX_LIFT]),
-			STM32_TO_HOST(LIFT_GRAV_DIFF_OFFSET,
-					&buf[WAKE_IRQ_IDX_LIFT]));
-	}
-	if (irq_status & M_GLANCE) {
-		stml0xx_as_data_buffer_write(
-			ps_stml0xx,
-			DT_GLANCE,
-			&buf[WAKE_IRQ_IDX_GLANCE],
-			2,
-			0,
-			stm_ws->ts_ns);
-
-		dev_dbg(&stml0xx_misc_data->spi->dev, "Glance Gesture=%d\n",
-				STM16_TO_HOST(GLANCE_OFFSET,
-						&buf[WAKE_IRQ_IDX_GLANCE]));
 	}
 	if (irq2_status & M_MMOVEME) {
 		unsigned char status;
@@ -447,37 +397,31 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			"Sending no meaningful movement event");
 	}
 	if (irq2_status & M_ALGO_MODALITY) {
-		buf[WAKE_IRQ_IDX_MODALITY + ALGO_TYPE_OFFSET] =
-				STML0XX_IDX_MODALITY;
+		buf[WAKE_IRQ_IDX_MODALITY + ALGO_TYPE] = STML0XX_IDX_MODALITY;
 		stml0xx_ms_data_buffer_write(ps_stml0xx, DT_ALGO_EVT,
 						&buf[WAKE_IRQ_IDX_MODALITY], 8);
 		dev_dbg(&stml0xx_misc_data->spi->dev,
-			"Sending algo modality event");
+			"Sending modality event");
 	}
 	if (irq2_status & M_ALGO_ORIENTATION) {
-		buf[WAKE_IRQ_IDX_MODALITY_ORIENT + ALGO_TYPE_OFFSET] =
+		buf[WAKE_IRQ_IDX_MODALITY_ORIENT + ALGO_TYPE] =
 				STML0XX_IDX_ORIENTATION;
 		stml0xx_ms_data_buffer_write(ps_stml0xx, DT_ALGO_EVT,
 				&buf[WAKE_IRQ_IDX_MODALITY_ORIENT],
 				8);
 		dev_dbg(&stml0xx_misc_data->spi->dev,
-			"Sending algo orientation event");
+			"Sending orientation event");
 	}
 	if (irq2_status & M_ALGO_STOWED) {
-		buf[WAKE_IRQ_IDX_MODALITY_STOWED + ALGO_TYPE_OFFSET] =
+		buf[WAKE_IRQ_IDX_MODALITY_STOWED + ALGO_TYPE] =
 				STML0XX_IDX_STOWED;
 		stml0xx_ms_data_buffer_write(ps_stml0xx, DT_ALGO_EVT,
 				&buf[WAKE_IRQ_IDX_MODALITY_STOWED],
 				8);
-		dev_info(&stml0xx_misc_data->spi->dev,
-			"Sending algo stowed event %d, als %d, prox %d",
-			buf[WAKE_IRQ_IDX_MODALITY_STOWED + 3],
-			STM16_TO_HOST(ALS_OFFSET,
-				&buf[WAKE_IRQ_IDX_STOWED_ALS]),
-			buf[WAKE_IRQ_IDX_PROX]);
+		dev_dbg(&stml0xx_misc_data->spi->dev, "Sending stowed event");
 	}
 	if (irq2_status & M_ALGO_ACCUM_MODALITY) {
-		buf[WAKE_IRQ_IDX_MODALITY_ACCUM + ALGO_TYPE_OFFSET] =
+		buf[WAKE_IRQ_IDX_MODALITY_ACCUM + ALGO_TYPE] =
 				STML0XX_IDX_ACCUM_MODALITY;
 		stml0xx_ms_data_buffer_write(ps_stml0xx, DT_ALGO_EVT,
 				&buf[WAKE_IRQ_IDX_MODALITY_ACCUM],
@@ -486,7 +430,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 			"Sending accum modality event");
 	}
 	if (irq2_status & M_ALGO_ACCUM_MVMT) {
-		buf[WAKE_IRQ_IDX_MODALITY_ACCUM_MVMT + ALGO_TYPE_OFFSET] =
+		buf[WAKE_IRQ_IDX_MODALITY_ACCUM_MVMT + ALGO_TYPE] =
 				STML0XX_IDX_ACCUM_MVMT;
 		stml0xx_ms_data_buffer_write(ps_stml0xx, DT_ALGO_EVT,
 				&buf[WAKE_IRQ_IDX_MODALITY_ACCUM_MVMT],
@@ -498,7 +442,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 	if (irq_status & M_LOG_MSG) {
 		memcpy(stat_string, &buf[WAKE_IRQ_IDX_LOG_MSG], LOG_MSG_SIZE);
 		stat_string[LOG_MSG_SIZE] = 0;
-		dev_info(&stml0xx_misc_data->spi->dev,
+		dev_err(&stml0xx_misc_data->spi->dev,
 			"sensorhub : %s", stat_string);
 	}
 	if (irq_status & M_INIT_COMPLETE) {
@@ -509,7 +453,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 
 		queue_work(ps_stml0xx->irq_work_queue,
 			&ps_stml0xx->initialize_work);
-		dev_info(&stml0xx_misc_data->spi->dev,
+		dev_err(&stml0xx_misc_data->spi->dev,
 			"Sensor Hub reports reset");
 		stml0xx_g_booted = 1;
 	}
@@ -521,7 +465,7 @@ void stml0xx_irq_wake_work_func(struct work_struct *work)
 					     0, stm_ws->ts_ns);
 
 		stml0xx_reset(stml0xx_misc_data->pdata);
-		dev_info(&stml0xx_misc_data->spi->dev,
+		dev_err(&stml0xx_misc_data->spi->dev,
 			"STML0XX requested a reset");
 	}
 

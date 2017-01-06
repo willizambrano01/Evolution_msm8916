@@ -60,7 +60,7 @@ Default is to monitor all CPUS.
 
 -i::
 --inherit::
-	Child tasks do not inherit counters.
+	Child tasks inherit counters, only makes sens with -p option.
 
 -k <path>::
 --vmlinux=<path>::
@@ -112,7 +112,7 @@ Default is to monitor all CPUS.
 
 -s::
 --sort::
-	Sort by key(s): pid, comm, dso, symbol, parent, srcline, weight, local_weight.
+	Sort by key(s): pid, comm, dso, symbol, parent
 
 -n::
 --show-nr-samples::

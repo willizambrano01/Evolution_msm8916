@@ -26,11 +26,13 @@
 static int ac97_prepare(struct snd_pcm_substream *substream,
 			struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 
 	int reg = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?
 		  AC97_PCM_FRONT_DAC_RATE : AC97_PCM_LR_ADC_RATE;
-	return snd_ac97_set_rate(codec->ac97, reg, substream->runtime->rate);
+	return snd_ac97_set_rate(codec->ac97, reg, runtime->rate);
 }
 
 #define STD_AC97_RATES (SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_11025 |\
@@ -91,6 +93,11 @@ static int ac97_soc_probe(struct snd_soc_codec *codec)
 	return 0;
 }
 
+static int ac97_soc_remove(struct snd_soc_codec *codec)
+{
+	return 0;
+}
+
 #ifdef CONFIG_PM
 static int ac97_soc_suspend(struct snd_soc_codec *codec)
 {
@@ -114,17 +121,18 @@ static struct snd_soc_codec_driver soc_codec_dev_ac97 = {
 	.write =	ac97_write,
 	.read =		ac97_read,
 	.probe = 	ac97_soc_probe,
+	.remove = 	ac97_soc_remove,
 	.suspend =	ac97_soc_suspend,
 	.resume =	ac97_soc_resume,
 };
 
-static int ac97_probe(struct platform_device *pdev)
+static __devinit int ac97_probe(struct platform_device *pdev)
 {
 	return snd_soc_register_codec(&pdev->dev,
 			&soc_codec_dev_ac97, &ac97_dai, 1);
 }
 
-static int ac97_remove(struct platform_device *pdev)
+static int __devexit ac97_remove(struct platform_device *pdev)
 {
 	snd_soc_unregister_codec(&pdev->dev);
 	return 0;
@@ -137,7 +145,7 @@ static struct platform_driver ac97_codec_driver = {
 	},
 
 	.probe = ac97_probe,
-	.remove = ac97_remove,
+	.remove = __devexit_p(ac97_remove),
 };
 
 module_platform_driver(ac97_codec_driver);

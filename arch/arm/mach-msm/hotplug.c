@@ -1,7 +1,7 @@
 /*
  *  Copyright (C) 2002 ARM Ltd.
  *  All Rights Reserved
- *  Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+ *  Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -11,15 +11,19 @@
 #include <linux/errno.h>
 #include <linux/smp.h>
 #include <linux/cpu.h>
-#include <linux/notifier.h>
-#include <soc/qcom/spm.h>
-#include <soc/qcom/pm.h>
-#include <linux/irqchip/arm-gic.h>
+#include <linux/ratelimit.h>
 
+#include <asm/cacheflush.h>
 #include <asm/smp_plat.h>
 #include <asm/vfp.h>
 
-#include <soc/qcom/jtag.h>
+#include <mach/jtag.h>
+#include <mach/msm_rtb.h>
+
+#include "pm.h"
+#include "spm.h"
+
+extern volatile int pen_release;
 
 static cpumask_t cpu_dying_mask;
 
@@ -27,6 +31,9 @@ static DEFINE_PER_CPU(unsigned int, warm_boot_flag);
 
 static inline void cpu_enter_lowpower(void)
 {
+	/* Just flush the cache. Changing the coherency is not yet
+	 * available on msm. */
+	flush_cache_all();
 }
 
 static inline void cpu_leave_lowpower(void)
@@ -38,7 +45,7 @@ static inline void platform_do_lowpower(unsigned int cpu, int *spurious)
 	/* Just enter wfi for now. TODO: Properly shut off the cpu. */
 	for (;;) {
 
-		lpm_cpu_hotplug_enter(cpu);
+		msm_pm_cpu_enter_lowpower(cpu);
 		if (pen_release == cpu_logical_map(cpu)) {
 			/*
 			 * OK, proper wakeup, we're done
@@ -53,16 +60,12 @@ static inline void platform_do_lowpower(unsigned int cpu, int *spurious)
 		 * The trouble is, letting people know about this is not really
 		 * possible, since we are currently running incoherently, and
 		 * therefore cannot safely call printk() or anything else
-		 * Read the pending interrupts to understand why we woke up
 		 */
-#ifdef CONFIG_MSM_PM
-		gic_show_pending_irq();
-#endif
 		(*spurious)++;
 	}
 }
 
-int msm_cpu_kill(unsigned int cpu)
+int platform_cpu_kill(unsigned int cpu)
 {
 	int ret = 0;
 
@@ -77,7 +80,7 @@ int msm_cpu_kill(unsigned int cpu)
  *
  * Called with IRQs disabled
  */
-void __ref msm_cpu_die(unsigned int cpu)
+void platform_cpu_die(unsigned int cpu)
 {
 	int spurious = 0;
 
@@ -99,12 +102,44 @@ void __ref msm_cpu_die(unsigned int cpu)
 		pr_warn("CPU%u: %u spurious wakeup calls\n", cpu, spurious);
 }
 
-static int hotplug_dying_callback(struct notifier_block *nfb,
+int platform_cpu_disable(unsigned int cpu)
+{
+	/*
+	 * we don't allow CPU 0 to be shutdown (it is still too special
+	 * e.g. clock tick interrupts)
+	 */
+	return cpu == 0 ? -EPERM : 0;
+}
+
+#define CPU_SHIFT	0
+#define CPU_MASK	0xF
+#define CPU_OF(n)	(((n) & CPU_MASK) << CPU_SHIFT)
+#define CPUSET_SHIFT	4
+#define CPUSET_MASK	0xFFFF
+#define CPUSET_OF(n)	(((n) & CPUSET_MASK) << CPUSET_SHIFT)
+
+static int hotplug_rtb_callback(struct notifier_block *nfb,
 				unsigned long action, void *hcpu)
 {
+	/*
+	 * Bits [19:4] of the data are the online mask, lower 4 bits are the
+	 * cpu number that is being changed. Additionally, changes to the
+	 * online_mask that will be done by the current hotplug will be made
+	 * even though they aren't necessarily in the online mask yet.
+	 *
+	 * XXX: This design is limited to supporting at most 16 cpus
+	 */
+	int this_cpumask = CPUSET_OF(1 << (int)hcpu);
+	int cpumask = CPUSET_OF(cpumask_bits(cpu_online_mask)[0]);
+	int cpudata = CPU_OF((int)hcpu) | cpumask;
+
 	switch (action & (~CPU_TASKS_FROZEN)) {
+	case CPU_STARTING:
+		uncached_logk(LOGK_HOTPLUG, (void *)(cpudata | this_cpumask));
+		break;
 	case CPU_DYING:
 		cpumask_set_cpu((unsigned long)hcpu, &cpu_dying_mask);
+		uncached_logk(LOGK_HOTPLUG, (void *)(cpudata & ~this_cpumask));
 		break;
 	default:
 		break;
@@ -112,8 +147,31 @@ static int hotplug_dying_callback(struct notifier_block *nfb,
 
 	return NOTIFY_OK;
 }
-static struct notifier_block hotplug_dying_notifier = {
-	.notifier_call = hotplug_dying_callback,
+static struct notifier_block hotplug_rtb_notifier = {
+	.notifier_call = hotplug_rtb_callback,
+};
+
+static int hotplug_cpu_check_callback(struct notifier_block *nfb,
+				      unsigned long action, void *hcpu)
+{
+	int cpu = (int)hcpu;
+
+	switch (action & (~CPU_TASKS_FROZEN)) {
+	case CPU_DOWN_PREPARE:
+		if (cpu == 0) {
+			pr_err_ratelimited("CPU0 hotplug is not supported\n");
+			return NOTIFY_BAD;
+		}
+		break;
+	default:
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+static struct notifier_block hotplug_cpu_check_notifier = {
+	.notifier_call = hotplug_cpu_check_callback,
+	.priority = INT_MAX,
 };
 
 int msm_platform_secondary_init(unsigned int cpu)
@@ -123,8 +181,7 @@ int msm_platform_secondary_init(unsigned int cpu)
 
 	if (!(*warm_boot)) {
 		*warm_boot = 1;
-		if (cpu)
-			return 0;
+		return 0;
 	}
 	msm_jtag_restore_state();
 #if defined(CONFIG_VFP) && defined (CONFIG_CPU_PM)
@@ -135,8 +192,14 @@ int msm_platform_secondary_init(unsigned int cpu)
 	return ret;
 }
 
-static int __init init_hotplug_dying(void)
+static int __init init_hotplug(void)
 {
-	return register_hotcpu_notifier(&hotplug_dying_notifier);
+	int rc;
+
+	rc = register_hotcpu_notifier(&hotplug_rtb_notifier);
+	if (rc)
+		return rc;
+
+	return register_hotcpu_notifier(&hotplug_cpu_check_notifier);
 }
-early_initcall(init_hotplug_dying);
+early_initcall(init_hotplug);

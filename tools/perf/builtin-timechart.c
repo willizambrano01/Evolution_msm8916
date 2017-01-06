@@ -38,6 +38,9 @@
 #define PWR_EVENT_EXIT -1
 
 
+static const char	*input_name;
+static const char	*output_name = "output.svg";
+
 static unsigned int	numcpus;
 static u64		min_freq;	/* Lowest CPU frequency seen */
 static u64		max_freq;	/* Highest CPU frequency seen */
@@ -165,8 +168,9 @@ static struct per_pid *find_create_pid(int pid)
 			return cursor;
 		cursor = cursor->next;
 	}
-	cursor = zalloc(sizeof(*cursor));
+	cursor = malloc(sizeof(struct per_pid));
 	assert(cursor != NULL);
+	memset(cursor, 0, sizeof(struct per_pid));
 	cursor->pid = pid;
 	cursor->next = all_data;
 	all_data = cursor;
@@ -191,8 +195,9 @@ static void pid_set_comm(int pid, char *comm)
 		}
 		c = c->next;
 	}
-	c = zalloc(sizeof(*c));
+	c = malloc(sizeof(struct per_pidcomm));
 	assert(c != NULL);
+	memset(c, 0, sizeof(struct per_pidcomm));
 	c->comm = strdup(comm);
 	p->current = c;
 	c->next = p->all;
@@ -234,15 +239,17 @@ pid_put_sample(int pid, int type, unsigned int cpu, u64 start, u64 end)
 	p = find_create_pid(pid);
 	c = p->current;
 	if (!c) {
-		c = zalloc(sizeof(*c));
+		c = malloc(sizeof(struct per_pidcomm));
 		assert(c != NULL);
+		memset(c, 0, sizeof(struct per_pidcomm));
 		p->current = c;
 		c->next = p->all;
 		p->all = c;
 	}
 
-	sample = zalloc(sizeof(*sample));
+	sample = malloc(sizeof(struct cpu_sample));
 	assert(sample != NULL);
+	memset(sample, 0, sizeof(struct cpu_sample));
 	sample->start_time = start;
 	sample->end_time = end;
 	sample->type = type;
@@ -268,28 +275,28 @@ static int cpus_cstate_state[MAX_CPUS];
 static u64 cpus_pstate_start_times[MAX_CPUS];
 static u64 cpus_pstate_state[MAX_CPUS];
 
-static int process_comm_event(struct perf_tool *tool __maybe_unused,
+static int process_comm_event(struct perf_tool *tool __used,
 			      union perf_event *event,
-			      struct perf_sample *sample __maybe_unused,
-			      struct machine *machine __maybe_unused)
+			      struct perf_sample *sample __used,
+			      struct machine *machine __used)
 {
 	pid_set_comm(event->comm.tid, event->comm.comm);
 	return 0;
 }
 
-static int process_fork_event(struct perf_tool *tool __maybe_unused,
+static int process_fork_event(struct perf_tool *tool __used,
 			      union perf_event *event,
-			      struct perf_sample *sample __maybe_unused,
-			      struct machine *machine __maybe_unused)
+			      struct perf_sample *sample __used,
+			      struct machine *machine __used)
 {
 	pid_fork(event->fork.pid, event->fork.ppid, event->fork.time);
 	return 0;
 }
 
-static int process_exit_event(struct perf_tool *tool __maybe_unused,
+static int process_exit_event(struct perf_tool *tool __used,
 			      union perf_event *event,
-			      struct perf_sample *sample __maybe_unused,
-			      struct machine *machine __maybe_unused)
+			      struct perf_sample *sample __used,
+			      struct machine *machine __used)
 {
 	pid_exit(event->fork.pid, event->fork.time);
 	return 0;
@@ -366,10 +373,11 @@ static void c_state_start(int cpu, u64 timestamp, int state)
 
 static void c_state_end(int cpu, u64 timestamp)
 {
-	struct power_event *pwr = zalloc(sizeof(*pwr));
-
+	struct power_event *pwr;
+	pwr = malloc(sizeof(struct power_event));
 	if (!pwr)
 		return;
+	memset(pwr, 0, sizeof(struct power_event));
 
 	pwr->state = cpus_cstate_state[cpu];
 	pwr->start_time = cpus_cstate_start_times[cpu];
@@ -384,13 +392,14 @@ static void c_state_end(int cpu, u64 timestamp)
 static void p_state_change(int cpu, u64 timestamp, u64 new_freq)
 {
 	struct power_event *pwr;
+	pwr = malloc(sizeof(struct power_event));
 
 	if (new_freq > 8000000) /* detect invalid data */
 		return;
 
-	pwr = zalloc(sizeof(*pwr));
 	if (!pwr)
 		return;
+	memset(pwr, 0, sizeof(struct power_event));
 
 	pwr->state = cpus_pstate_state[cpu];
 	pwr->start_time = cpus_pstate_start_times[cpu];
@@ -420,13 +429,15 @@ static void p_state_change(int cpu, u64 timestamp, u64 new_freq)
 static void
 sched_wakeup(int cpu, u64 timestamp, int pid, struct trace_entry *te)
 {
+	struct wake_event *we;
 	struct per_pid *p;
 	struct wakeup_entry *wake = (void *)te;
-	struct wake_event *we = zalloc(sizeof(*we));
 
+	we = malloc(sizeof(struct wake_event));
 	if (!we)
 		return;
 
+	memset(we, 0, sizeof(struct wake_event));
 	we->time = timestamp;
 	we->waker = pid;
 
@@ -480,11 +491,11 @@ static void sched_switch(int cpu, u64 timestamp, struct trace_entry *te)
 }
 
 
-static int process_sample_event(struct perf_tool *tool __maybe_unused,
-				union perf_event *event __maybe_unused,
+static int process_sample_event(struct perf_tool *tool __used,
+				union perf_event *event __used,
 				struct perf_sample *sample,
 				struct perf_evsel *evsel,
-				struct machine *machine __maybe_unused)
+				struct machine *machine __used)
 {
 	struct trace_entry *te;
 
@@ -568,12 +579,13 @@ static void end_sample_processing(void)
 	struct power_event *pwr;
 
 	for (cpu = 0; cpu <= numcpus; cpu++) {
-		/* C state */
-#if 0
-		pwr = zalloc(sizeof(*pwr));
+		pwr = malloc(sizeof(struct power_event));
 		if (!pwr)
 			return;
+		memset(pwr, 0, sizeof(struct power_event));
 
+		/* C state */
+#if 0
 		pwr->state = cpus_cstate_state[cpu];
 		pwr->start_time = cpus_cstate_start_times[cpu];
 		pwr->end_time = last_time;
@@ -585,9 +597,10 @@ static void end_sample_processing(void)
 #endif
 		/* P state */
 
-		pwr = zalloc(sizeof(*pwr));
+		pwr = malloc(sizeof(struct power_event));
 		if (!pwr)
 			return;
+		memset(pwr, 0, sizeof(struct power_event));
 
 		pwr->state = cpus_pstate_state[cpu];
 		pwr->start_time = cpus_pstate_start_times[cpu];
@@ -817,9 +830,11 @@ static void draw_process_bars(void)
 
 static void add_process_filter(const char *string)
 {
-	int pid = strtoull(string, NULL, 10);
-	struct process_filter *filt = malloc(sizeof(*filt));
+	struct process_filter *filt;
+	int pid;
 
+	pid = strtoull(string, NULL, 10);
+	filt = malloc(sizeof(struct process_filter));
 	if (!filt)
 		return;
 
@@ -965,15 +980,16 @@ static void write_svg_file(const char *filename)
 	svg_close();
 }
 
-static int __cmd_timechart(const char *output_name)
+static struct perf_tool perf_timechart = {
+	.comm			= process_comm_event,
+	.fork			= process_fork_event,
+	.exit			= process_exit_event,
+	.sample			= process_sample_event,
+	.ordered_samples	= true,
+};
+
+static int __cmd_timechart(void)
 {
-	struct perf_tool perf_timechart = {
-		.comm		 = process_comm_event,
-		.fork		 = process_fork_event,
-		.exit		 = process_exit_event,
-		.sample		 = process_sample_event,
-		.ordered_samples = true,
-	};
 	struct perf_session *session = perf_session__new(input_name, O_RDONLY,
 							 0, false, &perf_timechart);
 	int ret = -EINVAL;
@@ -1001,25 +1017,40 @@ out_delete:
 	return ret;
 }
 
+static const char * const timechart_usage[] = {
+	"perf timechart [<options>] {record}",
+	NULL
+};
+
+#ifdef SUPPORT_OLD_POWER_EVENTS
+static const char * const record_old_args[] = {
+	"record",
+	"-a",
+	"-R",
+	"-f",
+	"-c", "1",
+	"-e", "power:power_start",
+	"-e", "power:power_end",
+	"-e", "power:power_frequency",
+	"-e", "sched:sched_wakeup",
+	"-e", "sched:sched_switch",
+};
+#endif
+
+static const char * const record_new_args[] = {
+	"record",
+	"-a",
+	"-R",
+	"-f",
+	"-c", "1",
+	"-e", "power:cpu_frequency",
+	"-e", "power:cpu_idle",
+	"-e", "sched:sched_wakeup",
+	"-e", "sched:sched_switch",
+};
+
 static int __cmd_record(int argc, const char **argv)
 {
-#ifdef SUPPORT_OLD_POWER_EVENTS
-	const char * const record_old_args[] = {
-		"record", "-a", "-R", "-f", "-c", "1",
-		"-e", "power:power_start",
-		"-e", "power:power_end",
-		"-e", "power:power_frequency",
-		"-e", "sched:sched_wakeup",
-		"-e", "sched:sched_switch",
-	};
-#endif
-	const char * const record_new_args[] = {
-		"record", "-a", "-R", "-f", "-c", "1",
-		"-e", "power:cpu_frequency",
-		"-e", "power:cpu_idle",
-		"-e", "sched:sched_wakeup",
-		"-e", "sched:sched_switch",
-	};
 	unsigned int rec_argc, i, j;
 	const char **rec_argv;
 	const char * const *record_args = record_new_args;
@@ -1050,35 +1081,33 @@ static int __cmd_record(int argc, const char **argv)
 }
 
 static int
-parse_process(const struct option *opt __maybe_unused, const char *arg,
-	      int __maybe_unused unset)
+parse_process(const struct option *opt __used, const char *arg, int __used unset)
 {
 	if (arg)
 		add_process_filter(arg);
 	return 0;
 }
 
-int cmd_timechart(int argc, const char **argv,
-		  const char *prefix __maybe_unused)
-{
-	const char *output_name = "output.svg";
-	const struct option options[] = {
-	OPT_STRING('i', "input", &input_name, "file", "input file name"),
-	OPT_STRING('o', "output", &output_name, "file", "output file name"),
-	OPT_INTEGER('w', "width", &svg_page_width, "page width"),
-	OPT_BOOLEAN('P', "power-only", &power_only, "output power data only"),
+static const struct option options[] = {
+	OPT_STRING('i', "input", &input_name, "file",
+		    "input file name"),
+	OPT_STRING('o', "output", &output_name, "file",
+		    "output file name"),
+	OPT_INTEGER('w', "width", &svg_page_width,
+		    "page width"),
+	OPT_BOOLEAN('P', "power-only", &power_only,
+		    "output power data only"),
 	OPT_CALLBACK('p', "process", NULL, "process",
 		      "process selector. Pass a pid or process name.",
 		       parse_process),
 	OPT_STRING(0, "symfs", &symbol_conf.symfs, "directory",
 		    "Look for files with symbols relative to this directory"),
 	OPT_END()
-	};
-	const char * const timechart_usage[] = {
-		"perf timechart [<options>] {record}",
-		NULL
-	};
+};
 
+
+int cmd_timechart(int argc, const char **argv, const char *prefix __used)
+{
 	argc = parse_options(argc, argv, options, timechart_usage,
 			PARSE_OPT_STOP_AT_NON_OPTION);
 
@@ -1091,5 +1120,5 @@ int cmd_timechart(int argc, const char **argv,
 
 	setup_pager();
 
-	return __cmd_timechart(output_name);
+	return __cmd_timechart();
 }

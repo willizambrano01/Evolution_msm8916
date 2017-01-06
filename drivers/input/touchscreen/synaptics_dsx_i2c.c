@@ -28,39 +28,19 @@
 #include <linux/delay.h>
 #include <linux/input.h>
 #include <linux/gpio.h>
-#include <linux/usb.h>
 #include <linux/ctype.h>
 #include <linux/jiffies.h>
 #include <linux/semaphore.h>
 #include <linux/regulator/consumer.h>
-#include <linux/reboot.h>
 #include <linux/input/synaptics_rmi_dsx.h>
-
 #include "synaptics_dsx_i2c.h"
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-#include "touchx.h"
-#endif
-#include <linux/pinctrl/consumer.h>
-#include <linux/mmi_hall_notifier.h>
 #ifdef KERNEL_ABOVE_2_6_38
 #include <linux/input/mt.h>
-#endif
-
-#ifdef CONFIG_TOUCHSCREEN_DOUBLETAP2WAKE
-#include <linux/input/doubletap2wake.h>
 #endif
 
 #define DRIVER_NAME "synaptics_dsx_i2c"
 #define INPUT_PHYS_NAME "synaptics_dsx_i2c/input0"
 #define TYPE_B_PROTOCOL
-
-#define IRQ_DISPATCH_LATENCY	5000
-
-static int latency_in_effect = IRQ_DISPATCH_LATENCY;
-
-#define RMI4_WAIT_READY 0
-#define RMI4_HW_RESET 1
-#define RMI4_SW_RESET 2
 
 #define NO_0D_WHILE_2D
 /*
@@ -86,8 +66,6 @@ static int latency_in_effect = IRQ_DISPATCH_LATENCY;
 
 #define F01_STD_QUERY_LEN 21
 #define F01_BUID_ID_OFFSET 18
-#define F01_QUERY1_OFFSET 1
-#define F01_QUERY21_OFFSET 21
 #define F11_STD_QUERY_LEN 9
 #define F11_STD_CTRL_LEN 10
 #define F11_STD_DATA_LEN 12
@@ -95,16 +73,30 @@ static int latency_in_effect = IRQ_DISPATCH_LATENCY;
 #define F12_STD_CTRL_LEN 4
 #define F12_STD_DATA_LEN 80
 
+#define NORMAL_OPERATION (0 << 0)
+#define SENSOR_SLEEP (1 << 0)
+#define NO_SLEEP_OFF (0 << 2)
+#define NO_SLEEP_ON (1 << 2)
+
+#define ONE_TOUCH_RECALIBRATION 49
+#define ONE_TOUCH_SUPPRESSION 5
+#define MULTI_TOUCH_SUPPRESSION 1
+#define F11_DELTA_MAX (2*MULTI_TOUCH_SUPPRESSION)
+
+#define X_1T_SUPPRESSION ONE_TOUCH_SUPPRESSION
+#define Y_1T_SUPPRESSION ONE_TOUCH_SUPPRESSION
+#define X_MT_SUPPRESSION MULTI_TOUCH_SUPPRESSION
+#define Y_MT_SUPPRESSION MULTI_TOUCH_SUPPRESSION
+
+#define TYPE_FINGER (1 << 0)
+#define TYPE_STYLUS (1 << 1)
+
 #define RESET_GPIO_NAME "touch_reset"
 #define IRQ_GPIO_NAME "touch_irq"
 
 #define SYDBG(fmt, args...)	printk(KERN_ERR "%s: " fmt, __func__, ##args)
 #define SYDBG_REG(subpkt, fld) SYDBG(#subpkt "." #fld " = 0x%02X\n", subpkt.fld)
 
-#ifdef CONFIG_MMI_HALL_NOTIFICATIONS
-static int folio_notifier_callback(struct notifier_block *self,
-				 unsigned long event, void *data);
-#endif
 static void synaptics_dsx_resumeinfo_start(
 		struct synaptics_rmi4_data *rmi4_data);
 static void synaptics_dsx_resumeinfo_finish(
@@ -117,15 +109,9 @@ static void synaptics_dsx_resumeinfo_ignore(
 		struct synaptics_rmi4_data *rmi4_data);
 static void synaptics_dsx_resumeinfo_touch(
 		struct synaptics_rmi4_data *rmi4_data);
-static void synaptics_dsx_free_patch(
-		struct synaptics_dsx_patch *patch);
-static struct synaptics_dsx_patch *
-		synaptics_dsx_init_patch(const char *name);
-static int synaptics_rmi4_set_page(
-		struct synaptics_rmi4_data *rmi4_data,
-		unsigned int address);
 
 /* F12 packet register description */
+
 static struct {
 	unsigned char max_x_lsb;
 	unsigned char max_x_msb;
@@ -133,17 +119,35 @@ static struct {
 	unsigned char max_y_msb;
 } f12_c08_0;
 
+static struct {
+	unsigned char recv_pitch_lsb;
+	unsigned char recv_pitch_msb;
+	unsigned char trans_pitch_lsb;
+	unsigned char trans_pitch_msb;
+} f12_c08_1;
+
+static struct {
+	unsigned char low_recv_clip;
+	unsigned char high_recv_clip;
+	unsigned char low_trans_clip;
+	unsigned char high_trans_clip;
+} f12_c08_2;
+
+static struct {
+	unsigned char num_2d_recv;
+	unsigned char num_2d_trans;
+} f12_c08_3;
+
 static struct f12_c20_0_type {
 	unsigned char x_suppression;
 	unsigned char y_suppression;
 } f12_c20_0;
 
-static struct f12_c20_1_type {
+static struct {
 	union {
 		struct {
-			unsigned char reserved:1;
-			unsigned char report_lpwg_only:1;
-			unsigned char reserved2:6;
+			unsigned char report_always:1;
+			unsigned char reserved:7;
 		} __packed;
 		unsigned char data[1];
 	};
@@ -170,30 +174,11 @@ static struct {
 	unsigned char reported_bytes_per_object;
 } f12_c28_0;
 
-static struct {
-	unsigned char finger_threshold;
-	unsigned char small_finger_threshold;
-	unsigned char small_finger_border;
-	unsigned char negative_finger_threshold;
-} f12_c15_0;
-
-static struct {
-	unsigned char noise_floor;
-	unsigned char min_peak_amplitude;
-	unsigned char peak_merge_threshold_lsb;
-	unsigned char peak_merge_threshold_msb;
-} f12_c10_0;
-
-static struct {
-	unsigned char data[128];
-} dummy_subpkt;
-
-static struct synaptics_rmi4_subpkt f12_c15[] = {
-	RMI4_SUBPKT(f12_c15_0),
-};
-
 static struct synaptics_rmi4_subpkt f12_c08[] = {
 	RMI4_SUBPKT(f12_c08_0),
+	RMI4_SUBPKT(f12_c08_1),
+	RMI4_SUBPKT(f12_c08_2),
+	RMI4_SUBPKT(f12_c08_3),
 };
 
 static struct synaptics_rmi4_subpkt f12_c20[] = {
@@ -210,608 +195,84 @@ static struct synaptics_rmi4_subpkt f12_c28[] = {
 	RMI4_SUBPKT(f12_c28_0),
 };
 
-static struct synaptics_rmi4_subpkt f12_c09[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c10[] = {
-	RMI4_SUBPKT(f12_c10_0),
-};
-
-static struct synaptics_rmi4_subpkt f12_c11[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c12[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c13[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c14[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c16[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c17[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c18[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c19[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c21[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c22[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c24[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c25[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c26[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c27[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c29[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
-static struct synaptics_rmi4_subpkt f12_c30[] = {
-	RMI4_SUBPKT(dummy_subpkt),
-};
-
 static struct synaptics_rmi4_packet_reg f12_ctrl_reg_array[] = {
-	RMI4_REG(8, f12_c08),
-	RMI4_REG(9, f12_c09),
-	RMI4_REG(10, f12_c10),
-	RMI4_REG(11, f12_c11),
-	RMI4_REG(12, f12_c12),
-	RMI4_REG(13, f12_c13),
-	RMI4_REG(14, f12_c14),
-	RMI4_REG(15, f12_c15),
-	RMI4_REG(16, f12_c16),
-	RMI4_REG(17, f12_c17),
-	RMI4_REG(18, f12_c18),
-	RMI4_REG(19, f12_c19),
-	RMI4_REG(20, f12_c20),
-	RMI4_REG(21, f12_c21),
-	RMI4_REG(22, f12_c22),
-	RMI4_REG(23, f12_c23),
-	RMI4_REG(24, f12_c24),
-	RMI4_REG(25, f12_c25),
-	RMI4_REG(26, f12_c26),
-	RMI4_REG(27, f12_c27),
-	RMI4_REG(28, f12_c28),
-	RMI4_REG(29, f12_c29),
-	RMI4_REG(30, f12_c30),
+	RMI4_NO_REG(),		/*00*/
+	RMI4_NO_REG(),		/*01*/
+	RMI4_NO_REG(),		/*02*/
+	RMI4_NO_REG(),		/*03*/
+	RMI4_NO_REG(),		/*04*/
+	RMI4_NO_REG(),		/*05*/
+	RMI4_NO_REG(),		/*06*/
+	RMI4_NO_REG(),		/*07*/
+	RMI4_REG(f12_c08),	/*08*/
+	RMI4_NO_REG(),		/*09*/
+	RMI4_NO_REG(),		/*10*/
+	RMI4_NO_REG(),		/*11*/
+	RMI4_NO_REG(),		/*12*/
+	RMI4_NO_REG(),		/*13*/
+	RMI4_NO_REG(),		/*14*/
+	RMI4_NO_REG(),		/*15*/
+	RMI4_NO_REG(),		/*16*/
+	RMI4_NO_REG(),		/*17*/
+	RMI4_NO_REG(),		/*18*/
+	RMI4_NO_REG(),		/*19*/
+	RMI4_REG(f12_c20),	/*20*/
+	RMI4_NO_REG(),		/*21*/
+	RMI4_NO_REG(),		/*22*/
+	RMI4_REG(f12_c23),	/*23*/
+	RMI4_NO_REG(),		/*24*/
+	RMI4_NO_REG(),		/*25*/
+	RMI4_NO_REG(),		/*26*/
+	RMI4_NO_REG(),		/*27*/
+	RMI4_REG(f12_c28),	/*28*/
 };
 
-static struct f12_d1_type {
-	unsigned char type_and_stylus;
-	unsigned char x_lsb;
-	unsigned char x_msb;
-	unsigned char y_lsb;
-	unsigned char y_msb;
-	unsigned char z;
-	unsigned char wx;
-	unsigned char wy;
-} f12_d1_0, f12_d1_1, f12_d1_2, f12_d1_3, f12_d1_4, f12_d1_5, f12_d1_6,
-f12_d1_7, f12_d1_8, f12_d1_9;
-
-static struct synaptics_rmi4_subpkt f12_d1[] = {
-	RMI4_SUBPKT(f12_d1_0),
-	RMI4_SUBPKT(f12_d1_1),
-	RMI4_SUBPKT(f12_d1_2),
-	RMI4_SUBPKT(f12_d1_3),
-	RMI4_SUBPKT(f12_d1_4),
-	RMI4_SUBPKT(f12_d1_5),
-	RMI4_SUBPKT(f12_d1_6),
-	RMI4_SUBPKT(f12_d1_7),
-	RMI4_SUBPKT(f12_d1_8),
-	RMI4_SUBPKT(f12_d1_9),
+static struct synaptics_rmi4_func_packet_regs f12_ctrl_regs = {
+	.base_addr = 0,
+	.nr_regs = ARRAY_SIZE(f12_ctrl_reg_array),
+	.regs = f12_ctrl_reg_array
 };
 
-static struct {
-	unsigned char attn[2];
-} f12_d15_0;
-
-static struct synaptics_rmi4_subpkt f12_d15[] = {
-	RMI4_SUBPKT(f12_d15_0),
+struct synaptics_dsx_hob {
+	struct f12_c20_0_type f12_c20_0;
+	struct f12_c23_0_type f12_c23_0;
+	struct f12_c23_1_type f12_c23_1;
+	unsigned char f01_c9;
 };
 
-static struct synaptics_rmi4_packet_reg f12_data_reg_array[] = {
-	RMI4_REG(1, f12_d1),
-	RMI4_REG(15, f12_d15),
-};
+/* global variable init-ed from kernel cmd line */
+static int touch_test_mode;
 
-static struct {
-	union {
-		struct {
-			unsigned char sleep_mode:2;
-			unsigned char no_sleep:1;
-			unsigned char reserved:2;
-			unsigned char charger_connected:1;
-			unsigned char report_rate:1;
-			unsigned char configured:1;
-		} __packed;
-		unsigned char data[1];
-	};
-} f01_c0_0;
-
-static struct {
-	unsigned char doze_interval;
-} f01_c2_0;
-
-static struct {
-	unsigned char wakeup_threshold;
-} f01_c3_0;
-
-static struct {
-	unsigned char doze_holdoff;
-} f01_c5_0;
-
-static struct {
-	unsigned char recalibration_interval;
-} f01_c9_0;
-
-static struct synaptics_rmi4_subpkt f01_c0[] = {
-	RMI4_SUBPKT_STATIC(0, f01_c0_0),
-};
-
-static struct synaptics_rmi4_subpkt f01_c2[] = {
-	RMI4_SUBPKT(f01_c2_0),
-};
-
-static struct synaptics_rmi4_subpkt f01_c3[] = {
-	RMI4_SUBPKT(f01_c3_0),
-};
-
-static struct synaptics_rmi4_subpkt f01_c5[] = {
-	RMI4_SUBPKT(f01_c5_0),
-};
-
-static struct synaptics_rmi4_subpkt f01_c9[] = {
-	RMI4_SUBPKT(f01_c9_0),
-};
-
-static struct synaptics_rmi4_packet_reg f01_ctrl_reg_array[] = {
-	RMI4_REG_STATIC(0, f01_c0, 1),
-	RMI4_REG_STATIC(2, f01_c2, 1),
-	RMI4_REG_STATIC(3, f01_c3, 1),
-	RMI4_REG_STATIC(5, f01_c5, 1),
-	RMI4_REG_STATIC(9, f01_c9, 1),
-};
-
-static struct {
-	struct {
-		unsigned short saturation_cap;
-	} __packed;
-} f54_c2_0;
-
-static struct synaptics_rmi4_subpkt f54_c2[] = {
-	RMI4_SUBPKT(f54_c2_0),
-};
-
-static struct f54_control_95n f54_c95_0, f54_c95_1, f54_c95_2,
-	f54_c95_3, f54_c95_4, f54_c95_5, f54_c95_6, f54_c95_7;
-
-static struct synaptics_rmi4_subpkt f54_c95[] = {
-	RMI4_SUBPKT(f54_c95_0),
-	RMI4_SUBPKT(f54_c95_1),
-	RMI4_SUBPKT(f54_c95_2),
-	RMI4_SUBPKT(f54_c95_3),
-	RMI4_SUBPKT(f54_c95_4),
-	RMI4_SUBPKT(f54_c95_5),
-	RMI4_SUBPKT(f54_c95_6),
-	RMI4_SUBPKT(f54_c95_7),
-};
-
-static struct synaptics_rmi4_packet_reg f54_ctrl_reg_array[] = {
-	RMI4_REG(2, f54_c2),
-	RMI4_REG(95, f54_c95),
-};
-
-static struct {
-	unsigned char command;
-} f54_m0_0;
-
-static struct synaptics_rmi4_subpkt f54_m0[] = {
-	RMI4_SUBPKT(f54_m0_0),
-};
-
-static struct synaptics_rmi4_packet_reg f54_cmd_reg_array[] = {
-	RMI4_REG(0, f54_m0),
-};
-
-static struct {
-	unsigned char dynamic_supp_xy;
-} f51_c0_0;
-
-static struct {
-	union {
-		struct {
-		unsigned char freq_hop:1;
-		unsigned char nm_switch:1;
-		unsigned char im_reset:1;
-		unsigned char unused:5;
-		} __packed;
-		unsigned char data[1];
-	};
-} f51_c0_1;
-
-static struct synaptics_rmi4_subpkt f51_c0[] = {
-	RMI4_SUBPKT(f51_c0_0),
-	RMI4_SUBPKT(f51_c0_1),
-};
-
-static struct synaptics_rmi4_packet_reg f51_ctrl_reg_array[] = {
-	RMI4_REG(0, f51_c0),
-};
-
-
-#define CTRL_TYPE	(0 << 8)
-#define DATA_TYPE	(1 << 8)
-#define QUERY_TYPE	(2 << 8)
-#define COMMAND_TYPE	(3 << 8)
-
-static inline int register_ascii_to_type(unsigned char *symbol)
+int __init touch_test_mode_init(char *s)
 {
-	int reg_type = CTRL_TYPE;
-	switch (*symbol) {
-	case 'Q':
-		reg_type = QUERY_TYPE;
-			break;
-	case 'D':
-		reg_type = DATA_TYPE;
-			break;
-	case 'M':
-		reg_type = COMMAND_TYPE;
-			break;
-	case 'C':
-			break;
-	default: return reg_type;
-	}
-	*symbol = '\0';
-	return reg_type;
+	touch_test_mode = 1;
+	pr_info("touch driver in TEST mode\n");
+	return 1;
 }
 
-static inline unsigned char register_type_to_ascii(int type)
-{
-	unsigned char ascii;
-	switch (type) {
-	case QUERY_TYPE:
-		ascii = 'Q';
-			break;
-	case DATA_TYPE:
-		ascii = 'D';
-			break;
-	case COMMAND_TYPE:
-		ascii = 'M';
-			break;
-	case CTRL_TYPE:
-	default:
-		ascii = 'C';
-	}
-	return ascii;
-}
+__setup("touch_test_mode", touch_test_mode_init);
 
-static struct synaptics_rmi4_func_packet_regs synaptics_cfg_regs[] = {
-	{
-		.f_number = SYNAPTICS_RMI4_F12,
-		.base_addr = 0,
-		.query_offset = 4,
-		.nr_regs = ARRAY_SIZE(f12_ctrl_reg_array),
-		.regs = f12_ctrl_reg_array,
-	},
-	{
-		.f_number = SYNAPTICS_RMI4_F01,
-		.base_addr = 0,
-		.query_offset = 0,	/* does not matter */
-		.nr_regs = ARRAY_SIZE(f01_ctrl_reg_array),
-		.regs = f01_ctrl_reg_array,
-	},
-	{
-		.f_number = SYNAPTICS_RMI4_F12 | DATA_TYPE,
-		.base_addr = 0,
-		.query_offset = 7,
-		.nr_regs = ARRAY_SIZE(f12_data_reg_array),
-		.regs = f12_data_reg_array,
-	},
-	{
-		.f_number = SYNAPTICS_RMI4_F54,
-		.base_addr = 0,
-		.query_offset = 0,	/* does not matter */
-		.nr_regs = ARRAY_SIZE(f54_ctrl_reg_array),
-		.regs = f54_ctrl_reg_array,
-	},
-	{
-		.f_number = SYNAPTICS_RMI4_F54 | COMMAND_TYPE,
-		.base_addr = 0,
-		.query_offset = 0,	/* does not matter */
-		.nr_regs = ARRAY_SIZE(f54_cmd_reg_array),
-		.regs = f54_cmd_reg_array,
-	},
-	{
-		.f_number = SYNAPTICS_RMI4_F51,
-		.base_addr = 0,
-		.query_offset = 0,	/* does not matter */
-		.nr_regs = ARRAY_SIZE(f51_ctrl_reg_array),
-		.regs = f51_ctrl_reg_array,
-	},
-};
-
+static struct synaptics_dsx_hob hob_data;
 static unsigned char tsb_buff_clean_flag = 1;
-
-static char *synaptics_dsx_find_patch(char *head, char *delimiters, char **next)
-{
-	char *patch = head;
-	for (; patch; patch = *next) {
-		*next = strpbrk(patch, delimiters);
-		if (*next)
-			*(*next)++ = '\0';
-		patch = skip_spaces(patch);
-		if (!patch || !*patch || *patch == '#')
-			continue;
-		else
-			break;
-	}
-	return patch;
-}
-
-static int parse_patch_data(char *value_p, u8 data[], long *bitmask_v)
-{
-	int i, error, num_of_bytes = 1;
-	long value_v;
-	char *bitmask_p;
-
-	bitmask_p = strpbrk(value_p, "&");
-	if (bitmask_p) {
-		*bitmask_p++ = '\0';
-		error = kstrtol(bitmask_p, 16, bitmask_v);
-		if (error)
-			pr_err("bitmask conv error\n");
-	}
-
-	/* detect multiple bytes data */
-	if ((strlen(value_p)%2) == 0)
-		num_of_bytes = strlen(value_p)/2;
-
-	for (i = 0; i < num_of_bytes; i++) {
-		char hex_val[3] = {0};
-		hex_val[0] = *value_p;
-		hex_val[1] = *(value_p + 1);
-		error = kstrtol(hex_val, 16, &value_v);
-		if (error)
-			pr_err("value conv error\n");
-		data[i] = (u8)value_v;
-		value_p += 2;
-	}
-
-	return num_of_bytes;
-}
-
-static int synaptics_dsx_parse_patch(int func, char *query,
-		struct synaptics_dsx_patch *patch_ptr, bool expect_data)
-{
-	int i, error, rt_mod, function, num_of_bytes;
-	u8 data[64];
-	char *next, *subpkt_p, *value_p, *pair = query;
-	long regstr_v, bitmask_v, subpkt_v;
-	struct synaptics_dsx_func_patch *patch;
-
-	rt_mod = func & 0xf00;
-	function = func & 0xff;
-	for (i = 0; pair; pair = next, i++) {
-		num_of_bytes = 0;
-		bitmask_v = subpkt_v = 0L;
-
-		pair = synaptics_dsx_find_patch(pair, ",", &next);
-
-		value_p = strpbrk(pair, "=");
-		if (!value_p) {
-			pr_err("F%x[%d]: invalid syntax '%s'\n",
-				function, i, pair);
-			continue;
-		}
-
-		/* make sure string is null terminated */
-		*value_p = '\0';
-
-		subpkt_p = strpbrk(pair, ":");
-		if (subpkt_p) {
-			*subpkt_p++ = '\0';
-			error = kstrtol(subpkt_p, 10, &subpkt_v);
-			if (error) {
-				pr_err("F%x[%d]: subpacket conv error\n",
-					function, i);
-				continue;
-			}
-		}
-
-		error = kstrtol(pair, 10, &regstr_v);
-		if (error) {
-			pr_err("F%x[%d]: register conv error\n",
-				function, i);
-			continue;
-		}
-
-		if (expect_data)
-			num_of_bytes = parse_patch_data(
-						++value_p, data, &bitmask_v);
-		/* primitive data validation */
-		if (function <= 0 || function > 255 ||
-		    regstr_v < 0 || regstr_v > 255) {
-			pr_err("F%x[%d]: invalid values\n", function, i);
-			continue;
-		}
-
-		patch = kzalloc(sizeof(*patch), GFP_KERNEL);
-		if (!patch) {
-			pr_err("failed to alloc mem\n");
-			return -ENOMEM;
-		}
-
-		if (expect_data) {
-			patch->data = kzalloc(num_of_bytes, GFP_KERNEL);
-			if (!patch->data) {
-				pr_err("failed to alloc mem\n");
-				return -ENOMEM;
-			}
-			memcpy(patch->data, data, num_of_bytes);
-		}
-
-		patch->func = (u16)func;
-		patch->regstr = (u8)regstr_v;
-		patch->subpkt = (u8)subpkt_v;
-		patch->size = (u8)num_of_bytes;
-		patch->bitmask = (u8)bitmask_v;
-
-		pr_debug("F%x[%d], register %d, subpkt %d, size %d, mask %x\n",
-			function, i, patch->regstr, patch->subpkt,
-			patch->size, patch->bitmask);
-		patch_ptr->cfg_num++;
-		list_add_tail(&patch->link, &patch_ptr->cfg_head);
-	}
-
-	return 0;
-}
-
-/*
- * Special settings passed to the driver via device tree
- * Example: "F12@11:2=1fa0;F1@1=1;"
- *   Where:
- *      F12     - decimal object number
- *      @       - delimits function number and following patch sets
- *      11:2    - decimal register and subpacket numbers (0 offset)
- *      26=a    - register number and hex value to assign
- *      2=1fa0  - 2 bytes of data to write to the register
- */
-static void synaptics_dsx_parse_string(struct synaptics_rmi4_data *data,
-		const char *patch_ptr,
-		struct synaptics_dsx_patch *patch,
-		bool expect_data)
-{
-	struct device *dev = &data->i2c_client->dev;
-	long number_v;
-	char *patch_string;
-	char *config_p, *next, *patch_set;
-	int i, error, rt_mod = 0;
-
-	patch_string = kstrdup(patch_ptr, GFP_KERNEL);
-	for (i = 0, patch_set = patch_string; patch_set; patch_set = next) {
-		patch_set = synaptics_dsx_find_patch(patch_set, ";\n", &next);
-		if (!patch_set)
-			break;
-
-		dev_dbg(dev, "patch set %d: \"%s\"\n", i, patch_set);
-
-		config_p = strpbrk(patch_set, "@");
-		if ((*patch_set != 'F' && *patch_set != 'f') || !config_p) {
-			dev_err(dev, "invalid syntax '%s'\n", patch_set);
-			continue;
-		}
-
-		rt_mod = register_ascii_to_type(config_p-1);
-		dev_dbg(dev, "register type modifier %d\n", rt_mod);
-
-		/* strip non digits */
-		*config_p++ = '\0';
-
-		error = kstrtol(++patch_set, 16, &number_v);
-		if (error) {
-			dev_err(dev, "kstrtol error %d\n", error);
-			continue;
-		}
-
-		error = synaptics_dsx_parse_patch((int)number_v + rt_mod,
-					config_p, patch, expect_data);
-		if (error < 0) {
-			dev_err(dev, "invalid patch; parse error %d\n", error);
-			continue;
-		}
-
-		i++;
-	}
-	kfree(patch_string);
-	if (patch->cfg_num)
-		dev_info(dev, "processed %d patch sets for %d functions\n",
-			patch->cfg_num, i);
-	else
-		dev_info(dev, "no valid patch sets found\n");
-}
 
 #define LAST_SUBPACKET_ROW_IND_MASK 0x80
 #define NR_SUBPKT_PRESENCE_BITS 7
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-struct touchxs touchxp;
-EXPORT_SYMBOL(touchxp);
-#endif
 
-static struct synaptics_rmi4_func_packet_regs *find_function(int f_number)
-{
-	struct synaptics_rmi4_func_packet_regs *regs = NULL;
-	int i;
-	for (i = 0; i < ARRAY_SIZE(synaptics_cfg_regs); i++)
-		if (synaptics_cfg_regs[i].f_number == f_number) {
-			regs = &synaptics_cfg_regs[i];
-			break;
-		}
-	return regs;
-}
-
-static struct synaptics_rmi4_packet_reg *find_packet_reg(
-	struct synaptics_rmi4_func_packet_regs *regs, int number)
-{
-	struct synaptics_rmi4_packet_reg *reg = NULL;
-	int r;
-
-	for (r = 0; r < regs->nr_regs; r++)
-		if (number == regs->regs[r].r_number) {
-			reg = &regs->regs[r];
-			break;
-		}
-	return reg;
-}
-
-int synaptics_rmi4_scan_f12_reg_info(
+int synaptics_rmi4_scan_packet_reg_info(
 	struct synaptics_rmi4_data *rmi4_data,
 	unsigned short query_addr,
 	unsigned short regs_base_addr,
 	struct synaptics_rmi4_func_packet_regs *regs)
 {
 	unsigned char sz, mask;
-	int ii, jj, r, s, retval, max_reg_number;
+	int ii, jj, r, s, retval;
 	unsigned short r_offset;
 	unsigned short addr = query_addr;
 	unsigned char data[255];
-	bool r_exist[128] = {false};
 
 	for (r = 0; r < regs->nr_regs; ++r) {
 		regs->regs[r].offset = -1;
 		regs->regs[r].size = 0;
-		kfree(regs->regs[r].data);
 		for (s = 0; s < regs->regs[r].nr_subpkts; ++s) {
 			regs->regs[r].subpkt[s].present = 0;
 			if (regs->regs[r].subpkt[s].data &&
@@ -823,7 +284,7 @@ int synaptics_rmi4_scan_f12_reg_info(
 
 	regs->base_addr = regs_base_addr;
 	retval = rmi4_data->i2c_read(rmi4_data, addr, &sz, 1);
-	pr_debug("size of reg presence = %d, addr 0x%x\n", sz, addr);
+	pr_debug("size of reg presence = %d\n",	sz);
 	if (retval < 0)
 		return retval;
 	if (!sz)
@@ -841,73 +302,55 @@ int synaptics_rmi4_scan_f12_reg_info(
 	for (r = 0, r_offset = 0; ii < sz; ++ii) {
 		pr_debug("reg presence [%d] = 0x%02x\n", ii, data[ii]);
 		for (jj = 0, mask = 1; jj < 8; ++jj, ++r, mask <<= 1) {
-			struct synaptics_rmi4_packet_reg *reg =
-						find_packet_reg(regs, r);
-			bool present = (data[ii] & mask) != 0;
-			bool allocated = reg ? true : false;
-			if (present != allocated)
-				pr_debug("  reg: r%d is%s present, but was%s"
+			struct synaptics_rmi4_packet_reg *reg = regs->regs + r;
+			int present = (data[ii] & mask) != 0;
+			int allocated = r < regs->nr_regs;
+			int expected = allocated && reg->expected;
+			if (!present || !expected) {
+				if (allocated && present)
+					reg->offset = r_offset++;
+				if (present != expected)
+					pr_debug("  reg: r%d"
+						" is%s present, but was%s"
 						" expected\n", r,
 						present ? "" : " NOT",
-						allocated ? "" : " NOT");
-			if (!present) {
-				r_exist[r] = false;
+						expected ? "" : " NOT");
 				continue;
 			}
-			r_exist[r] = true;
-			if (allocated)
-				reg->offset = r_offset;
 			pr_debug("  r%d offset = %d\n", r, r_offset);
-			r_offset++;
+			reg->offset = r_offset++;
 		}
 	}
 
-	max_reg_number = r;
-	pr_debug("max register number = %d\n", max_reg_number);
-
 	/* Scan register size and subpacket presence*/
 	sz = data[0];
-	pr_debug("subpacket presence sz = %d, addr 0x%x\n", sz, addr+1);
+	pr_debug("subpacket presence sz = %d\n", sz);
 	retval = rmi4_data->i2c_read(rmi4_data, ++addr, data, sz);
 	if (retval < 0)
 		return retval;
-	for (r = 0, ii = 0; r < max_reg_number && ii < sz; ++r) {
-		unsigned int reg_size, expected_reg_size;
-		struct synaptics_rmi4_packet_reg *reg =
-					find_packet_reg(regs, r);
-		if (!r_exist[r]) {
-			pr_debug("r%d does not exist; go to the next...\n", r);
+	for (r = 0, ii = 0; r < regs->nr_regs && ii < sz; ++r) {
+		unsigned int expected_reg_size;
+		struct synaptics_rmi4_packet_reg *reg = regs->regs + r;
+		if (reg->offset == -1)
 			continue;
-		}
-		reg_size = data[ii++];
-		if (!reg_size) {
+		reg->size = data[ii++];
+		pr_debug("r%d sz = %d\n", r, reg->size);
+		if (!reg->size) {
 			pr_err("packet register size greater 255 bytes"
 				" not supported\n");
 			return -ENOSYS;
 		}
-		if (reg && reg->offset != -1) {
-			reg->data = kzalloc(reg_size, GFP_KERNEL);
-			if (reg->data) {
-				reg->size = reg_size;
-				pr_debug("r%d allocated %d bytes buffer @%p\n",
-					reg->r_number, reg->size, reg->data);
-			} else
-				pr_err("cannot alloc register data buffer\n");
-		}
-		pr_debug("r%d sz = %d\n", r, reg_size);
 		expected_reg_size = 0;
 		for (s = 0; ii < sz;) {
 			pr_debug("  subpkt presence [%d] = 0x%02x\n",
 				ii, data[ii]);
 			for (jj = 0, mask = 1; jj < NR_SUBPKT_PRESENCE_BITS;
 					++jj, ++s, mask <<= 1) {
-				struct synaptics_rmi4_subpkt *subpkt = NULL;
-				bool present = (data[ii] & mask) != 0;
-				bool expected = false;
-				if (reg && s < reg->nr_subpkts) {
-					subpkt = reg->subpkt + s;
-					expected = subpkt->expected;
-				}
+				struct synaptics_rmi4_subpkt *subpkt =
+							reg->subpkt + s;
+				int present = (data[ii] & mask) != 0;
+				int expected = (s < reg->nr_subpkts) &&
+					subpkt->expected;
 				if (!present || !expected) {
 					if (present != expected)
 						pr_debug("    subpacket:"
@@ -919,17 +362,13 @@ int synaptics_rmi4_scan_f12_reg_info(
 					continue;
 				}
 				pr_debug("    r%d.s%d is present\n", r, s);
-				if (subpkt) {
-					subpkt->present = true;
-					expected_reg_size += subpkt->size;
-				}
+				subpkt->present = 1;
+				expected_reg_size += subpkt->size;
 			}
-			if ((data[ii++] & LAST_SUBPACKET_ROW_IND_MASK) == 0) {
-				pr_debug("no more subpackets\n");
+			if ((data[ii++] & LAST_SUBPACKET_ROW_IND_MASK) == 0)
 				break;
-			}
 		}
-		if (reg && reg->expected && reg->size != expected_reg_size) {
+		if (reg->expected && reg->size != expected_reg_size) {
 			pr_debug("  r%d size error:"
 				" expected %d actual is %d\n",
 				r, expected_reg_size, reg->size);
@@ -940,31 +379,27 @@ int synaptics_rmi4_scan_f12_reg_info(
 
 int synaptics_rmi4_read_packet_reg(
 	struct synaptics_rmi4_data *rmi4_data,
-	struct synaptics_rmi4_func_packet_regs *regs, int r_number)
+	struct synaptics_rmi4_func_packet_regs *regs, unsigned char r)
 {
 	int s, retval, offset;
-	struct synaptics_rmi4_packet_reg *reg = find_packet_reg(regs, r_number);
+	static unsigned char data[255];
+	struct synaptics_rmi4_packet_reg *reg = regs->regs + r;
 
-	if (!reg || !reg->size) {
-		pr_err("register %d not found or zero size\n", r_number);
+	if (r >= regs->nr_regs || !reg->size)
 		return -EINVAL;
-	}
 
 	if (reg->offset == -1) {
 		pr_err("touch register error: can't read r%d - not present\n",
-			r_number);
+			r);
 		return -ENOENT;
 	}
 
-	pr_debug("F%02x%c reading r%d{%X}, size %d to @%p\n",
-			regs->f_number & 0xff,
-			register_type_to_ascii(regs->f_number & 0xf00),
-			reg->r_number, regs->base_addr + reg->offset,
-			reg->size, reg->data);
-
-	retval = rmi4_data->i2c_read(rmi4_data,
+	retval = rmi4_data->i2c_read(
+			rmi4_data,
 			regs->base_addr + reg->offset,
-			reg->data, reg->size);
+			data,
+			reg->size);
+
 	if (retval < 0)
 		return retval;
 
@@ -974,19 +409,18 @@ int synaptics_rmi4_read_packet_reg(
 			continue;
 
 		if ((reg->size - offset) < subpkt->size) {
-			if (subpkt->data != &dummy_subpkt)
-				pr_err("subpkt size error: expected %d bytes,"
-					" only %d present\n", subpkt->size,
-					(reg->size - offset));
+			pr_err("subpkt size error: expected %d bytes,"
+				" only %d present\n", subpkt->size,
+				(reg->size - offset));
 			break;
 		}
 
-		memcpy(subpkt->data, reg->data+offset, subpkt->size);
+		memcpy(subpkt->data, data+offset, subpkt->size);
 		offset += subpkt->size;
 #if defined(CONFIG_DYNAMIC_DEBUG) || defined(DEBUG)
 		{
 			int kk;
-			pr_debug("read r%d.s%d =\n", reg->r_number, s);
+			pr_debug("read r%d.s%d =\n", r, s);
 			for (kk = 0; kk < subpkt->size; ++kk)
 				pr_debug("%02x\n",
 					((unsigned char *)subpkt->data)[kk]);
@@ -1004,15 +438,9 @@ int synaptics_rmi4_read_packet_regs(
 	int retval = 0;
 
 	for (r = 0; r < regs->nr_regs; ++r) {
-		pr_debug("about to read F%02x%c register %d [%d/%d]\n",
-				regs->f_number & 0xff,
-				register_type_to_ascii(regs->f_number & 0xf00),
-				regs->regs[r].r_number,
-				regs->regs[r].expected,
-				regs->regs[r].offset >= 0);
 		if (regs->regs[r].expected && regs->regs[r].offset >= 0) {
 			retval = synaptics_rmi4_read_packet_reg(
-				rmi4_data, regs, regs->regs[r].r_number);
+				rmi4_data, regs, r);
 			if (retval < 0)
 				break;
 		}
@@ -1022,18 +450,17 @@ int synaptics_rmi4_read_packet_regs(
 
 static int synaptics_rmi4_write_packet_reg(
 	struct synaptics_rmi4_data *rmi4_data,
-	struct synaptics_rmi4_func_packet_regs *regs, int r_number)
+	struct synaptics_rmi4_func_packet_regs *regs, unsigned char r)
 {
-	struct synaptics_rmi4_packet_reg *reg = find_packet_reg(regs, r_number);
+	unsigned char data[255];
+	struct synaptics_rmi4_packet_reg *reg = regs->regs + r;
 	int sz, ii, offset, retval;
 
-	if (!reg || !reg->size) {
-		pr_err("r%d does not exist or zero size\n", r_number);
+	if (r >= regs->nr_regs || !reg->size)
 		return -EINVAL;
-	}
 	if (reg->offset == -1) {
 		pr_err("touch register error: writing to absent register r%d\n",
-			r_number);
+			r);
 		return -ENOENT;
 	}
 
@@ -1043,10 +470,9 @@ static int synaptics_rmi4_write_packet_reg(
 			continue;
 
 		if (subpkt->data && subpkt->size &&
-			(offset + subpkt->size) <= reg->size) {
+			(offset + subpkt->size) < sizeof(data)) {
 			if ((reg->size - offset) >= subpkt->size) {
-				memcpy(reg->data + sz, subpkt->data,
-							subpkt->size);
+				memcpy(data + sz, subpkt->data, subpkt->size);
 				sz += subpkt->size;
 			} else {
 				pr_err("expected %d bytes, only %d present\n",
@@ -1055,17 +481,13 @@ static int synaptics_rmi4_write_packet_reg(
 			}
 		} else {
 			retval = -EINVAL;
-			pr_err("cannot update subpacket %d\n", ii);
+			pr_err("bad subpacket or register greater %d bytes\n",
+					sizeof(data));
 			goto out;
 		}
 	}
-
-	pr_debug("writing r%d{%X}, size %d to @%p\n", reg->r_number,
-			regs->base_addr + reg->offset, reg->size, reg->data);
-
-	retval = rmi4_data->i2c_write(rmi4_data,
-			regs->base_addr + reg->offset,
-			reg->data, sz);
+	retval = rmi4_data->i2c_write(rmi4_data, regs->base_addr + reg->offset,
+		data, sz);
 out:
 	return retval;
 }
@@ -1119,91 +541,6 @@ err_gpio:
 	return retval;
 }
 
-int synaptics_dsx_dt_parse_state(struct synaptics_rmi4_data *data,
-		struct device_node *np_config,
-		struct synaptics_dsx_patch *state)
-{
-	const char *patch_data;
-	struct device_node *np_state;
-	int err;
-
-	np_state = of_node_get(np_config);
-	err = of_property_read_string(np_config, "patch-data",
-				(const char **)&patch_data);
-	if (err < 0) {
-		pr_err("unable to read patch-data\n");
-		return err;
-	}
-
-	synaptics_dsx_parse_string(data, patch_data, state, true);
-
-	return 0;
-}
-
-int synaptics_dsx_dt_parse_mode(struct synaptics_rmi4_data *data,
-		const char *mode_name, struct synaptics_dsx_patchset *mode)
-{
-	struct device *dev = &data->i2c_client->dev;
-	struct device_node *np = dev->of_node;
-	struct device_node *np_modes;
-	int ret = 0;
-	char *propname;
-	struct property *prop;
-	const __be32 *list;
-	int size, config;
-	phandle phandle;
-	struct device_node *np_config;
-
-	np_modes = of_find_node_by_name(np, "touchstate_modes");
-	if (!np_modes) {
-		pr_warn("can't find touchstate modes node\n");
-		ret = -EINVAL;
-		goto err;
-	}
-
-	pr_debug("processing mode %s\n", mode_name);
-	propname = kasprintf(GFP_KERNEL, "touchmode-%s", mode_name);
-	prop = of_find_property(np_modes, propname, &size);
-	kfree(propname);
-	of_node_put(np_modes);
-	if (!prop) {
-		pr_err("can't find mode %s\n", mode_name);
-		ret = -EINVAL;
-		goto err;
-	}
-	list = prop->value;
-	size /= sizeof(*list);
-
-	if (size > MAX_NUM_STATES) {
-		pr_err("unexpected number of states %d\n", size);
-		ret = -EINVAL;
-		goto err;
-	}
-
-	for (config = 0; config < size; config++) {
-		phandle = be32_to_cpup(list++);
-
-		/* Look up the touchstate configuration node */
-		np_config = of_find_node_by_phandle(phandle);
-		if (!np_config) {
-			dev_err(dev,
-				"prop %s index %i invalid phandle\n",
-				prop->name, config);
-			ret = -EINVAL;
-			goto err;
-		}
-
-		/* Parse the node */
-		ret = synaptics_dsx_dt_parse_state(data, np_config,
-				 mode->patch_data[config]);
-		of_node_put(np_config);
-		if (ret < 0)
-			goto err;
-	}
-err:
-	return ret;
-}
-
 static struct synaptics_dsx_platform_data *
 		synaptics_dsx_of_init(struct i2c_client *client,
 				struct synaptics_rmi4_data *rmi4_data)
@@ -1213,25 +550,6 @@ static struct synaptics_dsx_platform_data *
 	struct synaptics_dsx_platform_data *pdata;
 	struct device_node *np = client->dev.of_node;
 	struct synaptics_dsx_cap_button_map *button_map = NULL;
-	struct synaptics_clip_area clip_area;
-
-	rmi4_data->patching_enabled = 1;
-	retval = synaptics_dsx_dt_parse_mode(rmi4_data, "default",
-			rmi4_data->default_mode);
-	if (retval) {
-		pr_warn("failed to load default mode\n");
-		rmi4_data->patching_enabled = 0;
-	}
-
-	if (rmi4_data->patching_enabled) {
-		retval = synaptics_dsx_dt_parse_mode(rmi4_data, "alternate",
-				rmi4_data->alternate_mode);
-		if (retval) {
-			pr_warn("alternate mode not found;"
-				" using default instead\n");
-			rmi4_data->alternate_mode = rmi4_data->default_mode;
-		}
-	}
 
 	pdata = devm_kzalloc(&client->dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata) {
@@ -1295,28 +613,29 @@ static struct synaptics_dsx_platform_data *
 		rmi4_data->purge_enabled = true;
 	}
 
-	if (of_property_read_bool(np, "synaptics,charger-detection")) {
-		pr_notice("using charger detection\n");
-		rmi4_data->charger_detection = true;
+	if (of_property_read_bool(np, "synaptics,reset-on-resume")) {
+		pr_notice("using reset ic on resume\n");
+		rmi4_data->reset_on_resume = true;
 	}
 
-	retval = of_property_read_u32_array(np,
-			"synaptics,touch-clip-area",
-			(unsigned *)&clip_area, 4);
-	if (!retval) {
-		rmi4_data->clipa = kzalloc(sizeof(clip_area), GFP_KERNEL);
-		if (!rmi4_data->clipa) {
-			dev_err(&client->dev, "clip area allocation failure\n");
-			return NULL;
-		}
-		memcpy(rmi4_data->clipa, &clip_area, sizeof(clip_area));
-		pr_notice("using touch clip area\n");
-	} else
-		dev_err(&client->dev, "clip area read failure\n");
+	if (of_property_read_bool(np, "synaptics,one-touch-enabled")) {
+		pr_notice("using one touch while suspended\n");
+		rmi4_data->one_touch_enabled = true;
+	}
 
-	if (of_property_read_bool(np, "synaptics,use-in-progress-event-blank")) {
-		pr_notice("using in progress event blank\n");
-		rmi4_data->event_blank = FB_IN_PROGRESS_EVENT_BLANK;
+	if (!of_property_read_bool(np, "synaptics,normal-mode")) {
+		pr_notice("using normal mode settings from tdat\n");
+		rmi4_data->normal_mode = -1;
+	} else {
+		of_property_read_u32(np, "synaptics,normal-mode",
+					&rmi4_data->normal_mode);
+		pr_notice("%s mode\n", rmi4_data->normal_mode ?
+				"using normal" : "enforce no sleep");
+	}
+
+	if (of_property_read_bool(np, "synaptics,hw-reset")) {
+		pr_notice("using hard ic reset\n");
+		rmi4_data->hw_reset = true;
 	}
 
 	return pdata;
@@ -1329,27 +648,31 @@ static inline struct synaptics_dsx_platform_data *
 }
 #endif
 
-static void synaptics_dsx_validate_product_string(unsigned char *id)
-{
-	unsigned char *s, *wc;
-	bool do_once = false, do_all = false;
+#define HYPHEN		'-'
+#define letter_i	'i'
+#define letter_s	's'
+#define letter_t	't'
 
-	for (s = wc = id; *s; s++) {
-		if (*s == '-') {
-			do_all = true;
-			continue;
-		}
-		if (!isdigit(*s) && isupper(*s)) {
-			*s = tolower(*s);
-			do_once = true;
-		}
-		if (do_all || do_once) {
-			*wc = *s;
-			do_once = false;
-		}
-		wc++;
+static void synaptics_dsx_darn_product_string(unsigned char *id, size_t len)
+{
+	unsigned char *hyphen;
+
+	hyphen = strnchr(id, len, HYPHEN);
+	if (hyphen) {
+		if (*(hyphen+1) == toupper(letter_t)) {
+			memmove(id+1, id, hyphen-id);
+			hyphen++;
+			*hyphen++ = letter_t;
+		} else if (*(hyphen+1) == toupper(letter_i))
+			*hyphen++ = letter_i;
+		*id = letter_s;
+		*hyphen = 0;
+	} else {
+		int i;
+		for (i = 0; *(id+i) != 0; i++)
+			if (isupper(*(id+i)))
+				*(id+i) = tolower(*(id+i));
 	}
-	*wc = 0;
 }
 
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
@@ -1360,15 +683,24 @@ static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr, unsigned char *data,
 		unsigned short length);
 
-static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data);
+static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data,
+		unsigned char *f01_cmd_base_addr);
+
+static void synaptics_rmi4_sensor_sleep(struct synaptics_rmi4_data *rmi4_data);
+
+static void synaptics_rmi4_sensor_wake(struct synaptics_rmi4_data *rmi4_data);
+
+static void synaptics_rmi4_sensor_one_touch(
+		struct synaptics_rmi4_data *rmi4_data, bool enable);
+
+static void synaptics_rmi4_sensor_multi_touch(
+		struct synaptics_rmi4_data *rmi4_data, unsigned char function);
 
 static int synaptics_rmi4_irq_enable(struct synaptics_rmi4_data *rmi4_data,
 		bool enable);
 
 static void synaptics_dsx_sensor_state(struct synaptics_rmi4_data *rmi4_data,
 		int state);
-
-static void synaptics_dsx_release_all(struct synaptics_rmi4_data *rmi4_data);
 
 #if defined(CONFIG_FB) && !defined(CONFIG_MMI_PANEL_NOTIFICATIONS)
 static int synaptics_dsx_panel_cb(struct notifier_block *nb,
@@ -1378,9 +710,6 @@ static int synaptics_dsx_panel_cb(struct notifier_block *nb,
 static int synaptics_rmi4_suspend(struct device *dev);
 
 static int synaptics_rmi4_resume(struct device *dev);
-
-static ssize_t synaptics_rmi4_ud_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
 
 static ssize_t synaptics_rmi4_f01_reset_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
@@ -1412,12 +741,6 @@ static ssize_t synaptics_rmi4_drv_irq_show(struct device *dev,
 static ssize_t synaptics_rmi4_drv_irq_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
 
-static ssize_t synaptics_rmi4_pm_opt_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-
-static ssize_t synaptics_rmi4_pm_opt_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-
 static ssize_t synaptics_rmi4_hw_irqstat_show(struct device *dev,
 		struct device_attribute *attr, char *buf);
 
@@ -1427,27 +750,6 @@ static ssize_t synaptics_rmi4_ic_ver_show(struct device *dev,
 static ssize_t synaptics_rmi4_poweron_show(struct device *dev,
 		struct device_attribute *attr, char *buf);
 
-static ssize_t synaptics_rmi4_query_idx_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-
-static ssize_t synaptics_rmi4_query_idx_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-
-static ssize_t synaptics_rmi4_query_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-
-static ssize_t synaptics_rmi4_query_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-
-static ssize_t synaptics_rmi4_patch_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-
-static ssize_t synaptics_rmi4_reporting_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-
-static ssize_t synaptics_rmi4_reporting_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-
 struct synaptics_rmi4_f01_device_status {
 	union {
 		struct {
@@ -1455,37 +757,6 @@ struct synaptics_rmi4_f01_device_status {
 			unsigned char reserved:2;
 			unsigned char flash_prog:1;
 			unsigned char unconfigured:1;
-		} __packed;
-		unsigned char data[1];
-	};
-};
-
-struct synaptics_rmi4_f01_query1 {
-	union {
-		struct {
-			unsigned char custom_map:1;
-			unsigned char non_compliant:1;
-			unsigned char reserved:1;
-			unsigned char has_sensor_id:1;
-			unsigned char has_charger_input:1;
-			unsigned char has_adjustable_doze:1;
-			unsigned char has_doze_holdoff:1;
-			unsigned char has_query42:1;
-		} __packed;
-		unsigned char data[1];
-	};
-};
-
-struct synaptics_rmi4_f01_query42 {
-	union {
-		struct {
-			unsigned char has_ds4_queries:1;
-			unsigned char has_multi_physical:1;
-			unsigned char has_guest:1;
-			unsigned char has_swr:1;
-			unsigned char has_report_rate:1;
-			unsigned char has_recalibration:1;
-			unsigned char reserved:2;
 		} __packed;
 		unsigned char data[1];
 	};
@@ -1579,9 +850,6 @@ static struct device_attribute attrs[] = {
 	__ATTR(drv_irq, (S_IRUSR | S_IRGRP | S_IWUSR | S_IWGRP),
 			synaptics_rmi4_drv_irq_show,
 			synaptics_rmi4_drv_irq_store),
-	__ATTR(reporting, (S_IRUSR | S_IRGRP | S_IWUSR | S_IWGRP),
-			synaptics_rmi4_reporting_show,
-			synaptics_rmi4_reporting_store),
 	__ATTR(hw_irqstat, S_IRUSR | S_IRGRP,
 			synaptics_rmi4_hw_irqstat_show,
 			synaptics_rmi4_store_error),
@@ -1594,21 +862,6 @@ static struct device_attribute attrs[] = {
 	__ATTR(poweron, S_IRUSR | S_IRGRP,
 			synaptics_rmi4_poweron_show,
 			synaptics_rmi4_store_error),
-	__ATTR(query_idx, (S_IRUSR | S_IRGRP | S_IWUSR | S_IWGRP),
-			synaptics_rmi4_query_idx_show,
-			synaptics_rmi4_query_idx_store),
-	__ATTR(query, (S_IRUSR | S_IRGRP | S_IWUSR | S_IWGRP),
-			synaptics_rmi4_query_show,
-			synaptics_rmi4_query_store),
-	__ATTR(patch, S_IWUSR | S_IWGRP,
-			synaptics_rmi4_show_error,
-			synaptics_rmi4_patch_store),
-	__ATTR(tsi, S_IRUSR | S_IRGRP,
-			synaptics_rmi4_ud_show,
-			synaptics_rmi4_store_error),
-	__ATTR(pm_opt, (S_IRUSR | S_IRGRP | S_IWUSR | S_IWGRP),
-			synaptics_rmi4_pm_opt_show,
-			synaptics_rmi4_pm_opt_store),
 };
 
 struct synaptics_exp_fn_ctrl {
@@ -1631,75 +884,8 @@ static irqreturn_t synaptics_dsx_reset_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-int synaptics_rmi4_sw_reset(struct synaptics_rmi4_data *rmi4_data,
-				bool requery) {
-	int retval;
-	unsigned char page_number;
-	unsigned short pdt_entry_addr;
-	struct synaptics_rmi4_fn_desc rmi_fd;
-	unsigned short cmd_reg_addr;
-	bool cmd_reg_found = false;
-
-	if (!requery) {
-		cmd_reg_addr = rmi4_data->f01_cmd_base_addr;
-		cmd_reg_found = true;
-		goto sw_reset;
-	}
-
-	for (page_number = 0; !cmd_reg_found && page_number < PAGES_TO_SERVICE;
-			page_number++) {
-		for (pdt_entry_addr = PDT_START; pdt_entry_addr > PDT_END;
-				pdt_entry_addr -= PDT_ENTRY_SIZE) {
-			pdt_entry_addr |= (page_number << 8);
-
-			retval = synaptics_rmi4_i2c_read(rmi4_data,
-					pdt_entry_addr,
-					(unsigned char *)&rmi_fd,
-					sizeof(rmi_fd));
-			if (retval < 0)
-				return retval;
-
-			if (rmi_fd.fn_number == 0) {
-				dev_dbg(&rmi4_data->i2c_client->dev,
-						"%s: Reached end of PDT\n",
-						__func__);
-				break;
-			}
-
-			dev_dbg(&rmi4_data->i2c_client->dev,
-					"%s: F%02x found (page %d)\n",
-					__func__, rmi_fd.fn_number,
-					page_number);
-
-			if (rmi_fd.fn_number == SYNAPTICS_RMI4_F01) {
-				cmd_reg_addr = rmi_fd.cmd_base_addr;
-				cmd_reg_found = true;
-				break;
-			}
-		}
-	}
-
-sw_reset:
-	if (cmd_reg_found) {
-		uint8_t command = 1;
-		retval = synaptics_rmi4_i2c_write(rmi4_data,
-			cmd_reg_addr,
-			&command, sizeof(command));
-		if (retval < 0) {
-			dev_err(&rmi4_data->i2c_client->dev,
-				"%s: Failed to issue SW reset command, error = %d\n",
-				__func__, retval);
-			return retval;
-		}
-		return 0;
-	} else
-		return -ENOENT;
-
-}
-
-
 static int synaptics_dsx_ic_reset(
-		struct synaptics_rmi4_data *rmi4_data, int reset)
+		struct synaptics_rmi4_data *rmi4_data, bool hw_reset)
 {
 	int retval;
 	unsigned long start = jiffies;
@@ -1708,13 +894,9 @@ static int synaptics_dsx_ic_reset(
 
 	sema_init(&reset_semaphore, 0);
 
-	if (reset == RMI4_HW_RESET) {
+	if (hw_reset) {
 		gpio_set_value(platform_data->reset_gpio, 0);
 		udelay(1500);
-	} else if (reset == RMI4_SW_RESET) {
-		retval = synaptics_rmi4_sw_reset(rmi4_data, true);
-		if (retval < 0)
-			return retval;
 	}
 
 	retval = request_irq(rmi4_data->irq, synaptics_dsx_reset_irq,
@@ -1725,7 +907,7 @@ static int synaptics_dsx_ic_reset(
 				"%s: Failed to request irq: %d\n",
 				__func__, retval);
 
-	if (reset == RMI4_HW_RESET)
+	if (hw_reset)
 		gpio_set_value(platform_data->reset_gpio, 1);
 
 	retval = down_timeout(&reset_semaphore, msecs_to_jiffies(100));
@@ -1735,15 +917,11 @@ static int synaptics_dsx_ic_reset(
 		retval = -ETIMEDOUT;
 	} else {
 		retval = (int)jiffies_to_msecs(jiffies-start);
-		/* insert delay to ensure 1st i2c bus access succeeds */
-		udelay(1000);
+		/* delay extra 0.5 ms to ensure 1st i2c bus access succeeds */
+		udelay(500);
 	}
 
 	free_irq(rmi4_data->irq, &reset_semaphore);
-
-	/* perform SW reset if HW reset failed */
-	if (reset != RMI4_SW_RESET && retval == -ETIMEDOUT)
-		retval = synaptics_dsx_ic_reset(rmi4_data, RMI4_SW_RESET);
 
 	return retval;
 }
@@ -1760,188 +938,16 @@ static int synaptics_dsx_alloc_input(struct synaptics_rmi4_data *rmi4_data)
 	rmi4_data->input_dev->dev.parent = &rmi4_data->i2c_client->dev;
 
 	set_bit(EV_SYN, rmi4_data->input_dev->evbit);
+	input_set_drvdata(rmi4_data->input_dev, rmi4_data);
 
 	pr_debug("allocated input device\n");
 
 	return 0;
 }
 
-static void synaptics_dsx_patch_func(
-		struct synaptics_rmi4_data *rmi4_data,
-		int f_number,
-		struct synaptics_dsx_patch *patch)
-{
-	int r, error, function;
-	unsigned char *value, rt_mod;
-	struct device *dev = &rmi4_data->i2c_client->dev;
-	struct synaptics_rmi4_subpkt *subpkt;
-	struct synaptics_dsx_func_patch *fp;
-	struct synaptics_rmi4_packet_reg *reg;
-	struct synaptics_rmi4_func_packet_regs *regs = find_function(f_number);
-
-	function = regs->f_number & 0xff;
-	rt_mod = register_type_to_ascii(regs->f_number & 0xf00);
-	pr_debug("patching F%x%c\n",  function, rt_mod);
-	down(&patch->list_sema);
-	list_for_each_entry(fp, &patch->cfg_head, link) {
-		if (fp->func != f_number)
-			continue;
-		reg = find_packet_reg(regs, fp->regstr);
-		if (!reg || reg->offset < 0) {
-			pr_err("F%x%c@%d not present\n",
-				function, rt_mod, fp->regstr);
-			continue;
-		}
-		if (fp->subpkt >= reg->nr_subpkts) {
-			pr_err("F%x%c@%d:%d not present\n",
-				function, rt_mod, fp->regstr, fp->subpkt);
-			continue;
-		}
-
-		/* read register only once */
-		if (!reg->updated) {
-			error =	synaptics_rmi4_read_packet_reg(
-					rmi4_data, regs, reg->r_number);
-			if (error < 0)
-				goto unlock_and_leave;
-#if defined(CONFIG_DYNAMIC_DEBUG) || defined(DEBUG)
-			{
-				int ss, kk;
-				pr_debug("F%x%c@%d before patching:\n",
-					function, rt_mod, reg->r_number);
-				for (ss = 0; ss < reg->nr_subpkts; ss++) {
-					subpkt = reg->subpkt + ss;
-					for (kk = 0; kk < subpkt->size; ++kk)
-						pr_debug("%02x\n",
-					((unsigned char *)subpkt->data)[kk]);
-				}
-			}
-#endif
-			/* value has been updated */
-			reg->updated = true;
-		}
-
-		subpkt = reg->subpkt + fp->subpkt;
-		if (!subpkt->present || !subpkt->data ||
-			subpkt->size < fp->size) {
-			pr_debug("F%x%c@%d:%d improperly allocated\n",
-				function, rt_mod, fp->regstr, fp->subpkt);
-			continue;
-		}
-		if (fp->bitmask && fp->size == 1) {
-			value = (unsigned char *)subpkt->data;
-			pr_debug("patching by mask: source 0x%x\n", *value);
-			*value &= ~(fp->bitmask);
-			pr_debug("patching by mask: clear-ed 0x%x\n", *value);
-			*value |= *fp->data;
-			pr_debug("patching by mask: result 0x%x\n", *value);
-		} else
-			memcpy(subpkt->data, fp->data, fp->size);
-
-		/* value has been changed */
-		reg->modified = true;
-
-		dev_dbg(dev, "patched F%x%c@%d:%d, sz=%d\n",
-			function, rt_mod, fp->regstr, fp->subpkt, fp->size);
-	}
-
-	/* update loop */
-	for (r = 0; r < regs->nr_regs; r++) {
-		reg = &regs->regs[r];
-		if (reg->updated && reg->modified) {
-#if defined(CONFIG_DYNAMIC_DEBUG) || defined(DEBUG)
-			{
-				int ss, kk;
-				pr_debug("F%x%c@%d after patching:\n",
-						function, rt_mod, reg->r_number);
-				for (ss = 0; ss < reg->nr_subpkts; ss++) {
-					subpkt = reg->subpkt + ss;
-					for (kk = 0; kk < subpkt->size; ++kk)
-						pr_debug("%02x\n",
-					((unsigned char *)subpkt->data)[kk]);
-				}
-			}
-#endif
-			error = synaptics_rmi4_write_packet_reg(rmi4_data,
-							regs, reg->r_number);
-			if (error < 0)
-				dev_warn(dev, "F%x%c@%d patch write failed\n",
-					function, rt_mod, reg->r_number);
-			reg->modified = false;
-		}
-		reg->updated = false;
-	}
-
-unlock_and_leave:
-	up(&patch->list_sema);
-}
-
-static void synaptics_dsx_enable_wakeup_source(
-		struct synaptics_rmi4_data *rmi4_data, bool enable)
-{
-	int error;
-	error = irq_set_irq_wake(rmi4_data->irq, (int)enable);
-	pr_debug("%s wakeup; rc=%d\n", enable ? "enabled" : "disabled", error);
-}
-
-static inline void synaptics_dsx_set_alternate_mode(
-		struct synaptics_rmi4_data *rmi4_data,
-		struct synaptics_dsx_patchset *mode,
-		bool wakeable, bool persistent)
-{
-	rmi4_data->mode_is_wakeable = wakeable;
-	rmi4_data->mode_is_persistent = persistent;
-	rmi4_data->current_mode = mode;
-	if (wakeable)
-		synaptics_dsx_enable_wakeup_source(rmi4_data, true);
-	pr_debug("set alternate mode\n");
-}
-
-static inline void synaptics_dsx_restore_default_mode(
-		struct synaptics_rmi4_data *rmi4_data)
-{
-	if (rmi4_data->mode_is_wakeable)
-		synaptics_dsx_enable_wakeup_source(rmi4_data, false);
-	rmi4_data->mode_is_wakeable = false;
-	rmi4_data->mode_is_persistent = true;
-	rmi4_data->current_mode = rmi4_data->default_mode;
-	pr_debug("set default mode\n");
-}
-
-static void synaptics_dsx_state_config(
-		struct synaptics_rmi4_data *rmi4_data, int state)
-{
-	int i;
-	struct synaptics_dsx_patch *patch =
-			rmi4_data->current_mode->patch_data[state];
-
-	if (!patch || !patch->cfg_num) {
-		pr_debug("patchset is empty!\n");
-		goto nothing_to_patch;
-	}
-
-	if (rmi4_data->mode_is_wakeable)
-		synaptics_dsx_enable_wakeup_source(rmi4_data, true);
-
-	if (rmi4_data->patching_enabled) {
-		for (i = 0; i < ARRAY_SIZE(synaptics_cfg_regs); i++)
-			synaptics_dsx_patch_func(rmi4_data,
-				synaptics_cfg_regs[i].f_number, patch);
-
-		pr_debug("applied %s in mode %s\n",
-			state == ACTIVE_IDX ? "ACTIVE" : "SUSPEND",
-			rmi4_data->current_mode == rmi4_data->default_mode ?
-			"DEFAULT" : "OTHER");
-	}
-
-nothing_to_patch:
-	/* keep page 0 active */
-	synaptics_rmi4_set_page(rmi4_data, 0);
-}
-
-static const char * const synaptics_state_names[] = {"UNKNOWN",
-	"ACTIVE", "SUSPEND", "UNUSED", "STANDBY", "BL", "INIT",
-	"FLASH", "QUERY", "INVALID" };
+#define DSX(a)	(#a)
+static const char * const synaptics_state_names[] = SYNAPTICS_DSX_STATES;
+#undef DSX
 
 static const char *synaptics_dsx_state_name(int state)
 {
@@ -1976,7 +982,8 @@ static int synaptics_dsx_wait_for_idle(struct synaptics_rmi4_data *rmi4_data)
 		current_state = synaptics_dsx_get_state_safe(rmi4_data);
 		if (!(current_state == STATE_INIT ||
 			current_state == STATE_FLASH ||
-			current_state == STATE_UNKNOWN))
+			current_state == STATE_UNKNOWN ||
+			touch_test_mode))
 			break;
 
 		usleep_range(1000, 1000);
@@ -1993,38 +1000,31 @@ static int synaptics_dsx_sensor_ready_state(
 		struct synaptics_rmi4_data *rmi4_data, bool standby)
 {
 	bool ui_mode;
-	int retval, state, i;
+	int retval, state;
 	struct synaptics_rmi4_f01_device_status status;
 
-	for (i = 0; i < 10; ++i) {
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-					rmi4_data->f01_data_base_addr,
-					status.data,
-					sizeof(status.data));
-		if (retval < 0) {
-			pr_err("(%d) Failed to query touch ic status\n", i);
-			return retval;
-		}
+	/* ensure ic is woken up, since older beta firmware cannot */
+	/* access device status register when ic is in sleep mode */
+	if (rmi4_data->sensor_sleep)
+		synaptics_rmi4_sensor_wake(rmi4_data);
 
-		ui_mode = status.flash_prog == 0;
-		pr_debug("(%d) UI mode: %s\n", i, ui_mode ? "true" : "false");
-
-		if (ui_mode)
-			break;
-
-		msleep(20);
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f01_data_base_addr,
+				status.data,
+				sizeof(status.data));
+	if (retval < 0) {
+		pr_err("failed to query touch ic status\n");
+		return retval;
 	}
 
 	state = synaptics_dsx_get_state_safe(rmi4_data);
-	if (!ui_mode && state == STATE_SUSPEND && rmi4_data->input_registered) {
-		/* expecting touch IC to enter UI mode based on */
-		/* its previous known good state */
-		pr_err("Timed out waiting for UI mode - UI mode forced\n");
-		ui_mode = 1;
-	}
+
+	ui_mode = status.flash_prog == 0;
+	pr_debug("UI mode: %s\n", ui_mode ? "true" : "false");
 
 	if (ui_mode) {
 		state = standby ? STATE_STANDBY : STATE_ACTIVE;
+		state = touch_test_mode ? STATE_ACTIVE : state;
 	} else
 		if (!(state == STATE_INIT || state == STATE_FLASH))
 			state = STATE_BL;
@@ -2048,31 +1048,31 @@ static void synaptics_dsx_sensor_state(struct synaptics_rmi4_data *rmi4_data,
 
 	case STATE_SUSPEND:
 		synaptics_dsx_wait_for_idle(rmi4_data);
-		if (!rmi4_data->mode_is_wakeable)
-			synaptics_rmi4_irq_enable(rmi4_data, false);
-		if (!rmi4_data->in_bootloader)
-			synaptics_dsx_state_config(rmi4_data, SUSPEND_IDX);
+		synaptics_rmi4_irq_enable(rmi4_data, false);
+
+		if (rmi4_data->one_touch_enabled)
+			synaptics_rmi4_sensor_one_touch(rmi4_data, true);
+
+		if (!rmi4_data->sensor_sleep)
+			synaptics_rmi4_sensor_sleep(rmi4_data);
 			break;
 
 	case STATE_ACTIVE:
-		if (!rmi4_data->in_bootloader)
-			synaptics_dsx_state_config(rmi4_data, ACTIVE_IDX);
+		if (rmi4_data->sensor_sleep)
+			synaptics_rmi4_sensor_wake(rmi4_data);
 
-		if (rmi4_data->input_registered)
-			synaptics_rmi4_irq_enable(rmi4_data, true);
-		else {
-			synaptics_rmi4_irq_enable(rmi4_data, false);
-			pr_err("Active state without input device\n");
-		}
+		if (rmi4_data->one_touch_enabled)
+			synaptics_rmi4_sensor_one_touch(rmi4_data, false);
 
-		if (!rmi4_data->mode_is_persistent) {
-			synaptics_dsx_restore_default_mode(rmi4_data);
-			pr_debug("Non-persistent mode; restoring default\n");
-		}
+		synaptics_rmi4_irq_enable(rmi4_data, true);
 			break;
 
 	case STATE_STANDBY:
 		synaptics_rmi4_irq_enable(rmi4_data, false);
+		/* put sensor to sleep to ensure the same */
+		/* initial conditions apply to all */
+		if (!rmi4_data->sensor_sleep)
+			synaptics_rmi4_sensor_sleep(rmi4_data);
 			break;
 
 	case STATE_BL:
@@ -2080,46 +1080,9 @@ static void synaptics_dsx_sensor_state(struct synaptics_rmi4_data *rmi4_data,
 			rmi4_data->in_bootloader = true;
 	case STATE_INIT:
 		synaptics_rmi4_irq_enable(rmi4_data, false);
-
-		if (!rmi4_data->in_bootloader) {
-			int retval;
-			unsigned char mode = 1;
-			unsigned char intr_status[MAX_INTR_REGISTERS];
-
-			/* deactivate touch by putting touch IC into */
-			/* sleep mode to prevent interference of touch */
-			/* processing with flashing */
-			pr_debug("enter sleep mode\n");
-			retval = synaptics_rmi4_i2c_write(rmi4_data,
-					rmi4_data->f01_ctrl_base_addr,
-					&mode,
-					sizeof(mode));
-
-			if (retval < 0)
-				pr_notice("failed to enter sleep mode\n");
-
-			/* clear unhandled interrupt if any */
-			pr_debug("clear interrupt\n");
-			retval = synaptics_rmi4_i2c_read(rmi4_data,
-					rmi4_data->f01_data_base_addr + 1,
-					&intr_status[0],
-					rmi4_data->num_of_intr_regs);
-
-			if (retval < 0)
-				pr_notice("failed to clear interrupt\n");
-		}
-
-		/* de-allocate input device earlier to allow */
-		/* EventHub become notified of input removal */
-		if (rmi4_data->input_registered) {
-			input_unregister_device(rmi4_data->input_dev);
-			rmi4_data->input_dev = NULL;
-			rmi4_data->input_registered = false;
-
-			pr_debug("de-allocated input device\n");
-		}
-
-		break;
+		if (rmi4_data->sensor_sleep)
+			synaptics_rmi4_sensor_wake(rmi4_data);
+			break;
 	}
 
 	pr_info("state change %s -> %s\n",
@@ -2129,136 +1092,11 @@ static void synaptics_dsx_sensor_state(struct synaptics_rmi4_data *rmi4_data,
 	synaptics_dsx_set_state_safe(rmi4_data, state);
 }
 
-static struct touch_up_down display_ud[20];
-static struct touch_area_stats display_ud_stats = {
-	.ud = display_ud,
-	.ud_len = ARRAY_SIZE(display_ud),
-	.name = "ts"
-};
-
-static struct touch_up_down button_ud[10];
-static struct touch_area_stats button_ud_stats = {
-	.ud = button_ud,
-	.ud_len = ARRAY_SIZE(button_ud),
-	.name = "btn"
-};
-
-static void ud_set_id(struct touch_area_stats *tas, int id)
-{
-	tas->ud_id = id;
-}
-
-static void ud_log_status(struct touch_area_stats *tas, bool down)
-{
-	struct touch_up_down *ud = tas->ud;
-	ssize_t id = tas->ud_id;
-
-	if (id >= tas->ud_len)
-		tas->unknown_counter++;
-
-	if (!down) { /* up */
-		if (ud[id].up_down == 0x10) {
-			pr_debug("%s UP[%zu]\n", tas->name, id);
-			ud[id].up_down |= 1;
-			ud[id].mismatch--;
-		}
-	} else if (down) { /* down */
-		if (ud[id].up_down == 0) {
-			ud[id].up_down |= (1 << 4);
-			pr_debug("%s DOWN[%zu]\n", tas->name, id);
-			ud[id].mismatch++;
-		} else if (ud[id].up_down == 0x10)
-			return;
-	}
-
-	if (ud[id].up_down == 0x11) {
-		pr_debug("%s CLEAR[%zu]\n", tas->name, id);
-		ud[id].up_down = 0;
-		ud[id].counter++;
-	}
-}
-
-static void TSI_state(struct input_dev *dev, unsigned int tool, bool status)
-{
-	ud_log_status(&display_ud_stats, status);
-	input_mt_report_slot_state(dev, tool, status);
-}
-
-static void TSI_id(struct input_dev *dev, int id)
-{
-	ud_set_id(&display_ud_stats, id);
-	input_mt_slot(dev, id);
-}
-
-#define input_mt_report_slot_state TSI_state
-#define input_mt_slot TSI_id
-
-static ssize_t synaptics_rmi4_ud_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	int i;
-	ssize_t total = 0;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
-	total += scnprintf(buf + total, PAGE_SIZE - total, "display:\n");
-	for (i = 0; i < display_ud_stats.ud_len; i++)
-		total += scnprintf(buf + total, PAGE_SIZE - total,
-				"[%d]: full cycles-%u, mismatch-%d\n", i,
-				display_ud[i].counter,
-				display_ud[i].mismatch);
-
-	if (rmi4_data->button_0d_enabled) {
-		total += scnprintf(buf + total, PAGE_SIZE - total,
-			"buttons:\n");
-		for (i = 0; i < button_ud_stats.ud_len; i++)
-			total += scnprintf(buf + total, PAGE_SIZE - total,
-				"[%d]: full cycles-%u, mismatch-%d\n", i,
-				button_ud[i].counter, button_ud[i].mismatch);
-	}
-	return total;
-}
-
-static ssize_t synaptics_dsx_ud_stat(struct synaptics_rmi4_data *rmi4_data,
-		char *buf, ssize_t size)
-{
-	int i;
-	ssize_t total = 0;
-
-	total += scnprintf(buf + total, size - total, "screen: ");
-	for (i = 0; i < display_ud_stats.ud_len; i++)
-		if (display_ud[i].mismatch)
-			total += scnprintf(buf + total, size - total,
-				"%d)%u,%d ", i,
-				display_ud[i].counter,
-				display_ud[i].mismatch);
-		else if (display_ud[i].counter)
-			total += scnprintf(buf + total, size - total,
-				"%d)%u ", i,
-				display_ud[i].counter);
-
-	if (rmi4_data->button_0d_enabled) {
-		total += scnprintf(buf + total, size - total, "buttons: ");
-		for (i = 0; i < button_ud_stats.ud_len; i++)
-			if (button_ud[i].mismatch)
-				total += scnprintf(buf + total, size - total,
-					"%d)%u,%d ", i,
-					button_ud[i].counter,
-					button_ud[i].mismatch);
-			else if (button_ud[i].counter)
-				total += scnprintf(buf + total, size - total,
-					"%d)%u ", i,
-					button_ud[i].counter);
-	}
-	return total;
-}
-
 static ssize_t synaptics_rmi4_f01_reset_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
-	int retval;
 	unsigned int reset;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 
 	if (sscanf(buf, "%u", &reset) != 1)
 		return -EINVAL;
@@ -2266,12 +1104,7 @@ static ssize_t synaptics_rmi4_f01_reset_store(struct device *dev,
 	if (reset != 1)
 		return -EINVAL;
 
-	retval = synaptics_dsx_ic_reset(rmi4_data, RMI4_HW_RESET);
-	if (retval > 0)
-		pr_debug("successful reset took %dms\n", retval);
-	else
-		dev_warn(&rmi4_data->i2c_client->dev, "%s: timed out waiting for idle\n",
-			__func__);
+	synaptics_dsx_ic_reset(rmi4_data, true);
 
 	return count;
 }
@@ -2279,8 +1112,8 @@ static ssize_t synaptics_rmi4_f01_reset_store(struct device *dev,
 static ssize_t synaptics_rmi4_f01_productinfo_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
 	return scnprintf(buf, PAGE_SIZE, "%s\n",
 			rmi4_data->rmi4_mod_info.product_id_string);
 }
@@ -2290,9 +1123,9 @@ static ssize_t synaptics_rmi4_f01_buildid_show(struct device *dev,
 {
 	unsigned int firmware_id;
 	unsigned int config_id;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	struct synaptics_rmi4_device_info *rmi;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+
 	rmi = &(rmi4_data->rmi4_mod_info);
 
 	batohui(&firmware_id, rmi->build_id, sizeof(rmi->build_id));
@@ -2304,11 +1137,11 @@ static ssize_t synaptics_rmi4_f01_buildid_show(struct device *dev,
 static ssize_t synaptics_rmi4_resume_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int i;
 	int c_res;
 	int offset = 0;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+
 	c_res = rmi4_data->last_resume;
 	/* Resume buffer not allocated or there were no resumes yet */
 	if (rmi4_data->number_resumes <= 0 || c_res < 0)
@@ -2347,11 +1180,11 @@ static ssize_t synaptics_rmi4_resume_show(struct device *dev,
 static ssize_t synaptics_rmi4_irqtimes_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int i;
 	int c_res;
 	int offset = 0;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+
 	c_res = rmi4_data->last_irq;
 	/* Resume buffer not allocated or there were no irq data collected yet*/
 	if (rmi4_data->number_irq <= 0 || c_res < 0)
@@ -2379,69 +1212,48 @@ static ssize_t synaptics_rmi4_irqtimes_show(struct device *dev,
 static ssize_t synaptics_rmi4_f01_flashprog_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
-	return scnprintf(buf, PAGE_SIZE, "%d\n", rmi4_data->in_bootloader);
+	int retval;
+	struct synaptics_rmi4_f01_device_status device_status;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+			rmi4_data->f01_data_base_addr,
+			device_status.data,
+			sizeof(device_status.data));
+	if (retval < 0) {
+		dev_err(dev,
+				"%s: Failed to read device status, error = %d\n",
+				__func__, retval);
+		return retval;
+	}
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+			device_status.flash_prog);
 }
 
 static ssize_t synaptics_rmi4_hw_irqstat_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
 	switch (gpio_get_value(rmi4_data->board->irq_gpio)) {
 	case 0:
 		return scnprintf(buf, PAGE_SIZE, "Low\n");
 	case 1:
 		return scnprintf(buf, PAGE_SIZE, "High\n");
 	default:
-		pr_err("Failed to get GPIO for irq %d\n", rmi4_data->irq);
+		printk(KERN_ERR "%s: Failed to get GPIO for irq %d.\n",
+				__func__,
+				rmi4_data->irq);
 		return scnprintf(buf, PAGE_SIZE, "Unknown\n");
 	}
-}
-
-static bool reporting_stopped;
-static unsigned int events_cnt;
-
-static ssize_t synaptics_rmi4_reporting_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	ssize_t length;
-	if (reporting_stopped)
-		length = scnprintf(buf, PAGE_SIZE, "STOPPED(%u)\n", events_cnt);
-	else
-		length = scnprintf(buf, PAGE_SIZE, "RUNNING\n");
-	return length;
-}
-
-static ssize_t synaptics_rmi4_reporting_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	unsigned long value = 0;
-	int err = 0;
-
-	if (*buf == 's' || *buf == 'S') {
-		reporting_stopped = true;
-	} else if (*buf == 'r' || *buf == 'R') {
-		reporting_stopped = false;
-	} else {
-		err = kstrtoul(buf, 10, &value);
-		if (err < 0) {
-			pr_err("Failed to convert value\n");
-			return -EINVAL;
-		}
-		reporting_stopped = value == 0;
-	}
-	if (reporting_stopped)
-		events_cnt = 0;
-	return count;
 }
 
 static ssize_t synaptics_rmi4_drv_irq_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
 	return scnprintf(buf, PAGE_SIZE, "%s\n",
 			rmi4_data->irq_enabled ? "ENABLED" : "DISABLED");
 }
@@ -2449,13 +1261,13 @@ static ssize_t synaptics_rmi4_drv_irq_show(struct device *dev,
 static ssize_t synaptics_rmi4_drv_irq_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	unsigned long value = 0;
 	int err = 0;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+
 	err = kstrtoul(buf, 10, &value);
 	if (err < 0) {
-		pr_err("Failed to convert value\n");
+		printk(KERN_ERR "%s: Failed to convert value.\n", __func__);
 		return -EINVAL;
 	}
 
@@ -2469,39 +1281,7 @@ static ssize_t synaptics_rmi4_drv_irq_store(struct device *dev,
 		synaptics_rmi4_irq_enable(rmi4_data, true);
 		break;
 	default:
-		pr_err("Invalid value\n");
-		return -EINVAL;
-	}
-	return count;
-}
-
-static ssize_t synaptics_rmi4_pm_opt_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", latency_in_effect);
-}
-
-static ssize_t synaptics_rmi4_pm_opt_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	unsigned long value = 0;
-	int err = 0;
-
-	err = kstrtoul(buf, 10, &value);
-	if (err < 0) {
-		pr_err("Failed to convert value\n");
-		return -EINVAL;
-	}
-
-	switch (value) {
-	case 0:
-		latency_in_effect = PM_QOS_DEFAULT_VALUE;
-		break;
-	case 1:
-		latency_in_effect = IRQ_DISPATCH_LATENCY;
-		break;
-	default:
-		pr_err("Invalid value\n");
+		printk(KERN_ERR "%s: Invalid value\n", __func__);
 		return -EINVAL;
 	}
 	return count;
@@ -2510,8 +1290,8 @@ static ssize_t synaptics_rmi4_pm_opt_store(struct device *dev,
 static ssize_t synaptics_rmi4_0dbutton_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
 	return scnprintf(buf, PAGE_SIZE, "%u\n",
 			rmi4_data->button_0d_enabled);
 }
@@ -2524,9 +1304,9 @@ static ssize_t synaptics_rmi4_0dbutton_store(struct device *dev,
 	unsigned char ii;
 	unsigned char intr_enable;
 	struct synaptics_rmi4_fn *fhandler;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	struct synaptics_rmi4_device_info *rmi;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+
 	rmi = &(rmi4_data->rmi4_mod_info);
 
 	if (sscanf(buf, "%u", &input) != 1)
@@ -2571,9 +1351,8 @@ static ssize_t synaptics_rmi4_ic_ver_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	unsigned int build_id, config_id;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	struct synaptics_rmi4_device_info *rmi;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
 	rmi = &(rmi4_data->rmi4_mod_info);
 	batohui(&build_id, rmi->build_id, sizeof(rmi->build_id));
 	batohui(&config_id, rmi->config_id, sizeof(rmi->config_id));
@@ -2587,189 +1366,8 @@ static ssize_t synaptics_rmi4_ic_ver_show(struct device *dev,
 static ssize_t synaptics_rmi4_poweron_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
-	return scnprintf(buf, PAGE_SIZE, "%d\n",
-		atomic_read(&rmi4_data->touch_stopped) == 0 &&
-		rmi4_data->flash_enabled);
-}
-
-static struct synaptics_dsx_patch *query_data;
-static unsigned int query_index;
-
-#define SPRINTF_RANGE(fmt, args...) {\
-		blen += scnprintf(out + blen, count - blen, fmt, ##args);\
-	}
-
-static ssize_t synaptics_dsx_patch_dump(
-	struct synaptics_rmi4_data *rmi4_data, char *out, ssize_t count)
-{
-	int i;
-	const char *name;
-	struct synaptics_dsx_func_patch *fp;
-	ssize_t blen = 0;
-
-	if (!query_data) {
-		SPRINTF_RANGE("nothing to query\n");
-		goto time_to_leave;
-	}
-	name = query_data->name ? query_data->name : "noname";
-	SPRINTF_RANGE("[%s", name);
-	if (!strnstr(name, "runtime", 7))
-		SPRINTF_RANGE("-%s", !query_index ? "active" : "suspended");
-	SPRINTF_RANGE("] ");
-	list_for_each_entry(fp, &query_data->cfg_head, link) {
-		struct synaptics_rmi4_func_packet_regs *regs;
-		struct synaptics_rmi4_packet_reg *reg;
-		int error;
-		unsigned short data_addr;
-		unsigned int data_size;
-		unsigned char *value;
-
-		regs = find_function(fp->func);
-		if (!regs)
-			continue;
-		reg = find_packet_reg(regs, fp->regstr);
-		if (!reg || reg->offset < 0) {
-			pr_err("F%x@%d not present\n", fp->func, fp->regstr);
-			continue;
-		}
-
-		error = synaptics_rmi4_read_packet_reg(rmi4_data,
-				regs, reg->r_number);
-		if (error < 0) {
-			pr_err("F%x@%d register read failed\n",
-				fp->func, fp->regstr);
-			continue;
-		}
-		/* calculate register address */
-		data_addr = regs->base_addr + reg->offset;
-		/* dump whole register if subpacket is 255 */
-		if (fp->subpkt == 0xff) {
-			value = reg->data;
-			data_size = reg->size;
-			SPRINTF_RANGE("F%x@%d{%X}=",
-				fp->func, fp->regstr, data_addr);
-		} else {
-			struct synaptics_rmi4_subpkt *subpkt;
-			subpkt = reg->subpkt + fp->subpkt;
-			value = (unsigned char *)subpkt->data;
-			data_size = subpkt->size;
-			data_addr += subpkt->offset;
-			SPRINTF_RANGE("F%x@%d:%d{%X}=",
-				fp->func, fp->regstr, fp->subpkt, data_addr);
-		}
-
-		for (i = 0; i < data_size; i++)
-			SPRINTF_RANGE("%02x", *value++);
-		SPRINTF_RANGE("; ");
-	}
-	SPRINTF_RANGE("\n");
-time_to_leave:
-	return blen;
-}
-
-static ssize_t synaptics_rmi4_query_idx_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	unsigned int index;
-	if (sscanf(buf, "%u", &index) != 1)
-		return -EINVAL;
-	query_index = index > 0 ? 1 : 0;
-	pr_debug("index setup to %u\n", query_index);
-	return count;
-}
-
-static ssize_t synaptics_rmi4_query_idx_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%s\n",
-			!query_index ? "active" : "suspended");
-}
-
-static ssize_t synaptics_rmi4_query_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-	struct synaptics_dsx_patch *patch;
-
-	if (*buf == '\n') {
-		if (query_data) {
-			synaptics_dsx_free_patch(query_data);
-			query_data = NULL;
-			pr_debug("discarded current query\n");
-		}
-		goto leave_now;
-	}
-	if (*buf != 'F') {
-		pr_err("invalid query syntax\n");
-		return -EINVAL;
-	}
-	patch = synaptics_dsx_init_patch("sysfs-runtime");
-	if (!patch)
-		return -ENOMEM;
-	synaptics_dsx_parse_string(rmi4_data, buf, patch, false);
-	if (query_data) {
-		synaptics_dsx_free_patch(query_data);
-		pr_debug("previous query discarded\n");
-	}
-	query_data = patch;
-	pr_debug("new query added\n");
-leave_now:
-	return count;
-}
-
-static ssize_t synaptics_rmi4_query_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-	bool clear_after_use = false;
-	ssize_t length;
-
-	if (!query_data) {
-		query_data = rmi4_data->current_mode->patch_data[query_index];
-		clear_after_use = true;
-	}
-	length = synaptics_dsx_patch_dump(rmi4_data, buf, PAGE_SIZE);
-	if (clear_after_use)
-		query_data = NULL;
-	return length;
-}
-
-static ssize_t synaptics_rmi4_patch_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-	struct synaptics_dsx_patch *patch;
-
-	if (*buf == '\n') {
-		pr_debug("discarding %s patch set from %s mode\n",
-			!query_index ? "active" : "suspended",
-			rmi4_data->current_mode == rmi4_data->default_mode ?
-			"default" : "alternate");
-		synaptics_dsx_free_patch(
-			rmi4_data->current_mode->patch_data[query_index]);
-		patch = synaptics_dsx_init_patch("sysfs");
-		rmi4_data->current_mode->patch_data[query_index] = patch;
-		goto leave_now;
-	}
-	if (*buf != 'F') {
-		pr_err("invalid patch syntax\n");
-		return -EINVAL;
-	}
-	patch = synaptics_dsx_init_patch("sysfs");
-	if (!patch)
-		return -ENOMEM;
-	synaptics_dsx_parse_string(rmi4_data, buf, patch, true);
-	synaptics_dsx_free_patch(
-		rmi4_data->current_mode->patch_data[query_index]);
-	rmi4_data->current_mode->patch_data[query_index] = patch;
-	pr_debug("[sysfs-%s] patch set added to %s mode\n",
-		!query_index ? "active" : "suspended",
-		rmi4_data->current_mode == rmi4_data->default_mode ?
-				"default" : "alternate");
-leave_now:
-	return count;
+	return scnprintf(buf, PAGE_SIZE, "%d\n", rmi4_data->poweron);
 }
 
  /**
@@ -2947,9 +1545,10 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 {
 	int retval;
 	unsigned char touch_count = 0; /* number of touch points */
+	unsigned char index = 0;
 	unsigned char finger;
-	unsigned char fingers_to_process;
-	unsigned char finger_status;
+	unsigned char fingers_supported;
+	unsigned char finger_data[F12_STD_DATA_LEN];
 	unsigned short data_addr;
 	unsigned short data_size;
 	int x;
@@ -2957,16 +1556,18 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	int p;
 	int w;
 	int id;
-	static unsigned char active_touch_max_idx;
 	struct timespec hw_time = ktime_to_timespec(ktime_get());
-	struct f12_d1_type *finger_data;
-	struct synaptics_rmi4_packet_reg *reg_data_1 =
-				&rmi4_data->f12_data_registers_ptr->regs[0];
-	struct synaptics_rmi4_packet_reg *reg_data_15 =
-				&rmi4_data->f12_data_registers_ptr->regs[1];
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-	unsigned char number_of_fingers_actually_touching = 0;
-#endif
+
+	fingers_supported = fhandler->num_of_data_points;
+	data_addr = fhandler->full_addr.data_base;
+	data_size = fingers_supported * fhandler->size_of_data_register_block;
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+			data_addr,
+			finger_data,
+			data_size);
+	if (retval < 0)
+		return 0;
 
 	if (atomic_read(&rmi4_data->panel_off_flag)) {
 		synaptics_dsx_resumeinfo_ignore(rmi4_data);
@@ -2974,171 +1575,66 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	} else
 		synaptics_dsx_resumeinfo_purgeoff(rmi4_data);
 
-	fingers_to_process = fhandler->num_of_data_points;
-	data_addr = fhandler->full_addr.data_base;
-
-	if (reg_data_15->offset != -1) {
-		int temp;
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				data_addr + reg_data_15->offset,
-				f12_d15_0.attn,
-				sizeof(f12_d15_0));
-		if (retval < 0)
-			return 0;
-
-		/* Start checking from the highest bit */
-		temp = reg_data_15->size - 1; /* Highest byte */
-		finger = (fingers_to_process - 1) % 8; /* Highest bit */
-		do {
-			if (f12_d15_0.attn[temp] & (1 << finger))
-				break;
-
-			if (finger) {
-				finger--;
-			} else {
-				temp--; /* Move to the next lower byte */
-				finger = 7;
-			}
-
-			fingers_to_process--;
-		} while (fingers_to_process);
-
-		pr_debug("fingers to process %d\n", fingers_to_process);
-	}
-
-	fingers_to_process = max(fingers_to_process, active_touch_max_idx);
-
-	if (fingers_to_process == 0) {
-		/* count release event */
-		events_cnt++;
-		synaptics_dsx_release_all(rmi4_data);
-		return 0;
-	}
-
-	data_size = fingers_to_process * fhandler->size_of_data_register_block;
-
-	retval = synaptics_rmi4_i2c_read(rmi4_data,
-			data_addr + reg_data_1->offset,
-			reg_data_1->data,
-			data_size);
-	if (retval < 0)
-		return 0;
-	/* count valid event */
-	events_cnt++;
-	if (reporting_stopped)
-		return 0;
-
 	input_event(rmi4_data->input_dev, EV_SYN,
 			SYN_TIME_SEC, hw_time.tv_sec);
 	input_event(rmi4_data->input_dev, EV_SYN,
 			SYN_TIME_NSEC, hw_time.tv_nsec);
 
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-	if (touchxp.touchx)
-		mutex_lock(&touchxp.virtual_touch_mutex);
-
-	finger_data = (struct f12_d1_type *)reg_data_1->data;
-	for (finger = 0; finger < fingers_to_process; finger++, finger_data++) {
-		finger_status = finger_data->type_and_stylus;
-		if (finger_status == 0)
+	for (finger = 0; finger < fingers_supported; finger++,
+			 index += fhandler->size_of_data_register_block) {
+#ifdef TYPE_B_PROTOCOL
+		input_mt_slot(rmi4_data->input_dev, finger);
+		input_mt_report_slot_state(rmi4_data->input_dev,
+				MT_TOOL_FINGER, finger_data[index] != 0);
+#endif
+		if (finger_data[index] == 0)
 			continue;
-		number_of_fingers_actually_touching++;
-	}
-#endif
 
-	finger_data = (struct f12_d1_type *)reg_data_1->data;
-	for (finger = 0; finger < fingers_to_process; finger++, finger_data++) {
-		finger_status = finger_data->type_and_stylus;
-		if (finger_status) {
-			x = finger_data->x_lsb | (finger_data->x_msb << 8);
-			y = finger_data->y_lsb | (finger_data->y_msb << 8);
-			p = w = finger_data->z;
-			id = finger;
+		x = finger_data[index+1] | (finger_data[index+2] << 8);
+		y = finger_data[index+3] | (finger_data[index+4] << 8);
+		p = finger_data[index+5];
+		w = finger_data[index+5];
+		id = finger;
 
-			if (rmi4_data->board->x_flip)
-				x = rmi4_data->sensor_max_x - x;
-			if (rmi4_data->board->y_flip)
-				y = rmi4_data->sensor_max_y - y;
+		if (rmi4_data->board->x_flip)
+			x = rmi4_data->sensor_max_x - x;
+		if (rmi4_data->board->y_flip)
+			y = rmi4_data->sensor_max_y - y;
 
-			if (rmi4_data->clipping_on && rmi4_data->clipa) {
-				bool inside;
+		dev_dbg(&rmi4_data->i2c_client->dev,
+					"%s: Finger %d:\n"
+					"x = %d\n"
+					"y = %d\n"
+					"p = %d\n"
+					"w = %d\n",
+					__func__, finger,
+					x, y, p, w);
 
-				inside = (x >= rmi4_data->clipa->xul_clip) &&
-					(x <= rmi4_data->clipa->xbr_clip) &&
-					(y >= rmi4_data->clipa->yul_clip) &&
-					(y <= rmi4_data->clipa->ybr_clip);
-
-				if (!inside) {
-					dev_dbg(&rmi4_data->i2c_client->dev,
-						"%d,%d ouside clipping area\n",
-						x, y);
-					continue;
-				}
-			}
-#ifdef TYPE_B_PROTOCOL
-			input_mt_slot(rmi4_data->input_dev, finger);
-			input_mt_report_slot_state(rmi4_data->input_dev,
-					MT_TOOL_FINGER, finger_status);
-#endif
-
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-			touchxp.touch_magic_dev = rmi4_data->input_dev;
-			if (touchxp.touchx)
-				touchxp.touchx(&x, &y, finger,
-					       number_of_fingers_actually_touching);
-#endif
-
-			dev_dbg(&rmi4_data->i2c_client->dev,
-						"%s: Finger %d:\n"
-						"x = %d\n"
-						"y = %d\n"
-						"p = %d\n"
-						"w = %d\n",
-						__func__, finger,
-						x, y, p, w);
-
-			input_report_abs(rmi4_data->input_dev,
+		input_report_abs(rmi4_data->input_dev,
 					ABS_MT_POSITION_X, x);
-			input_report_abs(rmi4_data->input_dev,
+		input_report_abs(rmi4_data->input_dev,
 					ABS_MT_POSITION_Y, y);
-			input_report_abs(rmi4_data->input_dev,
+		input_report_abs(rmi4_data->input_dev,
 					ABS_MT_PRESSURE, p);
-			input_report_abs(rmi4_data->input_dev,
+#ifdef REPORT_2D_W
+		input_report_abs(rmi4_data->input_dev,
 					ABS_MT_TOUCH_MAJOR, w);
+#endif
+		input_report_abs(rmi4_data->input_dev,
+					ABS_MT_TRACKING_ID, id);
 #ifndef TYPE_B_PROTOCOL
-			input_mt_sync(rmi4_data->input_dev);
+		input_mt_sync(rmi4_data->input_dev);
 #endif
-			touch_count++;
-			active_touch_max_idx = finger + 1;
-#ifdef TYPE_B_PROTOCOL
-		} else {
-			input_mt_slot(rmi4_data->input_dev, finger);
-			/* Touch no longer active, close out slot */
-			input_mt_report_slot_state(rmi4_data->input_dev,
-					MT_TOOL_FINGER, 0);
-#endif
-		}
+		touch_count++;
 
 		synaptics_dsx_resumeinfo_touch(rmi4_data);
 	}
 
-	if (!touch_count) {
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-		touchxp.finger_down = 0;
-#endif
-		active_touch_max_idx = 0;
 #ifndef TYPE_B_PROTOCOL
+	if (!touch_count)
 		input_mt_sync(rmi4_data->input_dev);
 #endif
-	}
-
-	input_mt_report_pointer_emulation(rmi4_data->input_dev, false);
 	input_sync(rmi4_data->input_dev);
-
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-	if (touchxp.touchx)
-		mutex_unlock(&touchxp.virtual_touch_mutex);
-#endif
 
 	return touch_count;
 }
@@ -3176,9 +1672,6 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	int wy;
 	int z;
 	struct timespec hw_time = ktime_to_timespec(ktime_get());
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-	unsigned char number_of_fingers_actually_touching = 0;
-#endif
 
 	/*
 	 * The number of finger status registers is determined by the
@@ -3197,10 +1690,6 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			num_of_finger_status_regs);
 	if (retval < 0)
 		return 0;
-	/* count valid event */
-	events_cnt++;
-	if (reporting_stopped)
-		return 0;
 
 	if (atomic_read(&rmi4_data->panel_off_flag)) {
 		synaptics_dsx_resumeinfo_ignore(rmi4_data);
@@ -3213,24 +1702,12 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	input_event(rmi4_data->input_dev, EV_SYN,
 			SYN_TIME_NSEC, hw_time.tv_nsec);
 
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-	if (touchxp.touchx)
-		mutex_lock(&touchxp.virtual_touch_mutex);
+	for (finger = 0; finger < fingers_supported; finger++) {
+		reg_index = finger / 4;
+		finger_shift = (finger % 4) * 2;
+		finger_status = (finger_status_reg[reg_index] >> finger_shift)
+				& MASK_2BIT;
 
-	for (finger = 0; finger < fingers_supported; finger++) {
-		reg_index = finger / 4;
-		finger_shift = (finger % 4) * 2;
-		finger_status = (finger_status_reg[reg_index] >> finger_shift)
-				& MASK_2BIT;
-		if (finger_status)
-			number_of_fingers_actually_touching++;
-	}
-#endif
-	for (finger = 0; finger < fingers_supported; finger++) {
-		reg_index = finger / 4;
-		finger_shift = (finger % 4) * 2;
-		finger_status = (finger_status_reg[reg_index] >> finger_shift)
-				& MASK_2BIT;
 		/*
 		 * Each 2-bit finger status field represents the following:
 		 * 00 = finger not present
@@ -3238,6 +1715,11 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 		 * 10 = finger present but data may be inaccurate
 		 * 11 = reserved
 		 */
+#ifdef TYPE_B_PROTOCOL
+		input_mt_slot(rmi4_data->input_dev, finger);
+		input_mt_report_slot_state(rmi4_data->input_dev,
+					MT_TOOL_FINGER, finger_status);
+#endif
 		if (finger_status) {
 			data_offset = data_addr +
 					num_of_finger_status_regs +
@@ -3247,7 +1729,7 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 					data,
 					data_reg_blk_size);
 			if (retval < 0)
-				return 0;
+				goto end;
 
 			x = (data[0] << 4) | (data[2] & MASK_4BIT);
 			y = (data[1] << 4) | ((data[2] >> 4) & MASK_4BIT);
@@ -3260,42 +1742,16 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			if (rmi4_data->board->y_flip)
 				y = rmi4_data->sensor_max_y - y;
 
-			if (rmi4_data->clipping_on && rmi4_data->clipa) {
-				bool inside;
-
-				inside = (x >= rmi4_data->clipa->xul_clip) &&
-					(x <= rmi4_data->clipa->xbr_clip) &&
-					(y >= rmi4_data->clipa->yul_clip) &&
-					(y <= rmi4_data->clipa->ybr_clip);
-
-				if (!inside) {
-					dev_dbg(&rmi4_data->i2c_client->dev,
-						"%d,%d ouside clipping area\n",
-						x, y);
-					continue;
-				}
-			}
-#ifdef TYPE_B_PROTOCOL
-			input_mt_slot(rmi4_data->input_dev, finger);
-			input_mt_report_slot_state(rmi4_data->input_dev,
-					MT_TOOL_FINGER, finger_status);
-#endif
-
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-			touchxp.touch_magic_dev = rmi4_data->input_dev;
-			if (touchxp.touchx)
-				touchxp.touchx(&x, &y, finger,
-					number_of_fingers_actually_touching);
-#endif
-
 			dev_dbg(&rmi4_data->i2c_client->dev,
 					"%s: Finger %d:\n"
+					"status = 0x%02x\n"
 					"x = %d\n"
 					"y = %d\n"
 					"wx = %d\n"
 					"wy = %d\n"
 					"z = %d\n",
 					__func__, finger,
+					finger_status,
 					x, y, wx, wy, z);
 
 			input_report_abs(rmi4_data->input_dev,
@@ -3315,35 +1771,18 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			input_mt_sync(rmi4_data->input_dev);
 #endif
 			touch_count++;
-#ifdef TYPE_B_PROTOCOL
-		} else {
-			input_mt_slot(rmi4_data->input_dev, finger);
-			/* Touch no longer active, close out slot */
-			input_mt_report_slot_state(rmi4_data->input_dev,
-					MT_TOOL_FINGER, 0);
-#endif
-		}
 
-		synaptics_dsx_resumeinfo_touch(rmi4_data);
+			synaptics_dsx_resumeinfo_touch(rmi4_data);
+		}
 	}
 
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-	if (!touch_count)
-		touchxp.finger_down = 0;
-#endif
-
+end:
 #ifndef TYPE_B_PROTOCOL
 	if (!touch_count)
 		input_mt_sync(rmi4_data->input_dev);
 #endif
 
-	input_mt_report_pointer_emulation(rmi4_data->input_dev, false);
 	input_sync(rmi4_data->input_dev);
-
-#ifdef CONFIG_TOUCHSCREEN_TOUCHX_BASE
-	if (touchxp.touchx)
-		mutex_unlock(&touchxp.virtual_touch_mutex);
-#endif
 
 	return touch_count;
 }
@@ -3403,8 +1842,6 @@ static void synaptics_rmi4_f1a_report(struct synaptics_rmi4_data *rmi4_data,
 		else
 			current_status[button] = status;
 
-		ud_set_id(&button_ud_stats, button);
-
 		dev_dbg(&rmi4_data->i2c_client->dev,
 				"%s: Button %d (code %d) ->%d\n",
 				__func__, button,
@@ -3425,14 +1862,12 @@ static void synaptics_rmi4_f1a_report(struct synaptics_rmi4_data *rmi4_data,
 			input_report_key(rmi4_data->input_dev,
 					f1a->button_map[button],
 					status);
-			ud_log_status(&button_ud_stats, status == 1);
 		} else {
 			if (before_2d_status[button] == 1) {
 				before_2d_status[button] = 0;
 				input_report_key(rmi4_data->input_dev,
 						f1a->button_map[button],
 						status);
-				ud_log_status(&button_ud_stats, status == 1);
 			} else {
 				if (status == 1)
 					while_2d_status[button] = 1;
@@ -3444,7 +1879,6 @@ static void synaptics_rmi4_f1a_report(struct synaptics_rmi4_data *rmi4_data,
 		input_report_key(rmi4_data->input_dev,
 				f1a->button_map[button],
 				status);
-		ud_log_status(&button_ud_stats, status == 1);
 #endif
 		synaptics_dsx_resumeinfo_touch(rmi4_data);
 	}
@@ -3527,9 +1961,6 @@ static void synaptics_rmi4_report_touch(struct synaptics_rmi4_data *rmi4_data,
 	switch (fhandler->fn_number) {
 	case SYNAPTICS_RMI4_F01:
 		synaptics_rmi4_f01_handler(rmi4_data, fhandler);
-		break;
-
-	case SYNAPTICS_RMI4_F51:
 		break;
 
 	case SYNAPTICS_RMI4_F11:
@@ -3795,6 +2226,11 @@ static int synaptics_rmi4_f11_init(struct synaptics_rmi4_data *rmi4_data,
 		dev_dbg(&rmi4_data->i2c_client->dev,
 			"%s: thresholds: x=0x%x, y=0x%x\n",
 			__func__, control[2], control[3]);
+		/* Delta thresholds */
+		if (control[2] > F11_DELTA_MAX)
+			pr_warn("excessive x threshold: 0x%x\n", control[2]);
+		if (control[3] > F11_DELTA_MAX)
+			pr_warn("excessive y threshold: 0x%x\n", control[3]);
 	}
 
 	fhandler->intr_reg_num = (intr_count + 7) / 8;
@@ -3838,13 +2274,14 @@ static int synaptics_rmi4_f11_init(struct synaptics_rmi4_data *rmi4_data,
 #endif
 #ifdef TYPE_B_PROTOCOL
 	input_mt_init_slots(rmi4_data->input_dev,
-			rmi4_data->num_of_fingers, 0);
+			rmi4_data->num_of_fingers);
 #else
 	input_set_abs_params(rmi4_data->input_dev,
 			ABS_MT_TRACKING_ID, 0,
 			rmi4_data->num_of_fingers - 1, 0, 0);
 	input_set_events_per_packet(rmi4_data->input_dev, 64);
 #endif
+
 	return retval;
 }
 
@@ -3899,62 +2336,6 @@ static int synaptics_rmi4_f1a_alloc_mem(struct synaptics_rmi4_data *rmi4_data,
 	return 0;
 }
 
-static int synaptics_rmi4_f51_init(struct synaptics_rmi4_data *rmi4_data,
-		struct synaptics_rmi4_fn *fhandler,
-		struct synaptics_rmi4_fn_desc *fd,
-		unsigned int intr_count)
-{
-	int retval;
-	unsigned char ii;
-	unsigned char intr_offset;
-	struct synaptics_rmi4_func_packet_regs *regs;
-
-	regs = find_function(SYNAPTICS_RMI4_F51);
-	if (regs) {
-		unsigned char *data;
-		struct synaptics_rmi4_packet_reg *reg;
-		struct synaptics_rmi4_subpkt *subpkt;
-
-		regs->base_addr = fhandler->full_addr.ctrl_base;
-		reg = &regs->regs[0];
-		subpkt = &reg->subpkt[0];
-		pr_debug("F51: size %u\n", subpkt->size);
-		data = kzalloc(subpkt->size, GFP_KERNEL);
-		if (data) {
-			reg->offset = 0;
-			reg->size = subpkt->size;
-			reg->data = data;
-			subpkt->present = true;
-			subpkt->offset = 0;
-		}
-	}
-
-	fhandler->fn_number = fd->fn_number;
-	fhandler->num_of_data_sources = (fd->intr_src_count  & MASK_3BIT);
-	fhandler->intr_reg_num = (intr_count + 7) / 8;
-	if (fhandler->intr_reg_num != 0)
-		fhandler->intr_reg_num -= 1;
-	/* Set an enable bit for each data source */
-	intr_offset = intr_count % 8;
-	fhandler->intr_mask = 0;
-	for (ii = intr_offset;
-			ii < ((fd->intr_src_count & MASK_3BIT) +
-			intr_offset);
-			ii++)
-		fhandler->intr_mask |= 1 << ii;
-	/* FIXME: interrupt bit 5 (belongs F54) is used for some reason */
-	fhandler->intr_mask = 0x40;
-
-	retval = synaptics_rmi4_read_packet_regs(rmi4_data, regs);
-	if (retval < 0)
-		dev_err(&rmi4_data->i2c_client->dev, "Error reading F51\n");
-	else
-		dev_info(&rmi4_data->i2c_client->dev,
-			"F51: ctrl [0]=%02x, [1]=%02x\n",
-			f51_c0_0.dynamic_supp_xy, f51_c0_1.data[0]);
-	return 0;
-}
-
  /**
  * synaptics_rmi4_f12_init()
  *
@@ -3974,29 +2355,20 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	int retval;
 	unsigned char ii;
 	unsigned char intr_offset;
-	struct synaptics_rmi4_func_packet_regs *regs;
-
-	regs = rmi4_data->f12_data_registers_ptr;
-	retval = synaptics_rmi4_scan_f12_reg_info(rmi4_data,
-			fhandler->full_addr.query_base + regs->query_offset,
-			fhandler->full_addr.data_base, regs);
-	if (retval < 0)
-		return retval;
-
-	if (f12_d15[0].present)
-		pr_debug("F12 has data register 15\n");
-
-	regs = find_function(SYNAPTICS_RMI4_F12);
-	retval = synaptics_rmi4_scan_f12_reg_info(rmi4_data,
-			fhandler->full_addr.query_base + regs->query_offset,
-			fhandler->full_addr.ctrl_base, regs);
-	if (retval < 0)
-		return retval;
 
 	fhandler->fn_number = fd->fn_number;
 	fhandler->num_of_data_sources = (fd->intr_src_count  & MASK_3BIT);
 
-	retval = synaptics_rmi4_read_packet_regs(rmi4_data, regs);
+	pr_debug("scan F12 ctrl registers\n");
+	retval = synaptics_rmi4_scan_packet_reg_info(
+			rmi4_data,
+			fhandler->full_addr.query_base + 4,
+			fhandler->full_addr.ctrl_base,
+			&f12_ctrl_regs);
+	if (retval < 0)
+		return retval;
+
+	retval = synaptics_rmi4_read_packet_regs(rmi4_data, &f12_ctrl_regs);
 	if (retval < 0)
 		return retval;
 
@@ -4015,6 +2387,13 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			(f12_c08_0.max_y_msb << 8) | f12_c08_0.max_y_lsb;
 	} else
 		return -ENOENT;
+
+	dev_dbg(&rmi4_data->i2c_client->dev,
+			"%s: Function %02x max x = %d max y = %d nof = %d\n",
+			__func__, fhandler->fn_number,
+			rmi4_data->sensor_max_x,
+			rmi4_data->sensor_max_y,
+			rmi4_data->num_of_fingers);
 
 	fhandler->intr_reg_num = (intr_count + 7) / 8;
 	if (fhandler->intr_reg_num != 0)
@@ -4058,13 +2437,14 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 #endif
 #ifdef TYPE_B_PROTOCOL
 	input_mt_init_slots(rmi4_data->input_dev,
-			rmi4_data->num_of_fingers, 0);
+			rmi4_data->num_of_fingers);
 #else
 	input_set_abs_params(rmi4_data->input_dev,
 			ABS_MT_TRACKING_ID, 0,
 			rmi4_data->num_of_fingers - 1, 0, 0);
 	input_set_events_per_packet(rmi4_data->input_dev, 64);
 #endif
+
 	return retval;
 }
 
@@ -4191,236 +2571,6 @@ static int synaptics_rmi4_alloc_fh(struct synaptics_rmi4_fn **fhandler,
 	return 0;
 }
 
-static unsigned char *simple_init_packet_reg(
-		struct synaptics_rmi4_packet_reg *reg, short r_offset)
-{
-	unsigned char *data_ptr = NULL;
-	if (reg->subpkt[0].data && reg->subpkt[0].size) {
-		reg->subpkt[0].present = true;
-		reg->subpkt[0].offset = 0;
-		memset(reg->subpkt[0].data, 0, reg->subpkt[0].size);
-
-		reg->offset = r_offset;
-		kfree(reg->data);
-		data_ptr = kzalloc(reg->size, GFP_KERNEL);
-	}
-	return data_ptr;
-}
-
-static void simple_deinit_packet_reg(struct synaptics_rmi4_packet_reg *reg)
-{
-	reg->expected = false;
-	reg->offset = -1;
-	reg->size = 0;
-	reg->subpkt[0].expected = false;
-	reg->subpkt[0].offset = -1;
-}
-
-#define F01_RMI_Ctrl0	0
-#define F01_RMI_Ctrl2	2
-#define F01_RMI_Ctrl3	3
-#define F01_RMI_Ctrl5	5
-#define F01_RMI_Ctrl9	9
-
-static void synaptics_rmi4_scan_f01_reg_info(
-		struct synaptics_rmi4_data *rmi4_data)
-{
-	int r, s, retval;
-	unsigned short query42_offset = F01_QUERY21_OFFSET;
-	unsigned short query43_size = 0;
-	unsigned short current_ctrl_offset = rmi4_data->num_of_intr_regs;
-	bool has_recalibration = false;
-	bool can_access_ctrl9 = false;
-	u8 query43[4];
-	struct synaptics_rmi4_f01_query42 query42;
-	struct synaptics_rmi4_f01_query1 query1;
-	struct synaptics_rmi4_func_packet_regs *regs;
-	struct synaptics_rmi4_packet_reg *reg;
-
-	regs = find_function(SYNAPTICS_RMI4_F01);
-	if (unlikely(regs == NULL)) {
-		dev_info(&rmi4_data->i2c_client->dev,
-			"%s: F01 registers not defined\n", __func__);
-		return;
-	}
-	/* invalidate offsets only and keep statically defined register size */
-	for (r = 0; r < regs->nr_regs; ++r) {
-		regs->regs[r].offset = -1;
-		kfree(regs->regs[r].data);
-		regs->regs[r].data = NULL;
-		for (s = 0; s < regs->regs[r].nr_subpkts; ++s) {
-			regs->regs[r].subpkt[s].present = 0;
-			if (regs->regs[r].subpkt[s].data &&
-					regs->regs[r].subpkt[s].size)
-				memset(regs->regs[r].subpkt[s].data, 0,
-					regs->regs[r].subpkt[s].size);
-		}
-	}
-
-	regs->base_addr = rmi4_data->f01_ctrl_base_addr;
-	pr_debug("F01_RMI_Ctrl base addr 0x%x\n", regs->base_addr);
-
-	reg = find_packet_reg(regs, F01_RMI_Ctrl0);
-	if (unlikely(reg == NULL)) {
-		dev_warn(&rmi4_data->i2c_client->dev,
-			"%s: F01_RMI_Ctrl0 not defined\n",
-			__func__);
-		return;
-	}
-
-	if (regs && reg && reg->nr_subpkts) {
-		reg->data = simple_init_packet_reg(reg, 0);
-		if (!reg->data) {
-			simple_deinit_packet_reg(reg);
-			dev_err(&rmi4_data->i2c_client->dev,
-				"%s: remove r%d.s0 from the list\n",
-				__func__, reg->r_number);
-		}
-	}
-
-	retval = synaptics_rmi4_i2c_read(rmi4_data,
-			rmi4_data->f01_query_base_addr + F01_QUERY1_OFFSET,
-			query1.data,
-			sizeof(query1.data));
-	if (retval < 0) {
-		dev_warn(&rmi4_data->i2c_client->dev,
-			"%s: error reading F01_RMI_Query1\n", __func__);
-		return;
-	}
-
-	if (query1.has_sensor_id) {
-		query42_offset++;	/* has F01_RMI_Query22 */
-		pr_debug("has F01_RMI_Query22\n");
-	}
-
-	if (query1.has_adjustable_doze) {
-		pr_debug("has F01_RMI_Ctrl2 and F01_RMI_Ctrl3\n");
-		current_ctrl_offset++;
-		reg = find_packet_reg(regs, F01_RMI_Ctrl2);
-		if (reg) {
-			reg->data = simple_init_packet_reg(reg,
-						current_ctrl_offset);
-			if (!reg->data) {
-				simple_deinit_packet_reg(reg);
-				dev_err(&rmi4_data->i2c_client->dev,
-					"%s: remove r%d.s0 from the list\n",
-					__func__, reg->r_number);
-			}
-		}
-		current_ctrl_offset++;
-		reg = find_packet_reg(regs, F01_RMI_Ctrl3);
-		if (reg) {
-			reg->data = simple_init_packet_reg(reg,
-						current_ctrl_offset);
-			if (!reg->data) {
-				simple_deinit_packet_reg(reg);
-				dev_err(&rmi4_data->i2c_client->dev,
-					"%s: remove r%d.s0 from the list\n",
-					__func__, reg->r_number);
-			}
-		}
-	}
-
-	if (query1.reserved) {
-		current_ctrl_offset++;		/* has F01_RMI_Ctrl4 */
-		query42_offset++;	/* has F01_RMI_Query21 */
-		query42_offset += 18;	/* has F01_RMI_Query23-41 */
-		pr_debug("has F01_RMI_Query21,23-41 and F01_RMI_Ctrl4\n");
-	}
-
-	if (query1.has_doze_holdoff) {
-		pr_debug("has F01_RMI_Ctrl5\n");
-		current_ctrl_offset++;
-		reg = find_packet_reg(regs, F01_RMI_Ctrl5);
-		if (reg) {
-			reg->data = simple_init_packet_reg(reg,
-						current_ctrl_offset);
-			if (!reg->data) {
-				simple_deinit_packet_reg(reg);
-				dev_err(&rmi4_data->i2c_client->dev,
-					"%s: remove r%d.s0 from the list\n",
-					__func__, reg->r_number);
-			}
-		}
-	}
-
-	query42.data[0] = 0;
-	if (query1.has_query42) {
-		pr_debug("F01_RMI_Query42 offset %d\n", query42_offset);
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f01_query_base_addr +
-				query42_offset,
-				query42.data,
-				sizeof(query42.data));
-		if (retval < 0) {
-			dev_warn(&rmi4_data->i2c_client->dev,
-				"%s: error reading F01_RMI_Query42\n",
-				__func__);
-		} else
-			has_recalibration = query42.has_recalibration;
-	}
-
-	if (query42.has_ds4_queries) {
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f01_query_base_addr +
-				query42_offset + 1,
-				query43,
-				sizeof(query43));
-		if (retval < 0) {
-			dev_warn(&rmi4_data->i2c_client->dev,
-				"%s: error reading F01_RMI_Query43\n",
-				__func__);
-		} else {
-			can_access_ctrl9 = true;
-			query43_size = query43[0] & 0xf;
-			pr_debug("F01_RMI_Query43 size: %d\n", query43_size);
-		}
-	}
-
-	if (query43_size) {
-		if (query43[2] & 0x1) {
-			current_ctrl_offset++;	/* has F01_RMI_Ctrl6 */
-			pr_debug("has F01_RMI_Ctrl6\n");
-		}
-		if (query43[2] & 0x2) {
-			current_ctrl_offset++;	/* has F01_RMI_Ctrl7 */
-			pr_debug("has F01_RMI_Ctrl7\n");
-		}
-		if (query43[2] & 0x4) {
-			current_ctrl_offset++;	/* has F01_RMI_Ctrl8 */
-			pr_debug("has F01_RMI_Ctrl8\n");
-		}
-	}
-
-	reg = find_packet_reg(regs, F01_RMI_Ctrl9);
-	if (unlikely(reg == NULL)) {
-		dev_warn(&rmi4_data->i2c_client->dev,
-			"%s: F01_RMI_Ctrl9 not present\n", __func__);
-		return;
-	}
-
-	if (regs && reg) {
-		if (has_recalibration == false || can_access_ctrl9 == false) {
-			simple_deinit_packet_reg(reg);
-			dev_warn(&rmi4_data->i2c_client->dev,
-				"%s: remove r%d.s0 from the list\n",
-				__func__, reg->r_number);
-			return;
-		}
-
-		current_ctrl_offset++;
-		pr_debug("F01_RMI_Ctrl9 offset %d\n", current_ctrl_offset);
-
-		reg->data = simple_init_packet_reg(reg, current_ctrl_offset);
-		if (!reg->data) {
-			simple_deinit_packet_reg(reg);
-			dev_err(&rmi4_data->i2c_client->dev,
-				"%s: remove r%d.s0 from the list\n",
-				__func__, reg->r_number);
-		}
-	}
-}
-
  /**
  * synaptics_rmi4_query_device()
  *
@@ -4446,7 +2596,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 	struct synaptics_rmi4_fn *fhandler;
 	struct synaptics_rmi4_device_info *rmi;
 	struct f34_properties f34_query;
-	struct f34_properties_v2 f34_query_v2;
 	struct synaptics_rmi4_f01_device_status status;
 
 	rmi = &(rmi4_data->rmi4_mod_info);
@@ -4476,70 +2625,28 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 			}
 
 			dev_dbg(&rmi4_data->i2c_client->dev,
-				"%s: F%02x v%d found (page %d)\n",
-				__func__, rmi_fd.fn_number, rmi_fd.fn_version,
-				page_number);
+					"%s: F%02x found (page %d)\n",
+					__func__, rmi_fd.fn_number,
+					page_number);
 
 			switch (rmi_fd.fn_number) {
-			case SYNAPTICS_RMI4_F51:
-				retval = synaptics_rmi4_alloc_fh(&fhandler,
-						&rmi_fd, page_number);
-				if (retval < 0) {
-					dev_err(&rmi4_data->i2c_client->dev,
-						"%s: Failed to alloc for F%x\n",
-						__func__, rmi_fd.fn_number);
-					return retval;
-				}
-
-				retval = synaptics_rmi4_f51_init(rmi4_data,
-						fhandler, &rmi_fd, intr_count);
-				if (retval < 0) {
-					dev_err(&rmi4_data->i2c_client->dev,
-						"%s: Failed to init F51\n",
-						__func__);
-					return retval;
-				}
-				break;
-
 			case SYNAPTICS_RMI4_F34:
-				if (rmi_fd.fn_version < 2) {
-					retval = synaptics_rmi4_i2c_read(
-						rmi4_data,
+				retval = synaptics_rmi4_i2c_read(rmi4_data,
 						rmi_fd.query_base_addr +
 							F34_PROPERTIES_OFFSET,
 						&f34_query.data[0],
 						sizeof(f34_query));
-					if (retval < 0)
-						return retval;
+				if (retval < 0)
+					return retval;
 
-					if (f34_query.has_config_id) {
-						retval = synaptics_rmi4_i2c_read(
-							rmi4_data,
-							rmi_fd.ctrl_base_addr,
-							rmi->config_id,
-							sizeof(rmi->config_id));
-						if (retval < 0)
-							return retval;
-					}
-				} else if (rmi_fd.fn_version == 2) {
+				if (f34_query.has_config_id) {
 					retval = synaptics_rmi4_i2c_read(
 							rmi4_data,
-							rmi_fd.query_base_addr +
-							F34_PROPERTIES_OFFSET_V2,
-							&f34_query_v2.data[0],
-							sizeof(f34_query_v2));
-					if (retval < 0)
-						return retval;
-
-					if (f34_query_v2.has_config_id) {
-						retval = synaptics_rmi4_i2c_read(
-							rmi4_data,
 							rmi_fd.ctrl_base_addr,
 							rmi->config_id,
 							sizeof(rmi->config_id));
-						if (retval < 0)
-							return retval;
-					}
+					if (retval < 0)
+						return retval;
 				}
 				break;
 
@@ -4552,14 +2659,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 						rmi_fd.data_base_addr;
 				rmi4_data->f01_cmd_base_addr =
 						rmi_fd.cmd_base_addr;
-				pr_debug("query_base_addr 0x%04x\n",
-					rmi4_data->f01_query_base_addr);
-				pr_debug("ctrl_base_addr 0x%04x\n",
-					rmi4_data->f01_ctrl_base_addr);
-				pr_debug("data_base_addr 0x%04x\n",
-					rmi4_data->f01_data_base_addr);
-				pr_debug("cmd_base_addr 0x%04x\n",
-					rmi4_data->f01_cmd_base_addr);
 
 				retval = synaptics_rmi4_i2c_read(rmi4_data,
 						rmi4_data->f01_data_base_addr,
@@ -4567,6 +2666,9 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 						sizeof(status.data));
 				if (retval < 0)
 					return retval;
+
+				synaptics_rmi4_sensor_multi_touch(
+						rmi4_data, SYNAPTICS_RMI4_F01);
 
 				rmi4_data->in_bootloader =
 						status.flash_prog == 1;
@@ -4580,19 +2682,16 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 						&rmi_fd, page_number);
 				if (retval < 0) {
 					dev_err(&rmi4_data->i2c_client->dev,
-						"%s: Failed to alloc for F%x\n",
-						__func__, rmi_fd.fn_number);
+							"%s: Failed to alloc for F%d\n",
+							__func__,
+							rmi_fd.fn_number);
 					return retval;
 				}
 
 				retval = synaptics_rmi4_f11_init(rmi4_data,
 						fhandler, &rmi_fd, intr_count);
-				if (retval < 0) {
-					dev_err(&rmi4_data->i2c_client->dev,
-						"%s: Failed to init F11\n",
-						__func__);
+				if (retval < 0)
 					return retval;
-				}
 				break;
 
 			case SYNAPTICS_RMI4_F12:
@@ -4603,19 +2702,19 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 						&rmi_fd, page_number);
 				if (retval < 0) {
 					dev_err(&rmi4_data->i2c_client->dev,
-						"%s: Failed to alloc for F%x\n",
-						__func__, rmi_fd.fn_number);
+							"%s: Failed to alloc for F%d\n",
+							__func__,
+							rmi_fd.fn_number);
 					return retval;
 				}
 
 				retval = synaptics_rmi4_f12_init(rmi4_data,
 						fhandler, &rmi_fd, intr_count);
-				if (retval < 0) {
-					dev_err(&rmi4_data->i2c_client->dev,
-						"%s: Failed to init F12\n",
-						__func__);
+				if (retval < 0)
 					return retval;
-				}
+
+				synaptics_rmi4_sensor_multi_touch(
+						rmi4_data, SYNAPTICS_RMI4_F12);
 				break;
 
 			case SYNAPTICS_RMI4_F1A:
@@ -4626,8 +2725,9 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 						&rmi_fd, page_number);
 				if (retval < 0) {
 					dev_err(&rmi4_data->i2c_client->dev,
-						"%s: Failed to alloc for F%x\n",
-						__func__, rmi_fd.fn_number);
+							"%s: Failed to alloc for F%d\n",
+							__func__,
+							rmi_fd.fn_number);
 					return retval;
 				}
 
@@ -4651,8 +2751,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 			intr_count += (rmi_fd.intr_src_count & MASK_3BIT);
 
 			if (fhandler && rmi_fd.intr_src_count) {
-				pr_debug("adding handler for F%x\n",
-						fhandler->fn_number);
 				list_add_tail(&fhandler->link,
 						&rmi->support_fn_list);
 			}
@@ -4684,7 +2782,9 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 					SYNAPTICS_RMI4_PRODUCT_ID_SIZE);
 	rmi->product_id_string[SYNAPTICS_RMI4_PRODUCT_ID_SIZE] = 0;
 
-	synaptics_dsx_validate_product_string(rmi->product_id_string);
+	/* handle wrongfully programmed product id strings here */
+	synaptics_dsx_darn_product_string(rmi->product_id_string,
+					SYNAPTICS_RMI4_PRODUCT_ID_SIZE);
 
 	retval = synaptics_rmi4_i2c_read(rmi4_data,
 			rmi4_data->f01_query_base_addr+PACKAGE_ID_OFFSET,
@@ -4702,9 +2802,8 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 
 	if (rmi->manufacturer_id != 1) {
 		dev_err(&rmi4_data->i2c_client->dev,
-			"%s: Non-Synaptics device found,"
-			"manufacturer ID = %d\n",
-			__func__, rmi->manufacturer_id);
+				"%s: Non-Synaptics device found, manufacturer ID = %d\n",
+				__func__, rmi->manufacturer_id);
 	}
 
 	if (!rmi4_data->in_bootloader && !rmi4_data->input_registered) {
@@ -4751,9 +2850,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 		batohui(&config_id, rmi->config_id, sizeof(config_id));
 		pr_info("Product: %s, firmware id: %x, config id: %08x\n",
 			rmi->product_id_string, firmware_id, config_id);
-		/* has to be called after determining */
-		/* the number of interrupt registers */
-		synaptics_rmi4_scan_f01_reg_info(rmi4_data);
 	}
 
 	return 0;
@@ -4777,8 +2873,24 @@ static void synaptics_rmi4_cleanup(struct synaptics_rmi4_data *rmi4_data)
 	}
 }
 
-static void synaptics_dsx_release_all(struct synaptics_rmi4_data *rmi4_data)
+static void synaptics_dsx_on_resume(struct synaptics_rmi4_data *rmi4_data)
 {
+	/*
+	 * Enforce touch release event report to work-around such event
+	 * missing while touch IC is off.
+	 */
+#ifdef TYPE_B_PROTOCOL
+	int i;
+	for (i = 0; i < rmi4_data->num_of_fingers; i++) {
+		input_mt_slot(rmi4_data->input_dev, i);
+		input_mt_report_slot_state(rmi4_data->input_dev,
+				MT_TOOL_FINGER, false);
+	}
+#else
+	input_mt_sync(rmi4_data->input_dev);
+#endif
+	input_sync(rmi4_data->input_dev);
+
 	/* reset some TSB global vars like fingers_on_2d after resume
 	 * of reset touch IC
 	 */
@@ -4786,43 +2898,46 @@ static void synaptics_dsx_release_all(struct synaptics_rmi4_data *rmi4_data)
 		tsb_buff_clean_flag = 1;
 		rmi4_data->fingers_on_2d = false;
 	}
-
-	if (rmi4_data->input_dev) {
-		/*
-		 * Enforce touch release event report to work-around
-		 * such event missing while touch IC is off.
-		*/
-#ifdef TYPE_B_PROTOCOL
-		int i;
-		for (i = 0; i < rmi4_data->num_of_fingers; i++) {
-			input_mt_slot(rmi4_data->input_dev, i);
-			input_mt_report_slot_state(rmi4_data->input_dev,
-					MT_TOOL_FINGER, false);
-		}
-#else
-		input_mt_sync(rmi4_data->input_dev);
-#endif
-		input_sync(rmi4_data->input_dev);
-	}
 }
 
-static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
+static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data,
+		unsigned char *f01_cmd_base_addr)
 {
 	int current_state, retval;
 	bool need_to_query = false;
+	unsigned char command = 0x01;
 
 	current_state = synaptics_dsx_get_state_safe(rmi4_data);
 	if (current_state == STATE_UNKNOWN) {
 		synaptics_rmi4_cleanup(rmi4_data);
+
+		if (rmi4_data->input_registered) {
+			input_unregister_device(rmi4_data->input_dev);
+			rmi4_data->input_dev = NULL;
+			rmi4_data->input_registered = false;
+
+			pr_debug("de-allocated input device\n");
+		}
 		need_to_query = true;
 	}
 
-	retval = synaptics_dsx_ic_reset(rmi4_data, RMI4_HW_RESET);
-	if (retval > 0)
-		pr_debug("successful reset took %dms\n", retval);
-	else
-		dev_warn(&rmi4_data->i2c_client->dev, "%s: timed out waiting for idle\n",
-			__func__);
+	if (rmi4_data->hw_reset)
+		/* do hard reset instead of soft */
+		synaptics_dsx_ic_reset(rmi4_data, true);
+	else {
+		retval = synaptics_rmi4_i2c_write(rmi4_data,
+			f01_cmd_base_addr ? *f01_cmd_base_addr :
+			rmi4_data->f01_cmd_base_addr,
+			&command,
+			sizeof(command));
+		if (retval < 0) {
+			dev_err(&rmi4_data->i2c_client->dev,
+				"%s: Failed to issue reset command, error = %d\n",
+				__func__, retval);
+			return retval;
+		}
+		msleep(100);
+	}
 
 	if (need_to_query) {
 		if (!rmi4_data->input_dev) {
@@ -4887,45 +3002,23 @@ static void synaptics_rmi4_detection_work(struct work_struct *work)
 				next_list_entry,
 				&exp_fn_ctrl.fn_list,
 				link) {
-		if (exp_fhandler->func_init == NULL) {
-			if (exp_fhandler->inserted == true) {
-				exp_fhandler->func_remove(rmi4_data);
-				list_del(&exp_fhandler->link);
-				kfree(exp_fhandler);
-			}
-			continue;
-		}
-
-		if (exp_fhandler->inserted == true)
-			continue;
-
-		if (rmi4_data->in_bootloader &&
-			(exp_fhandler->mode == IC_MODE_UI))
-			continue;
-
-		exp_fhandler->func_init(rmi4_data);
-		state = synaptics_dsx_get_state_safe(rmi4_data);
-		exp_fhandler->inserted = true;
-		if (exp_fhandler->fn_type == RMI_F54) {
-			int error;
-			struct synaptics_rmi4_func_packet_regs *regs;
-
-			regs = find_function(SYNAPTICS_RMI4_F54);
-			if (!regs)
+		if ((exp_fhandler->func_init != NULL) &&
+				(exp_fhandler->inserted == false)) {
+			if (rmi4_data->in_bootloader &&
+			   (exp_fhandler->mode == IC_MODE_UI))
 				continue;
-
-			error = synaptics_rmi4_scan_f54_ctrl_reg_info(regs);
-			if (error) {
-				regs->nr_regs = 0;
-				pr_err("F54_Ctrl scan failed\n");
-			}
-
-			regs = find_function(SYNAPTICS_RMI4_F54 | COMMAND_TYPE);
-			error = synaptics_rmi4_scan_f54_cmd_reg_info(regs);
-			if (error) {
-				regs->nr_regs = 0;
-				pr_err("F54_Cmd scan failed\n");
-			}
+			if (rmi4_data->sensor_sleep)
+				synaptics_rmi4_sensor_wake(rmi4_data);
+			exp_fhandler->func_init(rmi4_data);
+			state = synaptics_dsx_get_state_safe(rmi4_data);
+			if (state == STATE_STANDBY)
+				synaptics_rmi4_sensor_sleep(rmi4_data);
+			exp_fhandler->inserted = true;
+		} else if ((exp_fhandler->func_init == NULL) &&
+			   (exp_fhandler->inserted == true)) {
+			exp_fhandler->func_remove(rmi4_data);
+			list_del(&exp_fhandler->link);
+			kfree(exp_fhandler);
 		}
 	}
 
@@ -5003,407 +3096,6 @@ exit:
 }
 EXPORT_SYMBOL(synaptics_rmi4_new_function);
 
-static void synaptics_dsx_free_patch(struct synaptics_dsx_patch *patch_set)
-{
-	struct synaptics_dsx_func_patch *fp, *next_list_entry;
-	down(&patch_set->list_sema);
-	list_for_each_entry_safe(fp, next_list_entry,
-				&patch_set->cfg_head, link) {
-		kfree(fp->data);
-		list_del(&fp->link);
-	}
-	up(&patch_set->list_sema);
-}
-
-static struct synaptics_dsx_patch *synaptics_dsx_init_patch(const char *name)
-{
-	struct synaptics_dsx_patch *patch_set;
-	patch_set = kzalloc(sizeof(struct synaptics_dsx_patch), GFP_KERNEL);
-	if (patch_set) {
-		patch_set->name = name;
-		sema_init(&patch_set->list_sema, 1);
-		INIT_LIST_HEAD(&patch_set->cfg_head);
-	}
-	return patch_set;
-}
-
-static int synaptics_dsx_init_mode(struct synaptics_rmi4_data *data,
-		struct synaptics_dsx_patchset **pmode)
-{
-	int i;
-	struct synaptics_dsx_patchset *mode = *pmode =
-		kzalloc(sizeof(struct synaptics_dsx_patchset), GFP_KERNEL);
-	if (!mode)
-		return -ENOMEM;
-
-	mode->patch_num = MAX_NUM_STATES;
-	for (i = 0; i < mode->patch_num; i++) {
-		struct synaptics_dsx_patch *patch;
-		patch = synaptics_dsx_init_patch("dts");
-		if (!patch) {
-			kfree(mode);
-			return -ENOMEM;
-		}
-		mode->patch_data[i] = patch;
-	}
-	return 0;
-}
-
-static int synaptics_dsx_free_modes(struct synaptics_rmi4_data *data)
-{
-	int m, i;
-	struct synaptics_dsx_patchset *mode;
-
-	for (m = 0; m < 2; m++) {
-		switch (m) {
-		case 0:
-			mode = data->default_mode;
-			break;
-		case 1:
-			/* If alt mode was not present, and set to default
-			 * mode, don't double free it.
-			 */
-			if (data->default_mode == data->alternate_mode)
-				continue;
-			mode = data->alternate_mode;
-			break;
-		}
-		if (!mode)
-			continue;
-		for (i = 0; i < mode->patch_num; i++) {
-			struct synaptics_dsx_patch *patch = mode->patch_data[i];
-			synaptics_dsx_free_patch(patch);
-		}
-		kfree(mode);
-	}
-	data->current_mode = NULL;
-	data->default_mode = NULL;
-	data->alternate_mode = NULL;
-	return 0;
-}
-
-static void synaptics_dsx_queued_resume(struct work_struct *w)
-{
-	struct synaptics_rmi4_data *rmi4_data =
-		container_of(w, struct synaptics_rmi4_data, resume_work);
-	synaptics_rmi4_resume(&(rmi4_data->i2c_client->dev));
-}
-
-static inline int synaptics_dsx_display_off(struct device *dev)
-{
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
-	cancel_work_sync(&rmi4_data->resume_work);
-	return synaptics_rmi4_suspend(dev);
-}
-
-static inline int synaptics_dsx_display_on(struct device *dev)
-{
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
-	pr_debug("queue resume\n");
-	queue_work(system_wq, &rmi4_data->resume_work);
-	return 0;
-}
-
-static int rmi_reboot(struct notifier_block *nb,
-			unsigned long event,
-			void *unused)
-{
-	struct synaptics_rmi4_data *rmi4_data =
-		container_of(nb, struct synaptics_rmi4_data, rmi_reboot);
-	const struct synaptics_dsx_platform_data *platform_data =
-			rmi4_data->board;
-#if defined(CONFIG_MMI_PANEL_NOTIFICATIONS)
-	mmi_panel_unregister_notifier(&rmi4_data->panel_nb);
-#elif defined(CONFIG_FB)
-	fb_unregister_client(&rmi4_data->panel_nb);
-#endif
-	if (platform_data->regulator_en) {
-		pr_debug("touch reboot - disable regulators\n");
-		regulator_force_disable(rmi4_data->regulator);
-		regulator_put(rmi4_data->regulator);
-		msleep(1000);
-	}
-
-	return NOTIFY_DONE;
-}
-
-#if defined(USB_CHARGER_DETECTION)
-static void synaptics_dsx_modify_patch(struct synaptics_dsx_patch *patch_set,
-	struct synaptics_dsx_func_patch *patch, bool remove)
-{
-	down(&patch_set->list_sema);
-	if (!remove) {
-		list_add_tail(&patch->link, &patch_set->cfg_head);
-		patch_set->cfg_num++;
-	} else {
-		list_del(&patch->link);
-		patch_set->cfg_num--;
-	}
-	up(&patch_set->list_sema);
-}
-
-/***************************************************************/
-/* USB charging source info from power_supply driver directly  */
-/***************************************************************/
-static enum power_supply_property ps_props[] = {
-	POWER_SUPPLY_PROP_PRESENT,
-	POWER_SUPPLY_PROP_ONLINE,
-};
-
-static const char * const ps_usb_supply[] = { "usb", };
-static bool ps_usb_present;
-static unsigned char ps_data[2] = { 0x20, 0 };
-/* need separate copies of the same patch, since it has */
-/* to be added into active and suspended configurations */
-static struct synaptics_dsx_func_patch ps_on[MAX_NUM_STATES] = {
-	{
-		.func = 1,
-		.regstr = 0,
-		.subpkt = 0,
-		.size = 1,
-		.bitmask = 0x20,
-		.data = &ps_data[0],
-	},
-	{
-		.func = 1,
-		.regstr = 0,
-		.subpkt = 0,
-		.size = 1,
-		.bitmask = 0x20,
-		.data = &ps_data[0],
-	},
-};
-static struct synaptics_dsx_func_patch ps_set = {
-	.func = 1,
-	.regstr = 0,
-	.subpkt = 0,
-	.size = 1,
-	.bitmask = 0x20,
-	.data = &ps_data[0],
-};
-static struct synaptics_dsx_func_patch ps_clear = {
-	.func = 1,
-	.regstr = 0,
-	.subpkt = 0,
-	.size = 1,
-	.bitmask = 0x20,
-	.data = &ps_data[1],
-};
-static int ps_get_property(struct power_supply *psy,
-	enum power_supply_property psp, union power_supply_propval *val)
-{
-	val->intval = 0;
-	return 0;
-}
-static struct synaptics_dsx_patch ps_patch[] = {
-	{
-		.name = "ps_clear",
-		.cfg_num = 1,
-	},
-	{
-		.name = "ps_set",
-		.cfg_num = 1,
-	},
-};
-
-static void ps_external_power_changed(struct power_supply *psy)
-{
-	struct power_supply *usb_psy = power_supply_get_by_name("usb");
-	union power_supply_propval pval = {0};
-	struct synaptics_rmi4_data *rmi4_data = container_of(psy,
-				struct synaptics_rmi4_data, psy);
-	struct device *dev = &rmi4_data->i2c_client->dev;
-	int state;
-
-	if (!usb_psy || !usb_psy->get_property)
-		return;
-
-	usb_psy->get_property(usb_psy, POWER_SUPPLY_PROP_PRESENT, &pval);
-	dev_dbg(dev, "external_power_changed: %d\n", pval.intval);
-
-	if (ps_usb_present != (pval.intval == 1)) {
-		int i, index = !!pval.intval;
-
-		/* charging patch has to be added into */
-		/* both patch sets: active and suspend */
-		for (i = 0; i < MAX_NUM_STATES; i++)
-			synaptics_dsx_modify_patch(
-				rmi4_data->default_mode->patch_data[i],
-				&ps_on[i], index == 0);
-
-		state = synaptics_dsx_get_state_safe(rmi4_data);
-		dev_info(dev, "power supply presence %d in state %d\n",
-			pval.intval, state);
-
-		if (state == STATE_ACTIVE) {
-			/* reset touch ic on charging source removal */
-			/* to kick it off FNM mode */
-			if (index == 0) {
-				int retval;
-				/* set unknown state to ensure IRQ gets */
-				/* enabled on state transition to active */
-				synaptics_dsx_sensor_state(
-						rmi4_data, STATE_UNKNOWN);
-				/* disable IRQ to handle reset */
-				synaptics_rmi4_irq_enable(rmi4_data, false);
-				/* perform SW reset to restore defaults */
-				retval = synaptics_dsx_ic_reset(
-						rmi4_data, RMI4_SW_RESET);
-				if (retval < 0)
-					dev_err(&rmi4_data->i2c_client->dev,
-						"folio: sw reset failed %d\n",
-						retval);
-				synaptics_dsx_sensor_ready_state(
-							rmi4_data, false);
-			} else /* on insertion only apply charging bit */
-				synaptics_dsx_patch_func(rmi4_data,
-					SYNAPTICS_RMI4_F01, &ps_patch[index]);
-		}
-	}
-	ps_usb_present = pval.intval == 1;
-}
-
-#define ps_notifier_unregister(r) power_supply_unregister(&r->psy)
-
-static int ps_notifier_register(struct synaptics_rmi4_data *rmi4_data)
-{
-	int error;
-	struct device *dev = &rmi4_data->i2c_client->dev;
-
-	rmi4_data->psy.num_supplies = 1;
-	rmi4_data->psy.supplied_from = ((char **) ps_usb_supply);
-	rmi4_data->psy.name = "synaptics-psy";
-	rmi4_data->psy.type = POWER_SUPPLY_TYPE_UNKNOWN;
-	rmi4_data->psy.properties = ps_props;
-	rmi4_data->psy.num_properties = ARRAY_SIZE(ps_props);
-	rmi4_data->psy.get_property = ps_get_property;
-	rmi4_data->psy.external_power_changed = ps_external_power_changed;
-
-	INIT_LIST_HEAD(&ps_patch[0].cfg_head);
-	sema_init(&ps_patch[0].list_sema, 1);
-	list_add_tail(&ps_clear.link, &ps_patch[0].cfg_head);
-
-	INIT_LIST_HEAD(&ps_patch[1].cfg_head);
-	sema_init(&ps_patch[1].list_sema, 1);
-	list_add_tail(&ps_set.link, &ps_patch[1].cfg_head);
-
-	error = power_supply_register(dev, &rmi4_data->psy);
-	if (error < 0) {
-		dev_err(dev, "power_supply_register failed rc=%d\n", error);
-		return error;
-	}
-	return 0;
-}
-#else
-#define ps_notifier_register(r)
-#define ps_notifier_unregister(r)
-#endif
-
-#include <linux/major.h>
-#include <linux/kdev_t.h>
-
-/* Attribute: path (RO) */
-static ssize_t path_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-	ssize_t blen;
-	const char *path;
-
-	if (!rmi4_data) {
-		pr_err("cannot get rmi4_data pointer\n");
-		return (ssize_t)0;
-	}
-	path = kobject_get_path(&rmi4_data->i2c_client->dev.kobj, GFP_KERNEL);
-	blen = scnprintf(buf, PAGE_SIZE, "%s", path ? path : "na");
-	kfree(path);
-	return blen;
-}
-
-/* Attribute: vendor (RO) */
-static ssize_t vendor_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "synaptics");
-}
-
-static struct device_attribute touchscreen_attributes[] = {
-	__ATTR_RO(path),
-	__ATTR_RO(vendor),
-	__ATTR_NULL
-};
-
-#define TSDEV_MINOR_BASE 128
-#define TSDEV_MINOR_MAX 32
-
-static int synaptics_dsx_sysfs_touchscreen(
-	struct synaptics_rmi4_data *rmi4_data, bool create)
-{
-	struct synaptics_rmi4_device_info *rmi = &(rmi4_data->rmi4_mod_info);
-	struct device_attribute *attrs = touchscreen_attributes;
-	int i, error = 0;
-	static struct class *touchscreen_class;
-	static struct device *ts_class_dev;
-	static int minor;
-
-	if (create) {
-		minor = input_get_new_minor(rmi4_data->i2c_client->addr,
-						1, false);
-		if (minor < 0)
-			minor = input_get_new_minor(TSDEV_MINOR_BASE,
-					TSDEV_MINOR_MAX, true);
-		pr_info("assigned minor %d\n", minor);
-
-		touchscreen_class = class_create(THIS_MODULE, "touchscreen");
-		if (IS_ERR(touchscreen_class)) {
-			error = PTR_ERR(touchscreen_class);
-			touchscreen_class = NULL;
-			return error;
-		}
-
-		ts_class_dev = device_create(touchscreen_class, NULL,
-				MKDEV(INPUT_MAJOR, minor),
-				rmi4_data, rmi->product_id_string);
-		if (IS_ERR(ts_class_dev)) {
-			error = PTR_ERR(ts_class_dev);
-			ts_class_dev = NULL;
-			return error;
-		}
-
-		for (i = 0; attrs[i].attr.name != NULL; ++i) {
-			error = device_create_file(ts_class_dev, &attrs[i]);
-			if (error)
-				break;
-		}
-
-		if (error)
-			goto device_destroy;
-	} else {
-		if (!touchscreen_class || !ts_class_dev)
-			return -ENODEV;
-
-		for (i = 0; attrs[i].attr.name != NULL; ++i)
-			device_remove_file(ts_class_dev, &attrs[i]);
-
-		device_unregister(ts_class_dev);
-		class_unregister(touchscreen_class);
-	}
-
-	return 0;
-
-device_destroy:
-	for (--i; i >= 0; --i)
-		device_remove_file(ts_class_dev, &attrs[i]);
-	device_destroy(touchscreen_class, MKDEV(INPUT_MAJOR, minor));
-	ts_class_dev = NULL;
-	class_unregister(touchscreen_class);
-	pr_err("error creating touchscreen class\n");
-
-	return -ENODEV;
-}
-
  /**
  * synaptics_rmi4_probe()
  *
@@ -5416,11 +3108,10 @@ device_destroy:
  * the driver to the input subsystem, sets up the interrupt, and creates
  * a work queue for detection of other expansion Function modules.
  */
-static int synaptics_rmi4_probe(struct i2c_client *client,
+static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		const struct i2c_device_id *dev_id)
 {
 	int retval;
-	struct pinctrl *pinctrl;
 	unsigned char attr_count;
 	struct synaptics_rmi4_data *rmi4_data;
 	struct synaptics_rmi4_device_info *rmi;
@@ -5442,25 +3133,6 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 		return -ENOMEM;
 	}
 
-	/* assign pointer to client structure right away for further use */
-	rmi4_data->i2c_client = client;
-
-	retval = synaptics_dsx_init_mode(rmi4_data, &rmi4_data->default_mode);
-	if (retval) {
-		dev_err(&client->dev, "%s: Failed to alloc dflt mode mem\n",
-				__func__);
-		return retval;
-	}
-
-	retval = synaptics_dsx_init_mode(rmi4_data, &rmi4_data->alternate_mode);
-	if (retval) {
-		dev_err(&client->dev, "%s: Failed to alloc alt mode mem\n",
-				__func__);
-		return retval;
-	}
-
-	rmi4_data->event_blank = FB_EARLY_EVENT_BLANK;
-
 	if (client->dev.of_node)
 		platform_data = synaptics_dsx_of_init(client, rmi4_data);
 	else
@@ -5474,18 +3146,15 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 		return -EINVAL;
 	}
 
-	rmi4_data->current_mode = rmi4_data->default_mode;
-
 	rmi = &(rmi4_data->rmi4_mod_info);
 
+	rmi4_data->i2c_client = client;
 	rmi4_data->current_page = MASK_8BIT;
 	rmi4_data->board = platform_data;
+	rmi4_data->touch_stopped = false;
+	rmi4_data->sensor_sleep = false;
 	rmi4_data->irq_enabled = false;
-	atomic_set(&rmi4_data->touch_stopped, 1);
-	rmi4_data->ic_on = true;
-	rmi4_data->flash_enabled = false;
-	rmi4_data->f12_data_registers_ptr =
-				find_function(SYNAPTICS_RMI4_F12 | DATA_TYPE);
+
 	rmi4_data->i2c_read = synaptics_rmi4_i2c_read;
 	rmi4_data->i2c_write = synaptics_rmi4_i2c_write;
 	rmi4_data->set_state = synaptics_dsx_sensor_state;
@@ -5524,15 +3193,6 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 	mutex_init(&(rmi4_data->rmi4_io_ctrl_mutex));
 	mutex_init(&(rmi4_data->state_mutex));
 
-	pinctrl = devm_pinctrl_get_select(&rmi4_data->i2c_client->dev,
-		"active");
-	if (IS_ERR(pinctrl)) {
-		long int error = PTR_ERR(pinctrl);
-		dev_err(&rmi4_data->i2c_client->dev,
-			"%s: pinctrl failed err %ld\n", __func__, error);
-		goto err_input_device;
-	}
-
 	if (platform_data->gpio_config)
 		retval = platform_data->gpio_config(platform_data, true);
 	else {
@@ -5559,52 +3219,25 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 		dev_err(&client->dev,
 				"%s: Failed to allocate input device\n",
 				__func__);
-		goto err_free_gpio;
+		goto err_input_device;
 	}
 
 	rmi4_data->regulator = regulator_get(&client->dev, "touch_vdd");
 	if (IS_ERR(rmi4_data->regulator)) {
-		if (PTR_ERR(rmi4_data->regulator) == -EPROBE_DEFER) {
-			retval = PTR_ERR(rmi4_data->regulator);
-			goto err_regulator_defer;
-		}
-		dev_warn(&client->dev,
+		dev_err(&client->dev,
 				"%s: Failed to get regulator\n",
 				__func__);
 	} else {
-		int error = regulator_enable(rmi4_data->regulator);
-		if (error) {
-			regulator_put(rmi4_data->regulator);
-			dev_err(&client->dev,
-				"%s: Error %d enabling touch-vdd regulator\n",
-				__func__, error);
-			goto err_regulator_enable;
-		}
 		platform_data->regulator_en = true;
+		regulator_enable(rmi4_data->regulator);
 		pr_debug("touch-vdd regulator is %s\n",
 			regulator_is_enabled(rmi4_data->regulator) ?
 			"on" : "off");
 	}
 
-	rmi4_data->vdd_quirk = devm_regulator_get(&client->dev, "vdd_quirk");
-	if (!IS_ERR(rmi4_data->vdd_quirk)) {
-		retval = regulator_enable(rmi4_data->vdd_quirk);
-		if (retval) {
-			dev_err(&client->dev, "Failed to enable vdd-quirk\n");
-			goto vdd_quirk_error;
-		}
-	} else {
-		retval = PTR_ERR(rmi4_data->regulator);
-		if (retval == -EPROBE_DEFER)
-			goto vdd_quirk_error;
-	}
-
-	retval = synaptics_dsx_ic_reset(rmi4_data, RMI4_HW_RESET);
+	retval = synaptics_dsx_ic_reset(rmi4_data, true);
 	if (retval > 0)
 		pr_debug("successful reset took %dms\n", retval);
-	else
-		dev_warn(&rmi4_data->i2c_client->dev, "%s: timed out waiting for idle\n",
-			__func__);
 
 	retval = synaptics_rmi4_query_device(rmi4_data);
 	if (retval < 0) {
@@ -5615,7 +3248,6 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 	}
 
 	init_waitqueue_head(&rmi4_data->wait);
-	INIT_WORK(&rmi4_data->resume_work, synaptics_dsx_queued_resume);
 
 #if defined(CONFIG_MMI_PANEL_NOTIFICATIONS)
 	rmi4_data->panel_nb.pre_display_off = synaptics_rmi4_suspend;
@@ -5663,42 +3295,10 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 
 	synaptics_dsx_sensor_ready_state(rmi4_data, true);
 
-	rmi4_data->rmi_reboot.notifier_call = rmi_reboot;
-	rmi4_data->rmi_reboot.next = NULL;
-	rmi4_data->rmi_reboot.priority = 1;
-	retval = register_reboot_notifier(&rmi4_data->rmi_reboot);
-	if (retval)
-		dev_err(&client->dev, "register for reboot failed\n");
-
 	mutex_lock(&exp_fn_ctrl_mutex);
 	exp_fn_ctrl.rmi4_data_ptr = rmi4_data;
 	mutex_unlock(&exp_fn_ctrl_mutex);
 
-#ifdef CONFIG_MMI_HALL_NOTIFICATIONS
-	/* register notifier at the end of probe to */
-	/* avoid unnecessary reset in STANDBY state */
-	rmi4_data->folio_notif.notifier_call = folio_notifier_callback;
-	dev_dbg(&client->dev, "registering folio notifier\n");
-	retval = mmi_hall_register_notifier(&rmi4_data->folio_notif,
-				MMI_HALL_FOLIO, true);
-	if (retval) {
-		dev_err(&client->dev,
-			"Error registering folio_notifier: %d\n", retval);
-		/* inability to register folio notifications handler */
-		/* is not fatal, thus reset return value to success */
-		retval = 0;
-	}
-#endif
-
-	synaptics_dsx_sysfs_touchscreen(rmi4_data, true);
-
-	if (rmi4_data->charger_detection)
-		ps_notifier_register(rmi4_data);
-
-	rmi4_data->pm_qos_irq.type = PM_QOS_REQ_AFFINE_IRQ;
-	rmi4_data->pm_qos_irq.irq = rmi4_data->irq;
-	pm_qos_add_request(&rmi4_data->pm_qos_irq, PM_QOS_CPU_DMA_LATENCY,
-			latency_in_effect);
 	return retval;
 
 err_sysfs:
@@ -5719,27 +3319,15 @@ err_query_device:
 		rmi4_data->input_dev = NULL;
 	}
 
-	if (!IS_ERR(rmi4_data->vdd_quirk))
-		regulator_disable(rmi4_data->vdd_quirk);
-
-vdd_quirk_error:
 	if (platform_data->regulator_en) {
 		regulator_disable(rmi4_data->regulator);
 		regulator_put(rmi4_data->regulator);
 	}
 
-err_regulator_enable:
 	synaptics_rmi4_cleanup(rmi4_data);
-
-err_regulator_defer:
 	input_free_device(rmi4_data->input_dev);
-err_free_gpio:
-	if (platform_data->gpio_config)
-		gpio_free(platform_data->irq_gpio);
-	gpio_set_value(platform_data->reset_gpio, 0);
-	gpio_free(platform_data->reset_gpio);
+
 err_input_device:
-	synaptics_dsx_free_modes(rmi4_data);
 	kfree(rmi4_data);
 
 	return retval;
@@ -5755,7 +3343,7 @@ err_input_device:
  * frees the interrupt, unregisters the driver from the input subsystem,
  * turns off the power to the sensor, and frees other allocated resources.
  */
-static int synaptics_rmi4_remove(struct i2c_client *client)
+static int __devexit synaptics_rmi4_remove(struct i2c_client *client)
 {
 	unsigned char attr_count;
 	struct synaptics_rmi4_data *rmi4_data = i2c_get_clientdata(client);
@@ -5771,7 +3359,7 @@ static int synaptics_rmi4_remove(struct i2c_client *client)
 		destroy_workqueue(exp_fn_ctrl.det_workqueue);
 	}
 
-	atomic_set(&rmi4_data->touch_stopped, 1);
+	rmi4_data->touch_stopped = true;
 	wake_up(&rmi4_data->wait);
 
 	synaptics_rmi4_irq_enable(rmi4_data, false);
@@ -5786,9 +3374,6 @@ static int synaptics_rmi4_remove(struct i2c_client *client)
 		rmi4_data->input_dev = NULL;
 	}
 
-	if (!IS_ERR(rmi4_data->vdd_quirk))
-		regulator_disable(rmi4_data->vdd_quirk);
-
 	if (platform_data->regulator_en) {
 		regulator_disable(rmi4_data->regulator);
 		regulator_put(rmi4_data->regulator);
@@ -5799,18 +3384,177 @@ static int synaptics_rmi4_remove(struct i2c_client *client)
 #elif defined(CONFIG_FB)
 	fb_unregister_client(&rmi4_data->panel_nb);
 #endif
-
-	synaptics_dsx_sysfs_touchscreen(rmi4_data, false);
 	synaptics_rmi4_cleanup(rmi4_data);
-	synaptics_dsx_free_modes(rmi4_data);
-	if (rmi4_data->charger_detection)
-		ps_notifier_unregister(rmi4_data);
-
-	pm_qos_remove_request(&rmi4_data->pm_qos_irq);
-
 	kfree(rmi4_data);
 
 	return 0;
+}
+
+static void synaptics_rmi4_sensor_multi_touch(
+		struct synaptics_rmi4_data *rmi4_data, unsigned char function)
+{
+	int retval;
+
+	switch (function) {
+	case SYNAPTICS_RMI4_F12:
+		/* Store multitouch config registers */
+		hob_data.f12_c20_0 = f12_c20_0;
+		hob_data.f12_c23_0 = f12_c23_0;
+		hob_data.f12_c23_1 = f12_c23_1;
+
+		if (!hob_data.f12_c20_0.x_suppression)
+			hob_data.f12_c20_0.x_suppression = X_MT_SUPPRESSION;
+
+		if (!hob_data.f12_c20_0.y_suppression)
+			hob_data.f12_c20_0.y_suppression = Y_MT_SUPPRESSION;
+		break;
+	case SYNAPTICS_RMI4_F01:
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+			rmi4_data->f01_ctrl_base_addr + 5,
+			&hob_data.f01_c9,
+			sizeof(hob_data.f01_c9));
+		if (retval < 0)
+			pr_err("error storing recalibration interval\n");
+		break;
+	}
+}
+
+ /**
+ * synaptics_rmi4_sensor_one_touch()
+ *
+ * Called on suspend and resume.
+ *
+ * This function reconfigures finger data acquisition.
+ */
+static void synaptics_rmi4_sensor_one_touch(
+		struct synaptics_rmi4_data *rmi4_data, bool enable)
+{
+	int retval;
+	unsigned char recalibration;
+	if (enable) {
+		f12_c20_0.x_suppression = X_1T_SUPPRESSION;
+		f12_c20_0.y_suppression = Y_1T_SUPPRESSION;
+		f12_c23_0.data[0] = TYPE_FINGER | TYPE_STYLUS;
+		f12_c23_1.max_num_reported_objects = 1;
+		recalibration = ONE_TOUCH_RECALIBRATION;
+	} else {
+		f12_c20_0 = hob_data.f12_c20_0;
+		f12_c23_0 = hob_data.f12_c23_0;
+		f12_c23_1 = hob_data.f12_c23_1;
+		recalibration = hob_data.f01_c9;
+	}
+
+	synaptics_rmi4_write_packet_reg(rmi4_data, &f12_ctrl_regs, 20);
+	synaptics_rmi4_write_packet_reg(rmi4_data, &f12_ctrl_regs, 23);
+	retval = synaptics_rmi4_i2c_write(rmi4_data,
+			rmi4_data->f01_ctrl_base_addr + 5,
+			&recalibration,
+			sizeof(recalibration));
+	if (retval < 0)
+		pr_err("error setting recalibration interval\n");
+}
+
+ /**
+ * synaptics_rmi4_sensor_sleep()
+ *
+ * Called by synaptics_dsx_sensor_state().
+ *
+ * This function stops finger data acquisition and puts the sensor to sleep.
+ */
+static void synaptics_rmi4_sensor_sleep(struct synaptics_rmi4_data *rmi4_data)
+{
+	int retval;
+	unsigned char device_ctrl;
+	unsigned char clear_mask = MASK_2BIT;
+	unsigned char set_mask = SENSOR_SLEEP;
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+			rmi4_data->f01_ctrl_base_addr,
+			&device_ctrl,
+			sizeof(device_ctrl));
+	if (retval < 0) {
+		dev_err(&(rmi4_data->input_dev->dev),
+				"%s: Failed to enter sleep mode\n",
+				__func__);
+		rmi4_data->sensor_sleep = false;
+		return;
+	}
+
+	if (rmi4_data->normal_mode >= 0) {
+		clear_mask = MASK_3BIT;
+		set_mask |= NO_SLEEP_OFF;
+	}
+
+	/* store ctrl register value to avoid being */
+	/* have to read its value when waking ic up */
+	rmi4_data->f01_ctrl_register_0 = device_ctrl;
+
+	device_ctrl = (device_ctrl & ~clear_mask);
+	device_ctrl = (device_ctrl | set_mask);
+
+	dev_dbg(&(rmi4_data->input_dev->dev),
+			"%s: Sleep mode 0x%x\n", __func__, device_ctrl);
+
+	retval = synaptics_rmi4_i2c_write(rmi4_data,
+			rmi4_data->f01_ctrl_base_addr,
+			&device_ctrl,
+			sizeof(device_ctrl));
+	if (retval < 0) {
+		dev_err(&(rmi4_data->input_dev->dev),
+				"%s: Failed to enter sleep mode\n",
+				__func__);
+		rmi4_data->sensor_sleep = false;
+		return;
+	} else {
+		rmi4_data->sensor_sleep = true;
+	}
+
+	return;
+}
+
+ /**
+ * synaptics_rmi4_sensor_wake()
+ *
+ * Called by synaptics_dsx_sensor_state().
+ *
+ * This function wakes the sensor from sleep.
+ */
+static void synaptics_rmi4_sensor_wake(struct synaptics_rmi4_data *rmi4_data)
+{
+	int retval;
+	unsigned char device_ctrl;
+	unsigned char clear_mask = MASK_3BIT;
+	unsigned char set_mask = NORMAL_OPERATION;
+
+	/* use ctrl register value stored when ic is put in sleep */
+	device_ctrl = rmi4_data->f01_ctrl_register_0;
+
+	if (rmi4_data->normal_mode < 0)
+		clear_mask = MASK_2BIT;
+	else if (rmi4_data->normal_mode == 0)
+		set_mask |= NO_SLEEP_ON;
+
+	device_ctrl = (device_ctrl & ~clear_mask);
+	device_ctrl = (device_ctrl | set_mask);
+
+	dev_dbg(&(rmi4_data->input_dev->dev),
+			"%s: Wake up to mode 0x%x\n", __func__, device_ctrl);
+
+	retval = synaptics_rmi4_i2c_write(rmi4_data,
+			rmi4_data->f01_ctrl_base_addr,
+			&device_ctrl,
+			sizeof(device_ctrl));
+	if (retval < 0) {
+		dev_err(&(rmi4_data->input_dev->dev),
+				"%s: Failed to wake from sleep mode\n",
+				__func__);
+		rmi4_data->sensor_sleep = true;
+		return;
+	} else {
+		rmi4_data->sensor_sleep = false;
+	}
+
+	return;
 }
 
 #if defined(CONFIG_FB) && !defined(CONFIG_MMI_PANEL_NOTIFICATIONS)
@@ -5818,102 +3562,19 @@ static int synaptics_dsx_panel_cb(struct notifier_block *nb,
 		unsigned long event, void *data)
 {
 	struct fb_event *evdata = data;
+	int *blank;
 	struct synaptics_rmi4_data *rmi4_data =
 		container_of(nb, struct synaptics_rmi4_data, panel_nb);
-#ifdef CONFIG_TOUCHSCREEN_DOUBLETAP2WAKE
-	bool prevent_sleep = (dt2w_switch > 0);
-			if (prevent_sleep) {
-				pr_debug("suspend avoided!\n");
-				synaptics_dsx_enable_wakeup_source(rmi4_data, true);
-				return 0;
-			} else {
-#endif
-	if ((event == rmi4_data->event_blank || event == FB_EVENT_BLANK) &&
-			evdata && evdata->info && evdata->info->node == 0 &&
-			evdata->data && rmi4_data) {
-		int *blank = evdata->data;
-		pr_debug("fb notification: event = %lu blank = %d\n", event, *blank);
-		/* entering suspend upon early blank or in-progress blank event*/
-		/* to ensure shared power supply is still on */
-		/* for in-cell design touch solutions */
-		if (event == rmi4_data->event_blank) {
-			if (*blank != FB_BLANK_POWERDOWN)
-				return 0;
-			synaptics_dsx_display_off(&rmi4_data->i2c_client->dev);
-		} else if (*blank == FB_BLANK_UNBLANK ||
-			(*blank == FB_BLANK_VSYNC_SUSPEND &&
-			atomic_read(&rmi4_data->touch_stopped))) {
-			synaptics_dsx_display_on(&rmi4_data->i2c_client->dev);
+
+	if (evdata && evdata->data && event == FB_EVENT_BLANK) {
+		blank = evdata->data;
+		if (*blank == FB_BLANK_UNBLANK) {
+			synaptics_rmi4_resume(&(rmi4_data->input_dev->dev));
+		} else if (*blank == FB_BLANK_POWERDOWN) {
+			synaptics_rmi4_suspend(&(rmi4_data->input_dev->dev));
 		}
 	}
-#ifdef CONFIG_TOUCHSCREEN_DOUBLETAP2WAKE
-	}
-#endif
 
-	return 0;
-}
-#endif
-
-#ifdef CONFIG_MMI_HALL_NOTIFICATIONS
-static int folio_notifier_callback(struct notifier_block *self,
-				 unsigned long event, void *data)
-{
-	int state, folio_state = *(int *)data;
-	struct synaptics_rmi4_data *rmi4_data =
-		container_of(self, struct synaptics_rmi4_data, folio_notif);
-
-	if (rmi4_data && event == MMI_HALL_FOLIO &&
-			rmi4_data && rmi4_data->i2c_client) {
-
-		state = synaptics_dsx_get_state_safe(rmi4_data);
-		dev_dbg(&rmi4_data->i2c_client->dev,
-			"state: %s(%d), suspend flag: %d, BL flag: %d\n",
-			synaptics_dsx_state_name(state), state,
-			atomic_read(&rmi4_data->touch_stopped),
-			rmi4_data->in_bootloader);
-		if (folio_state) {/* close */
-			rmi4_data->clipping_on = true;
-			synaptics_dsx_set_alternate_mode(rmi4_data,
-				rmi4_data->alternate_mode, false, true);
-		} else {/* open */
-			rmi4_data->clipping_on = false;
-			synaptics_dsx_restore_default_mode(rmi4_data);
-		}
-
-		dev_info(&rmi4_data->i2c_client->dev, "folio: %s\n",
-			folio_state ? "CLOSED" : "OPENED");
-
-		if (!(state & STATE_UI)) {
-			dev_dbg(&rmi4_data->i2c_client->dev, "Not in UI\n");
-			goto done;
-		}
-
-		if (!rmi4_data->in_bootloader) {
-			if (state == STATE_ACTIVE) {
-				int retval;
-				/* set unknown state to ensure IRQ gets */
-				/* enabled on state transition to active */
-				synaptics_dsx_sensor_state(
-						rmi4_data, STATE_UNKNOWN);
-				/* disable IRQ to handle reset */
-				synaptics_rmi4_irq_enable(rmi4_data, false);
-				/* perform SW reset to restore defaults */
-				retval = synaptics_dsx_ic_reset(
-						rmi4_data, RMI4_SW_RESET);
-				if (retval < 0)
-					dev_err(&rmi4_data->i2c_client->dev,
-						"folio: sw reset failed %d\n",
-						retval);
-				synaptics_dsx_sensor_ready_state(
-							rmi4_data, false);
-			}
-
-			synaptics_dsx_state_config(rmi4_data,
-					(state == STATE_SUSPEND) ?
-					SUSPEND_IDX : ACTIVE_IDX);
-		}
-	}
-done:
 	return 0;
 }
 #endif
@@ -6011,22 +3672,12 @@ static void synaptics_dsx_resumeinfo_touch(
  */
 static int synaptics_rmi4_suspend(struct device *dev)
 {
-	struct pinctrl *pinctrl;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	const struct synaptics_dsx_platform_data *platform_data =
 			rmi4_data->board;
-	static char ud_stats[PAGE_SIZE];
 
-	if (atomic_cmpxchg(&rmi4_data->touch_stopped, 0, 1) == 1)
-		return 0;
-
-	rmi4_data->flash_enabled = false;
 	synaptics_dsx_sensor_state(rmi4_data, STATE_SUSPEND);
-	synaptics_dsx_release_all(rmi4_data);
-
-	synaptics_dsx_ud_stat(rmi4_data, ud_stats, sizeof(ud_stats));
-	pr_info("%s\n", ud_stats);
+	rmi4_data->poweron = false;
 
 	if (rmi4_data->purge_enabled) {
 		int value = 1; /* set flag */
@@ -6034,16 +3685,7 @@ static int synaptics_rmi4_suspend(struct device *dev)
 		pr_debug("touches purge is %s\n", value ? "ON" : "OFF");
 	}
 
-	if (rmi4_data->ic_on) {
-		/* use pinctrl to put touch RESET GPIO into SUSPEND state */
-		gpio_free(platform_data->reset_gpio);
-		pinctrl = devm_pinctrl_get_select_default(
-			&rmi4_data->i2c_client->dev);
-		if (IS_ERR(pinctrl))
-			dev_err(&rmi4_data->i2c_client->dev,
-				"pinctrl failed err %ld\n", PTR_ERR(pinctrl));
-
-		/* if touch REGULATOR is available - turn it OFF */
+	if (!rmi4_data->touch_stopped) {
 		if (platform_data->regulator_en) {
 			regulator_disable(rmi4_data->regulator);
 			pr_debug("touch-vdd regulator is %s\n",
@@ -6051,10 +3693,10 @@ static int synaptics_rmi4_suspend(struct device *dev)
 				"on" : "off");
 		}
 
-		rmi4_data->ic_on = false;
-	}
+		gpio_free(platform_data->reset_gpio);
 
-	pm_qos_update_request(&rmi4_data->pm_qos_irq, PM_QOS_DEFAULT_VALUE);
+		rmi4_data->touch_stopped = true;
+	}
 
 	return 0;
 }
@@ -6071,70 +3713,50 @@ static int synaptics_rmi4_suspend(struct device *dev)
  */
 static int synaptics_rmi4_resume(struct device *dev)
 {
-	int retval;
-	int reset = RMI4_HW_RESET;
-	struct pinctrl *pinctrl;
-	struct synaptics_rmi4_data *rmi4_data =
-					i2c_get_clientdata(to_i2c_client(dev));
-	const struct synaptics_dsx_platform_data *platform_data =
-					rmi4_data->board;
-
-	if (atomic_cmpxchg(&rmi4_data->touch_stopped, 1, 0) == 0)
-		return 0;
-
-	pm_qos_update_request(&rmi4_data->pm_qos_irq, latency_in_effect);
-	pr_debug("set pm_qos latency %d\n", latency_in_effect);
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 
 	synaptics_dsx_resumeinfo_start(rmi4_data);
 
-	if (!rmi4_data->ic_on) {
-		/* if touch REGULATOR is avaialble - turn it ON */
+	if (rmi4_data->touch_stopped) {
+		int retval;
+		bool wait4idle = false;
+		const struct synaptics_dsx_platform_data *platform_data =
+						rmi4_data->board;
+
 		if (platform_data->regulator_en) {
-			int error = regulator_enable(rmi4_data->regulator);
-			if (error) {
-				pr_err("Error %d enabling touch-vdd regulator\n",
-					error);
-				return error;
-			}
+			regulator_enable(rmi4_data->regulator);
 			pr_debug("touch-vdd regulator is %s\n",
 				regulator_is_enabled(rmi4_data->regulator) ?
 				"on" : "off");
 		}
 
-		/* if RESET GPIO is in SUSPEND state - no HW reset */
 		retval = gpio_get_value(platform_data->reset_gpio);
 		pr_debug("reset gpio state: %d\n", retval);
 		if (retval == 0)
-			reset = RMI4_WAIT_READY;
-
-		pinctrl = devm_pinctrl_get_select(&rmi4_data->i2c_client->dev,
-			"active");
-		if (IS_ERR(pinctrl)) {
-			long int error = PTR_ERR(pinctrl);
-			dev_err(&rmi4_data->i2c_client->dev,
-				"pinctrl failed err %ld\n", error);
-		}
+			wait4idle = true;
 
 		if (gpio_request(platform_data->reset_gpio,
 						RESET_GPIO_NAME) < 0)
 			pr_err("failed to request reset gpio\n");
 
-		gpio_direction_output(platform_data->reset_gpio, 1);
-		rmi4_data->ic_on = true;
+		rmi4_data->touch_stopped = false;
+		/*
+		 * Decouple device reset and sending touch release, since
+		 * on resume resetting ic can be optional, while sending
+		 * release event is not
+		 */
+		synaptics_dsx_on_resume(rmi4_data);
+
+		if (rmi4_data->reset_on_resume)
+			synaptics_rmi4_reset_device(rmi4_data, NULL);
+		else if (wait4idle) {
+			retval = synaptics_dsx_ic_reset(rmi4_data, false);
+			pr_debug("waited for idle %dms\n", retval);
+		}
 	}
 
-	/* perform HW reset if needed and wait for touch IC boot completion */
-	retval = synaptics_dsx_ic_reset(rmi4_data, reset);
-	if (retval > 0)
-		pr_debug("waited for idle %dms\n", retval);
-	else
-		dev_warn(&rmi4_data->i2c_client->dev, "%s: timed out waiting for idle\n",
-			__func__);
-
-	/* read touch IC state */
 	synaptics_dsx_sensor_ready_state(rmi4_data, false);
-	/* transition to active state is completed - allow flashing */
-	rmi4_data->flash_enabled = true;
+	rmi4_data->poweron = true;
 
 	if (rmi4_data->purge_enabled) {
 		int value = 0; /* clear flag */
@@ -6143,6 +3765,7 @@ static int synaptics_rmi4_resume(struct device *dev)
 	}
 
 	synaptics_dsx_resumeinfo_finish(rmi4_data);
+
 	return 0;
 }
 
@@ -6174,7 +3797,7 @@ static struct i2c_driver synaptics_rmi4_driver = {
 #endif
 	},
 	.probe = synaptics_rmi4_probe,
-	.remove = synaptics_rmi4_remove,
+	.remove = __devexit_p(synaptics_rmi4_remove),
 	.id_table = synaptics_rmi4_id_table,
 };
 

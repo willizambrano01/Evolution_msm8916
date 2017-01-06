@@ -12,9 +12,11 @@
 #include <linux/init.h>
 #include <linux/bootmem.h>
 #include <asm/tlb.h>
-#include <asm/sections.h>
 
 unsigned long empty_zero_page;
+
+extern char _stext, _edata, _etext; /* From linkerscript */
+extern char __init_begin, __init_end;
 
 void __init
 mem_init(void)
@@ -33,7 +35,7 @@ mem_init(void)
 	max_mapnr = num_physpages = max_low_pfn - min_low_pfn;
  
 	/* this will put all memory onto the freelists */
-        free_all_bootmem();
+        totalram_pages = free_all_bootmem();
 
 	reservedpages = 0;
 	for (tmp = 0; tmp < max_mapnr; tmp++) {
@@ -65,5 +67,15 @@ mem_init(void)
 void 
 free_initmem(void)
 {
-	free_initmem_default(0);
+        unsigned long addr;
+
+        addr = (unsigned long)(&__init_begin);
+        for (; addr < (unsigned long)(&__init_end); addr += PAGE_SIZE) {
+                ClearPageReserved(virt_to_page(addr));
+                init_page_count(virt_to_page(addr));
+                free_page(addr);
+                totalram_pages++;
+        }
+        printk (KERN_INFO "Freeing unused kernel memory: %luk freed\n",
+		(unsigned long)((&__init_end - &__init_begin) >> 10));
 }

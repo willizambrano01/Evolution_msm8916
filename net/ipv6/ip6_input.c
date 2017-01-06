@@ -47,16 +47,9 @@
 
 
 
-int ip6_rcv_finish(struct sk_buff *skb)
+inline int ip6_rcv_finish( struct sk_buff *skb)
 {
-	if (sysctl_ip_early_demux && !skb_dst(skb) && skb->sk == NULL) {
-		const struct inet6_protocol *ipprot;
-
-		ipprot = rcu_dereference(inet6_protos[ipv6_hdr(skb)->nexthdr]);
-		if (ipprot && ipprot->early_demux)
-			ipprot->early_demux(skb);
-	}
-	if (!skb_dst(skb))
+	if (skb_dst(skb) == NULL)
 		ip6_route_input(skb);
 
 	return dst_input(skb);
@@ -196,12 +189,12 @@ drop:
 
 static int ip6_input_finish(struct sk_buff *skb)
 {
-	struct net *net = dev_net(skb_dst(skb)->dev);
 	const struct inet6_protocol *ipprot;
-	struct inet6_dev *idev;
 	unsigned int nhoff;
-	int nexthdr;
-	bool raw;
+	int nexthdr, raw;
+	u8 hash;
+	struct inet6_dev *idev;
+	struct net *net = dev_net(skb_dst(skb)->dev);
 
 	/*
 	 *	Parse extension headers
@@ -216,7 +209,9 @@ resubmit:
 	nexthdr = skb_network_header(skb)[nhoff];
 
 	raw = raw6_local_deliver(skb, nexthdr);
-	if ((ipprot = rcu_dereference(inet6_protos[nexthdr])) != NULL) {
+
+	hash = nexthdr & (MAX_INET_PROTOS - 1);
+	if ((ipprot = rcu_dereference(inet6_protos[hash])) != NULL) {
 		int ret;
 
 		if (ipprot->flags & INET6_PROTO_FINAL) {
@@ -233,7 +228,7 @@ resubmit:
 			if (ipv6_addr_is_multicast(&hdr->daddr) &&
 			    !ipv6_chk_mcast_addr(skb->dev, &hdr->daddr,
 			    &hdr->saddr) &&
-			    !ipv6_is_mld(skb, nexthdr, skb_network_header_len(skb)))
+			    !ipv6_is_mld(skb, nexthdr))
 				goto discard;
 		}
 		if (!(ipprot->flags & INET6_PROTO_NOPOLICY) &&
@@ -253,11 +248,9 @@ resubmit:
 				icmpv6_send(skb, ICMPV6_PARAMPROB,
 					    ICMPV6_UNK_NEXTHDR, nhoff);
 			}
-			kfree_skb(skb);
-		} else {
+		} else
 			IP6_INC_STATS_BH(net, idev, IPSTATS_MIB_INDELIVERS);
-			consume_skb(skb);
-		}
+		kfree_skb(skb);
 	}
 	rcu_read_unlock();
 	return 0;
@@ -279,7 +272,7 @@ int ip6_input(struct sk_buff *skb)
 int ip6_mc_input(struct sk_buff *skb)
 {
 	const struct ipv6hdr *hdr;
-	bool deliver;
+	int deliver;
 
 	IP6_UPD_PO_STATS_BH(dev_net(skb_dst(skb)->dev),
 			 ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_INMCAST,
@@ -304,8 +297,10 @@ int ip6_mc_input(struct sk_buff *skb)
 		struct inet6_skb_parm *opt = IP6CB(skb);
 
 		/* Check for MLD */
-		if (unlikely(opt->flags & IP6SKB_ROUTERALERT)) {
+		if (unlikely(opt->ra)) {
 			/* Check if this is a mld message */
+			u8 *ptr = skb_network_header(skb) + opt->ra;
+			struct icmp6hdr *icmp6;
 			u8 nexthdr = hdr->nexthdr;
 			__be16 frag_off;
 			int offset;
@@ -313,8 +308,8 @@ int ip6_mc_input(struct sk_buff *skb)
 			/* Check if the value of Router Alert
 			 * is for MLD (0x0000).
 			 */
-			if (opt->ra == htons(IPV6_OPT_ROUTERALERT_MLD)) {
-				deliver = false;
+			if ((ptr[2] | ptr[3]) == 0) {
+				deliver = 0;
 
 				if (!ipv6_ext_hdr(nexthdr)) {
 					/* BUG */
@@ -325,10 +320,24 @@ int ip6_mc_input(struct sk_buff *skb)
 				if (offset < 0)
 					goto out;
 
-				if (!ipv6_is_mld(skb, nexthdr, offset))
+				if (nexthdr != IPPROTO_ICMPV6)
 					goto out;
 
-				deliver = true;
+				if (!pskb_may_pull(skb, (skb_network_header(skb) +
+						   offset + 1 - skb->data)))
+					goto out;
+
+				icmp6 = (struct icmp6hdr *)(skb_network_header(skb) + offset);
+
+				switch (icmp6->icmp6_type) {
+				case ICMPV6_MGM_QUERY:
+				case ICMPV6_MGM_REPORT:
+				case ICMPV6_MGM_REDUCTION:
+				case ICMPV6_MLD2_REPORT:
+					deliver = 1;
+					break;
+				}
+				goto out;
 			}
 			/* unknown RA - process it normally */
 		}

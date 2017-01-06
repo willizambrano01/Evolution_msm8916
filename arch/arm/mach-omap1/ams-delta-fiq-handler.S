@@ -16,9 +16,8 @@
 #include <linux/linkage.h>
 #include <asm/assembler.h>
 
-#include <mach/board-ams-delta.h>
+#include <plat/board-ams-delta.h>
 
-#include <mach/irqs.h>
 #include <mach/ams-delta-fiq.h>
 
 #include "iomap.h"

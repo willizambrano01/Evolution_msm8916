@@ -53,8 +53,7 @@ static unsigned int sc520_freq_get_cpu_frequency(unsigned int cpu)
 	}
 }
 
-static void sc520_freq_set_cpu_state(struct cpufreq_policy *policy,
-		unsigned int state)
+static void sc520_freq_set_cpu_state(unsigned int state)
 {
 
 	struct cpufreq_freqs	freqs;
@@ -62,8 +61,9 @@ static void sc520_freq_set_cpu_state(struct cpufreq_policy *policy,
 
 	freqs.old = sc520_freq_get_cpu_frequency(0);
 	freqs.new = sc520_freq_table[state].frequency;
+	freqs.cpu = 0; /* AMD Elan is UP */
 
-	cpufreq_notify_transition(policy, &freqs, CPUFREQ_PRECHANGE);
+	cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
 
 	pr_debug("attempting to set frequency to %i kHz\n",
 			sc520_freq_table[state].frequency);
@@ -71,11 +71,11 @@ static void sc520_freq_set_cpu_state(struct cpufreq_policy *policy,
 	local_irq_disable();
 
 	clockspeed_reg = *cpuctl & ~0x03;
-	*cpuctl = clockspeed_reg | sc520_freq_table[state].driver_data;
+	*cpuctl = clockspeed_reg | sc520_freq_table[state].index;
 
 	local_irq_enable();
 
-	cpufreq_notify_transition(policy, &freqs, CPUFREQ_POSTCHANGE);
+	cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
 };
 
 static int sc520_freq_verify(struct cpufreq_policy *policy)
@@ -93,7 +93,7 @@ static int sc520_freq_target(struct cpufreq_policy *policy,
 				target_freq, relation, &newstate))
 		return -EINVAL;
 
-	sc520_freq_set_cpu_state(policy, newstate);
+	sc520_freq_set_cpu_state(newstate);
 
 	return 0;
 }
@@ -147,6 +147,7 @@ static struct cpufreq_driver sc520_freq_driver = {
 	.init	= sc520_freq_cpu_init,
 	.exit	= sc520_freq_cpu_exit,
 	.name	= "sc520_freq",
+	.owner	= THIS_MODULE,
 	.attr	= sc520_freq_attr,
 };
 

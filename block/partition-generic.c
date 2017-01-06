@@ -85,7 +85,7 @@ ssize_t part_size_show(struct device *dev,
 		       struct device_attribute *attr, char *buf)
 {
 	struct hd_struct *p = dev_to_part(dev);
-	return sprintf(buf, "%llu\n",(unsigned long long)part_nr_sects_read(p));
+	return sprintf(buf, "%llu\n",(unsigned long long)p->nr_sects);
 }
 
 static ssize_t part_ro_show(struct device *dev,
@@ -121,7 +121,7 @@ ssize_t part_stat_show(struct device *dev,
 	return sprintf(buf,
 		"%8lu %8lu %8llu %8u "
 		"%8lu %8lu %8llu %8u "
-		"%8u %8u %8u %8llu"
+		"%8u %8u %8u"
 		"\n",
 		part_stat_read(p, ios[READ]),
 		part_stat_read(p, merges[READ]),
@@ -133,8 +133,7 @@ ssize_t part_stat_show(struct device *dev,
 		jiffies_to_msecs(part_stat_read(p, ticks[WRITE])),
 		part_in_flight(p),
 		jiffies_to_msecs(part_stat_read(p, io_ticks)),
-		jiffies_to_msecs(part_stat_read(p, time_in_queue)),
-		(unsigned long long)part_stat_read(p, data_sectors));
+		jiffies_to_msecs(part_stat_read(p, time_in_queue)));
 }
 
 ssize_t part_inflight_show(struct device *dev,
@@ -310,8 +309,6 @@ struct hd_struct *add_partition(struct gendisk *disk, int partno,
 		err = -ENOMEM;
 		goto out_free;
 	}
-
-	seqcount_init(&p->nr_sects_seq);
 	pdev = part_to_dev(p);
 
 	p->start_sect = start;
@@ -434,7 +431,7 @@ int rescan_partitions(struct gendisk *disk, struct block_device *bdev)
 	int p, highest, res;
 rescan:
 	if (state && !IS_ERR(state)) {
-		free_partitions(state);
+		kfree(state);
 		state = NULL;
 	}
 
@@ -541,7 +538,7 @@ rescan:
 			md_autodetect_dev(part_to_dev(part)->devt);
 #endif
 	}
-	free_partitions(state);
+	kfree(state);
 	return 0;
 }
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -12,36 +12,48 @@
 
 #ifndef DIAGFWD_HSIC_H
 #define DIAGFWD_HSIC_H
-#ifdef CONFIG_DIAG_OVER_USB
-#include <linux/usb/usbdiag.h>
-#endif
-#include <linux/usb/diag_bridge.h>
 
-#define HSIC_1			0
-#define HSIC_2			1
-#define NUM_HSIC_DEV		2
+#include <mach/diag_bridge.h>
 
-#define DIAG_HSIC_NAME_SZ	24
+#define N_MDM_WRITE	8
+#define N_MDM_READ	1
+#define NUM_HSIC_BUF_TBL_ENTRIES N_MDM_WRITE
+#define MAX_HSIC_CH	4
+#define REOPEN_HSIC 1
+#define DONT_REOPEN_HSIC 0
+int diagfwd_write_complete_hsic(struct diag_request *, int index);
+int diagfwd_cancel_hsic(int reopen);
+void diag_read_usb_hsic_work_fn(struct work_struct *work);
+void diag_usb_read_complete_hsic_fn(struct work_struct *w);
+extern struct diag_bridge_ops hsic_diag_bridge_ops[MAX_HSIC_CH];
+extern struct platform_driver msm_hsic_ch_driver;
+void diag_hsic_close(int);
 
-struct diag_hsic_info {
+/* Diag-HSIC structure, n HSIC bridges can be used at same time
+ * for instance HSIC(0), HS-USB(1) working at same time
+ */
+struct diag_hsic_dev {
 	int id;
-	int dev_id;
-	int mempool;
-	uint8_t opened;
-	uint8_t enabled;
-	uint8_t suspended;
-	char name[DIAG_HSIC_NAME_SZ];
-	struct work_struct read_work;
-	struct work_struct open_work;
-	struct work_struct close_work;
-	struct workqueue_struct *hsic_wq;
-	spinlock_t lock;
+	int hsic_ch;
+	int hsic_inited;
+	int hsic_device_enabled;
+	int hsic_device_opened;
+	int hsic_suspend;
+	int hsic_data_requested;
+	int in_busy_hsic_read_on_device;
+	int in_busy_hsic_write;
+	struct work_struct diag_read_hsic_work;
+	int count_hsic_pool;
+	int count_hsic_write_pool;
+	unsigned int poolsize_hsic;
+	unsigned int poolsize_hsic_write;
+	unsigned int itemsize_hsic;
+	unsigned int itemsize_hsic_write;
+	mempool_t *diag_hsic_pool;
+	mempool_t *diag_hsic_write_pool;
+	int num_hsic_buf_tbl_entries;
+	struct diag_write_device *hsic_buf_tbl;
+	spinlock_t hsic_spinlock;
 };
 
-extern struct diag_hsic_info diag_hsic[NUM_HSIC_DEV];
-
-int diag_hsic_init(void);
-void diag_hsic_exit(void);
-
 #endif
-

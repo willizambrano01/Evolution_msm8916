@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1998-2014 Erez Zadok
+ * Copyright (c) 1998-2013 Erez Zadok
  * Copyright (c) 2009	   Shrikar Archak
- * Copyright (c) 2003-2014 Stony Brook University
- * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2003-2013 Stony Brook University
+ * Copyright (c) 2003-2013 The Research Foundation of SUNY
  * Copyright (C) 2013-2014 Motorola Mobility, LLC
  *
  * This program is free software; you can redistribute it and/or modify
@@ -11,15 +11,14 @@
  */
 
 #include "esdfs.h"
-#include <linux/fsnotify.h>
 
 static int esdfs_create(struct inode *dir, struct dentry *dentry,
-			 umode_t mode, bool want_excl)
+			 umode_t mode, struct nameidata *nd)
 {
 	int err = 0;
 	struct dentry *lower_dentry;
 	struct dentry *lower_parent_dentry = NULL;
-	struct path lower_path;
+	struct path lower_path, saved_path;
 	struct inode *lower_inode;
 	int mask;
 	const struct cred *creds;
@@ -32,9 +31,6 @@ static int esdfs_create(struct inode *dir, struct dentry *dentry,
 	    esdfs_check_derived_permission(dir, ESDFS_MAY_CREATE) != 0)
 		return -EACCES;
 
-	if (test_opt(ESDFS_SB(dir->i_sb), ACCESS_DISABLE))
-		return -ENOENT;
-
 	creds = esdfs_override_creds(ESDFS_SB(dir->i_sb), &mask);
 	if (!creds)
 		return -ENOMEM;
@@ -43,10 +39,17 @@ static int esdfs_create(struct inode *dir, struct dentry *dentry,
 	lower_dentry = lower_path.dentry;
 	lower_parent_dentry = lock_parent(lower_dentry);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
+
 	esdfs_set_lower_mode(ESDFS_SB(dir->i_sb), &mode);
 
 	lower_inode = esdfs_lower_inode(dir);
-	err = vfs_create(lower_inode, lower_dentry, mode, want_excl);
+	pathcpy(&saved_path, &nd->path);
+	pathcpy(&nd->path, &lower_path);
+	err = vfs_create(lower_inode, lower_dentry, mode, nd);
+	pathcpy(&nd->path, &saved_path);
 	if (err)
 		goto out;
 
@@ -57,6 +60,8 @@ static int esdfs_create(struct inode *dir, struct dentry *dentry,
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_parent_dentry);
 	esdfs_put_lower_path(dentry, &lower_path);
 	esdfs_revert_creds(creds, &mask);
@@ -76,18 +81,14 @@ static int esdfs_unlink(struct inode *dir, struct dentry *dentry)
 	if (!creds)
 		return -ENOMEM;
 
-	if (test_opt(ESDFS_SB(dir->i_sb), ACCESS_DISABLE)) {
-		esdfs_revert_creds(creds, NULL);
-		return -ENOENT;
-	}
-
 	esdfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
 	dget(lower_dentry);
 	lower_dir_dentry = lock_parent(lower_dentry);
 
-	esdfs_drop_shared_icache(dir->i_sb, lower_dentry->d_inode);
-
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
 	err = vfs_unlink(lower_dir_inode, lower_dentry);
 
 	/*
@@ -108,46 +109,13 @@ static int esdfs_unlink(struct inode *dir, struct dentry *dentry)
 	dentry->d_inode->i_ctime = dir->i_ctime;
 	d_drop(dentry); /* this is needed, else LTP fails (VFS won't do it) */
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_dir_dentry);
 	dput(lower_dentry);
 	esdfs_put_lower_path(dentry, &lower_path);
 	esdfs_revert_creds(creds, NULL);
 	return err;
-}
-
-/* drop all shared dentries from other superblocks */
-void esdfs_drop_sb_icache(struct super_block *sb, unsigned long ino)
-{
-	struct inode *inode = ilookup(sb, ino);
-	struct dentry *dentry, *dir_dentry;
-
-	if (!inode)
-		return;
-
-	dentry = d_find_any_alias(inode);
-
-	if (!dentry) {
-		iput(inode);
-		return;
-	}
-
-	dir_dentry = lock_parent(dentry);
-
-	mutex_lock(&inode->i_mutex);
-	set_nlink(inode, esdfs_lower_inode(inode)->i_nlink);
-	d_drop(dentry);
-	dont_mount(dentry);
-	mutex_unlock(&inode->i_mutex);
-
-	/* We don't d_delete() NFS sillyrenamed files--they still exist. */
-	if (!(dentry->d_flags & DCACHE_NFSFS_RENAMED)) {
-		fsnotify_link_count(inode);
-		d_delete(dentry);
-	}
-
-	unlock_dir(dir_dentry);
-	dput(dentry);
-	iput(inode);
 }
 
 static int esdfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
@@ -162,11 +130,6 @@ static int esdfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	if (!creds)
 		return -ENOMEM;
 
-	if (test_opt(ESDFS_SB(dir->i_sb), ACCESS_DISABLE)) {
-		esdfs_revert_creds(creds, NULL);
-		return -ENOENT;
-	}
-
 	esdfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
 	lower_parent_dentry = lock_parent(lower_dentry);
@@ -174,6 +137,9 @@ static int esdfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	mode |= S_IFDIR;
 	esdfs_set_lower_mode(ESDFS_SB(dir->i_sb), &mode);
 
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
 	err = vfs_mkdir(lower_parent_dentry->d_inode, lower_dentry, mode);
 	if (err)
 		goto out;
@@ -191,6 +157,8 @@ static int esdfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 		err = esdfs_derive_mkdir_contents(dentry);
 
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_parent_dentry);
 	esdfs_put_lower_path(dentry, &lower_path);
 	esdfs_revert_creds(creds, &mask);
@@ -216,8 +184,9 @@ static int esdfs_rmdir(struct inode *dir, struct dentry *dentry)
 	lower_dentry = lower_path.dentry;
 	lower_dir_dentry = lock_parent(lower_dentry);
 
-	esdfs_drop_shared_icache(dir->i_sb, lower_dentry->d_inode);
-
+	err = mnt_want_write(lower_path.mnt);
+	if (err)
+		goto out_unlock;
 	err = vfs_rmdir(lower_dir_dentry->d_inode, lower_dentry);
 	if (err)
 		goto out;
@@ -230,6 +199,8 @@ static int esdfs_rmdir(struct inode *dir, struct dentry *dentry)
 	set_nlink(dir, lower_dir_dentry->d_inode->i_nlink);
 
 out:
+	mnt_drop_write(lower_path.mnt);
+out_unlock:
 	unlock_dir(lower_dir_dentry);
 	esdfs_put_lower_path(dentry, &lower_path);
 	esdfs_revert_creds(creds, NULL);
@@ -255,11 +226,6 @@ static int esdfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			esdfs_override_creds(ESDFS_SB(old_dir->i_sb), &mask);
 	if (!creds)
 		return -ENOMEM;
-
-	if (test_opt(ESDFS_SB(old_dir->i_sb), ACCESS_DISABLE)) {
-		esdfs_revert_creds(creds, NULL);
-		return -ENOENT;
-	}
 
 	/* Never rename to or from a pseudo hard link target. */
 	if (ESDFS_DENTRY_HAS_STUB(old_dentry))
@@ -289,10 +255,17 @@ static int esdfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		goto out;
 	}
 
+	err = mnt_want_write(lower_old_path.mnt);
+	if (err)
+		goto out;
+	err = mnt_want_write(lower_new_path.mnt);
+	if (err)
+		goto out_drop_old_write;
+
 	err = vfs_rename(lower_old_dir_dentry->d_inode, lower_old_dentry,
 			 lower_new_dir_dentry->d_inode, lower_new_dentry);
 	if (err)
-		goto out;
+		goto out_err;
 
 	esdfs_copy_attr(new_dir, lower_new_dir_dentry->d_inode);
 	fsstack_copy_inode_size(new_dir, lower_new_dir_dentry->d_inode);
@@ -308,6 +281,10 @@ static int esdfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		d_drop(old_dentry);
 	if (ESDFS_DENTRY_HAS_STUB(new_dentry))
 		d_drop(new_dentry);
+out_err:
+	mnt_drop_write(lower_new_path.mnt);
+out_drop_old_write:
+	mnt_drop_write(lower_old_path.mnt);
 out:
 	unlock_rename(lower_old_dir_dentry, lower_new_dir_dentry);
 	esdfs_put_lower_parent(old_dentry, &lower_old_dir_dentry);
@@ -361,9 +338,6 @@ static int esdfs_setattr(struct dentry *dentry, struct iattr *ia)
 		return 0;
 
 	inode = dentry->d_inode;
-
-	if (test_opt(ESDFS_SB(inode->i_sb), ACCESS_DISABLE))
-		return -ENOENT;
 
 	/*
 	 * Check if user has permission to change inode.  We don't check if
@@ -440,6 +414,8 @@ static int esdfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 {
 	int err;
 	struct path lower_path;
+	struct vfsmount *lower_mount;
+	struct dentry *lower_dentry;
 	struct kstat lower_stat;
 	struct inode *lower_inode;
 	struct inode *inode = dentry->d_inode;
@@ -448,15 +424,12 @@ static int esdfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	if (!creds)
 		return -ENOMEM;
 
-	if (test_opt(ESDFS_SB(inode->i_sb), ACCESS_DISABLE)) {
-		esdfs_revert_creds(creds, NULL);
-		return -ENOENT;
-	}
-
 	esdfs_get_lower_path(dentry, &lower_path);
+	lower_mount = lower_path.mnt;
+	lower_dentry = lower_path.dentry;
 
 	/* We need the lower getattr to calculate stat->blocks for us. */
-	err = vfs_getattr(&lower_path, &lower_stat);
+	err = vfs_getattr(lower_mount, lower_dentry, &lower_stat);
 	if (err)
 		goto out;
 

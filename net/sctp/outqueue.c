@@ -63,7 +63,6 @@ static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn);
 static void sctp_check_transmitted(struct sctp_outq *q,
 				   struct list_head *transmitted_queue,
 				   struct sctp_transport *transport,
-				   union sctp_addr *saddr,
 				   struct sctp_sackhdr *sack,
 				   __u32 *highest_new_tsn);
 
@@ -206,8 +205,6 @@ static inline int sctp_cacc_skip(struct sctp_transport *primary,
  */
 void sctp_outq_init(struct sctp_association *asoc, struct sctp_outq *q)
 {
-	memset(q, 0, sizeof(struct sctp_outq));
-
 	q->asoc = asoc;
 	INIT_LIST_HEAD(&q->out_chunk_list);
 	INIT_LIST_HEAD(&q->control_chunk_list);
@@ -215,7 +212,13 @@ void sctp_outq_init(struct sctp_association *asoc, struct sctp_outq *q)
 	INIT_LIST_HEAD(&q->sacked);
 	INIT_LIST_HEAD(&q->abandoned);
 
+	q->fast_rtx = 0;
+	q->outstanding_bytes = 0;
 	q->empty = 1;
+	q->cork  = 0;
+
+	q->malloced = 0;
+	q->out_qlen = 0;
 }
 
 /* Free the outqueue structure and any related pending chunks.
@@ -291,12 +294,15 @@ void sctp_outq_free(struct sctp_outq *q)
 {
 	/* Throw away leftover chunks. */
 	__sctp_outq_teardown(q);
+
+	/* If we were kmalloc()'d, free the memory.  */
+	if (q->malloced)
+		kfree(q);
 }
 
 /* Put a new chunk in an sctp_outq.  */
 int sctp_outq_tail(struct sctp_outq *q, struct sctp_chunk *chunk)
 {
-	struct net *net = sock_net(q->asoc->base.sk);
 	int error = 0;
 
 	SCTP_DEBUG_PRINTK("sctp_outq_tail(%p, %p[%s])\n",
@@ -335,15 +341,15 @@ int sctp_outq_tail(struct sctp_outq *q, struct sctp_chunk *chunk)
 
 			sctp_outq_tail_data(q, chunk);
 			if (chunk->chunk_hdr->flags & SCTP_DATA_UNORDERED)
-				SCTP_INC_STATS(net, SCTP_MIB_OUTUNORDERCHUNKS);
+				SCTP_INC_STATS(SCTP_MIB_OUTUNORDERCHUNKS);
 			else
-				SCTP_INC_STATS(net, SCTP_MIB_OUTORDERCHUNKS);
+				SCTP_INC_STATS(SCTP_MIB_OUTORDERCHUNKS);
 			q->empty = 0;
 			break;
 		}
 	} else {
 		list_add_tail(&chunk->list, &q->control_chunk_list);
-		SCTP_INC_STATS(net, SCTP_MIB_OUTCTRLCHUNKS);
+		SCTP_INC_STATS(SCTP_MIB_OUTCTRLCHUNKS);
 	}
 
 	if (error < 0)
@@ -476,12 +482,11 @@ void sctp_retransmit_mark(struct sctp_outq *q,
 void sctp_retransmit(struct sctp_outq *q, struct sctp_transport *transport,
 		     sctp_retransmit_reason_t reason)
 {
-	struct net *net = sock_net(q->asoc->base.sk);
 	int error = 0;
 
 	switch(reason) {
 	case SCTP_RTXR_T3_RTX:
-		SCTP_INC_STATS(net, SCTP_MIB_T3_RETRANSMITS);
+		SCTP_INC_STATS(SCTP_MIB_T3_RETRANSMITS);
 		sctp_transport_lower_cwnd(transport, SCTP_LOWER_CWND_T3_RTX);
 		/* Update the retran path if the T3-rtx timer has expired for
 		 * the current retran path.
@@ -492,15 +497,15 @@ void sctp_retransmit(struct sctp_outq *q, struct sctp_transport *transport,
 			transport->asoc->unack_data;
 		break;
 	case SCTP_RTXR_FAST_RTX:
-		SCTP_INC_STATS(net, SCTP_MIB_FAST_RETRANSMITS);
+		SCTP_INC_STATS(SCTP_MIB_FAST_RETRANSMITS);
 		sctp_transport_lower_cwnd(transport, SCTP_LOWER_CWND_FAST_RTX);
 		q->fast_rtx = 1;
 		break;
 	case SCTP_RTXR_PMTUD:
-		SCTP_INC_STATS(net, SCTP_MIB_PMTUD_RETRANSMITS);
+		SCTP_INC_STATS(SCTP_MIB_PMTUD_RETRANSMITS);
 		break;
 	case SCTP_RTXR_T1_RTX:
-		SCTP_INC_STATS(net, SCTP_MIB_T1_RETRANSMITS);
+		SCTP_INC_STATS(SCTP_MIB_T1_RETRANSMITS);
 		transport->asoc->init_retries++;
 		break;
 	default:
@@ -588,8 +593,9 @@ static int sctp_outq_flush_rtx(struct sctp_outq *q, struct sctp_packet *pkt,
 		 * next chunk.
 		 */
 		if (chunk->tsn_gap_acked) {
-			list_move_tail(&chunk->transmitted_list,
-				       &transport->transmitted);
+			list_del(&chunk->transmitted_list);
+			list_add_tail(&chunk->transmitted_list,
+					&transport->transmitted);
 			continue;
 		}
 
@@ -653,8 +659,9 @@ redo:
 			/* The append was successful, so add this chunk to
 			 * the transmitted list.
 			 */
-			list_move_tail(&chunk->transmitted_list,
-				       &transport->transmitted);
+			list_del(&chunk->transmitted_list);
+			list_add_tail(&chunk->transmitted_list,
+					&transport->transmitted);
 
 			/* Mark the chunk as ineligible for fast retransmit
 			 * after it is retransmitted.
@@ -663,7 +670,6 @@ redo:
 				chunk->fast_retransmit = SCTP_DONT_FRTX;
 
 			q->empty = 0;
-			q->asoc->stats.rtxchunks++;
 			break;
 		}
 
@@ -699,10 +705,11 @@ redo:
 /* Cork the outqueue so queued chunks are really queued. */
 int sctp_outq_uncork(struct sctp_outq *q)
 {
+	int error = 0;
 	if (q->cork)
 		q->cork = 0;
-
-	return sctp_outq_flush(q, 0);
+	error = sctp_outq_flush(q, 0);
+	return error;
 }
 
 
@@ -789,8 +796,7 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 			if (!new_transport)
 				new_transport = asoc->peer.active_path;
 		} else if ((new_transport->state == SCTP_INACTIVE) ||
-			   (new_transport->state == SCTP_UNCONFIRMED) ||
-			   (new_transport->state == SCTP_PF)) {
+			   (new_transport->state == SCTP_UNCONFIRMED)) {
 			/* If the chunk is Heartbeat or Heartbeat Ack,
 			 * send it to chunk->transport, even if it's
 			 * inactive.
@@ -872,14 +878,12 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 			if (status  != SCTP_XMIT_OK) {
 				/* put the chunk back */
 				list_add(&chunk->list, &q->control_chunk_list);
-			} else {
-				asoc->stats.octrlchunks++;
+			} else if (chunk->chunk_hdr->type == SCTP_CID_FWD_TSN) {
 				/* PR-SCTP C5) If a FORWARD TSN is sent, the
 				 * sender MUST assure that at least one T3-rtx
 				 * timer is running.
 				 */
-				if (chunk->chunk_hdr->type == SCTP_CID_FWD_TSN)
-					sctp_transport_reset_timers(transport);
+				sctp_transport_reset_timers(transport);
 			}
 			break;
 
@@ -987,8 +991,7 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 			new_transport = chunk->transport;
 			if (!new_transport ||
 			    ((new_transport->state == SCTP_INACTIVE) ||
-			     (new_transport->state == SCTP_UNCONFIRMED) ||
-			     (new_transport->state == SCTP_PF)))
+			     (new_transport->state == SCTP_UNCONFIRMED)))
 				new_transport = asoc->peer.active_path;
 			if (new_transport->state == SCTP_UNCONFIRMED)
 				continue;
@@ -1053,10 +1056,6 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 				 */
 				if (asoc->state == SCTP_STATE_SHUTDOWN_PENDING)
 					chunk->chunk_hdr->flags |= SCTP_DATA_SACK_IMM;
-				if (chunk->chunk_hdr->flags & SCTP_DATA_UNORDERED)
-					asoc->stats.ouodchunks++;
-				else
-					asoc->stats.oodchunks++;
 
 				break;
 
@@ -1142,10 +1141,9 @@ static void sctp_sack_update_unack_data(struct sctp_association *assoc,
  * Process the SACK against the outqueue.  Mostly, this just frees
  * things off the transmitted queue.
  */
-int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
+int sctp_outq_sack(struct sctp_outq *q, struct sctp_sackhdr *sack)
 {
 	struct sctp_association *asoc = q->asoc;
-	struct sctp_sackhdr *sack = chunk->subh.sack_hdr;
 	struct sctp_transport *transport;
 	struct sctp_chunk *tchunk = NULL;
 	struct list_head *lchunk, *transport_list, *temp;
@@ -1153,7 +1151,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	__u32 sack_ctsn, ctsn, tsn;
 	__u32 highest_tsn, highest_new_tsn;
 	__u32 sack_a_rwnd;
-	unsigned int outstanding;
+	unsigned outstanding;
 	struct sctp_transport *primary = asoc->peer.primary_path;
 	int count_of_newacks = 0;
 	int gap_ack_blocks;
@@ -1164,7 +1162,6 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 
 	sack_ctsn = ntohl(sack->cum_tsn_ack);
 	gap_ack_blocks = ntohs(sack->num_gap_ack_blocks);
-	asoc->stats.gapcnt += gap_ack_blocks;
 	/*
 	 * SFR-CACC algorithm:
 	 * On receipt of a SACK the sender SHOULD execute the
@@ -1215,7 +1212,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	/* Run through the retransmit queue.  Credit bytes received
 	 * and free those chunks that we can.
 	 */
-	sctp_check_transmitted(q, &q->retransmit, NULL, NULL, sack, &highest_new_tsn);
+	sctp_check_transmitted(q, &q->retransmit, NULL, sack, &highest_new_tsn);
 
 	/* Run through the transmitted queue.
 	 * Credit bytes received and free those chunks which we can.
@@ -1224,8 +1221,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	 */
 	list_for_each_entry(transport, transport_list, transports) {
 		sctp_check_transmitted(q, &transport->transmitted,
-				       transport, &chunk->source, sack,
-				       &highest_new_tsn);
+				       transport, sack, &highest_new_tsn);
 		/*
 		 * SFR-CACC algorithm:
 		 * C) Let count_of_newacks be the number of
@@ -1332,7 +1328,6 @@ int sctp_outq_is_empty(const struct sctp_outq *q)
 static void sctp_check_transmitted(struct sctp_outq *q,
 				   struct list_head *transmitted_queue,
 				   struct sctp_transport *transport,
-				   union sctp_addr *saddr,
 				   struct sctp_sackhdr *sack,
 				   __u32 *highest_new_tsn_in_sack)
 {
@@ -1640,9 +1635,8 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 			/* Mark the destination transport address as
 			 * active if it is not so marked.
 			 */
-			if ((transport->state == SCTP_INACTIVE ||
-			     transport->state == SCTP_UNCONFIRMED) &&
-			    sctp_cmp_addr_exact(&transport->ipaddr, saddr)) {
+			if ((transport->state == SCTP_INACTIVE) ||
+			    (transport->state == SCTP_UNCONFIRMED)) {
 				sctp_assoc_control_transport(
 					transport->asoc,
 					transport,
@@ -1691,8 +1685,10 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 		 * address.
 		 */
 		if (!transport->flight_size) {
-			if (del_timer(&transport->T3_rtx_timer))
+			if (timer_pending(&transport->T3_rtx_timer) &&
+			    del_timer(&transport->T3_rtx_timer)) {
 				sctp_transport_put(transport);
+			}
 		} else if (restart_timer) {
 			if (!mod_timer(&transport->T3_rtx_timer,
 				       jiffies + transport->rto))
@@ -1920,6 +1916,6 @@ static void sctp_generate_fwdtsn(struct sctp_outq *q, __u32 ctsn)
 
 	if (ftsn_chunk) {
 		list_add_tail(&ftsn_chunk->list, &q->control_chunk_list);
-		SCTP_INC_STATS(sock_net(asoc->base.sk), SCTP_MIB_OUTCTRLCHUNKS);
+		SCTP_INC_STATS(SCTP_MIB_OUTCTRLCHUNKS);
 	}
 }

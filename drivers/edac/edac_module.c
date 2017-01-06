@@ -15,32 +15,12 @@
 #include "edac_core.h"
 #include "edac_module.h"
 
-#define EDAC_VERSION "Ver: 3.0.0"
+#define EDAC_VERSION "Ver: 2.1.0"
 
 #ifdef CONFIG_EDAC_DEBUG
-
-static int edac_set_debug_level(const char *buf, struct kernel_param *kp)
-{
-	unsigned long val;
-	int ret;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret)
-		return ret;
-
-	if (val < 0 || val > 4)
-		return -EINVAL;
-
-	return param_set_int(buf, kp);
-}
-
 /* Values of 0 to 4 will generate output */
 int edac_debug_level = 2;
 EXPORT_SYMBOL_GPL(edac_debug_level);
-
-module_param_call(edac_debug_level, edac_set_debug_level, param_get_int,
-		  &edac_debug_level, 0644);
-MODULE_PARM_DESC(edac_debug_level, "EDAC debug level: [0-4], default: 2");
 #endif
 
 /* scope is to module level only */
@@ -110,20 +90,25 @@ static int __init edac_init(void)
 	 */
 	edac_pci_clear_parity_errors();
 
-	err = edac_mc_sysfs_init();
+	/*
+	 * now set up the mc_kset under the edac class object
+	 */
+	err = edac_sysfs_setup_mc_kset();
 	if (err)
 		goto error;
-
-	edac_debugfs_init();
 
 	/* Setup/Initialize the workq for this core */
 	err = edac_workqueue_setup();
 	if (err) {
 		edac_printk(KERN_ERR, EDAC_MC, "init WorkQueue failure\n");
-		goto error;
+		goto workq_fail;
 	}
 
 	return 0;
+
+	/* Error teardown stack */
+workq_fail:
+	edac_sysfs_teardown_mc_kset();
 
 error:
 	return err;
@@ -135,20 +120,26 @@ error:
  */
 static void __exit edac_exit(void)
 {
-	edac_dbg(0, "\n");
+	debugf0("%s()\n", __func__);
 
 	/* tear down the various subsystems */
 	edac_workqueue_teardown();
-	edac_mc_sysfs_exit();
-	edac_debugfs_exit();
+	edac_sysfs_teardown_mc_kset();
 }
 
 /*
  * Inform the kernel of our entry and exit points
  */
-subsys_initcall(edac_init);
+module_init(edac_init);
 module_exit(edac_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Doug Thompson www.softwarebitmaker.com, et al");
 MODULE_DESCRIPTION("Core library routines for EDAC reporting");
+
+/* refer to *_sysfs.c files for parameters that are exported via sysfs */
+
+#ifdef CONFIG_EDAC_DEBUG
+module_param(edac_debug_level, int, 0644);
+MODULE_PARM_DESC(edac_debug_level, "Debug level");
+#endif

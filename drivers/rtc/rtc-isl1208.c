@@ -68,17 +68,9 @@ isl1208_i2c_read_regs(struct i2c_client *client, u8 reg, u8 buf[],
 {
 	u8 reg_addr[1] = { reg };
 	struct i2c_msg msgs[2] = {
-		{
-			.addr = client->addr,
-			.len = sizeof(reg_addr),
-			.buf = reg_addr
-		},
-		{
-			.addr = client->addr,
-			.flags = I2C_M_RD,
-			.len = len,
-			.buf = buf
-		}
+		{client->addr, 0, sizeof(reg_addr), reg_addr}
+		,
+		{client->addr, I2C_M_RD, len, buf}
 	};
 	int ret;
 
@@ -98,11 +90,7 @@ isl1208_i2c_set_regs(struct i2c_client *client, u8 reg, u8 const buf[],
 {
 	u8 i2c_buf[ISL1208_REG_USR2 + 2];
 	struct i2c_msg msgs[1] = {
-		{
-			.addr = client->addr,
-			.len = len + 1,
-			.buf = i2c_buf
-		}
+		{client->addr, 0, len + 1, i2c_buf}
 	};
 	int ret;
 
@@ -118,7 +106,7 @@ isl1208_i2c_set_regs(struct i2c_client *client, u8 reg, u8 const buf[],
 	return ret;
 }
 
-/* simple check to see whether we have a isl1208 */
+/* simple check to see wether we have a isl1208 */
 static int
 isl1208_i2c_validate_client(struct i2c_client *client)
 {
@@ -712,7 +700,6 @@ isl1208_remove(struct i2c_client *client)
 
 static const struct i2c_device_id isl1208_id[] = {
 	{ "isl1208", 0 },
-	{ "isl1218", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, isl1208_id);

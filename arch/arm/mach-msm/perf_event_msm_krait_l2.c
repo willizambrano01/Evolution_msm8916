@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011,2012,2014,2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2013,2016 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -71,10 +71,8 @@ static int total_l2_ctrs;
 static int l2_cycle_ctr_idx;
 
 static u32 pmu_type;
-static u32 from_idle;
 
 static struct arm_pmu krait_l2_pmu;
-static struct arm_pmu *krait_l2_pmu_addr = &krait_l2_pmu;
 
 static struct perf_event *l2_events[MAX_KRAIT_L2_CTRS];
 static unsigned long l2_used_mask[BITS_TO_LONGS(MAX_KRAIT_L2_CTRS)];
@@ -82,7 +80,6 @@ static unsigned long l2_used_mask[BITS_TO_LONGS(MAX_KRAIT_L2_CTRS)];
 static struct pmu_hw_events krait_l2_pmu_hw_events = {
 	.events = l2_events,
 	.used_mask = l2_used_mask,
-	.from_idle = &from_idle,
 	.pmu_lock = __RAW_SPIN_LOCK_UNLOCKED(krait_l2_pmu_hw_events.pmu_lock),
 };
 
@@ -200,10 +197,8 @@ static void disable_counter(u32 idx)
 		set_l2_indirect_reg(L2PMCNTENCLR, 1 << idx);
 }
 
-static u32 krait_l2_read_counter(struct perf_event *event)
+static u32 krait_l2_read_counter(int idx)
 {
-	struct hw_perf_event *hwc = &event->hw;
-	int idx = hwc->idx;
 	u32 val;
 	u32 counter_reg = (idx * 16) + IA_L2PMXEVCNTR_BASE;
 
@@ -215,10 +210,8 @@ static u32 krait_l2_read_counter(struct perf_event *event)
 	return val;
 }
 
-static void krait_l2_write_counter(struct perf_event *event, u32 val)
+static void krait_l2_write_counter(int idx, u32 val)
 {
-	struct hw_perf_event *hwc = &event->hw;
-	int idx = hwc->idx;
 	u32 counter_reg = (idx * 16) + IA_L2PMXEVCNTR_BASE;
 
 	if (idx == l2_cycle_ctr_idx)
@@ -236,10 +229,8 @@ static void krait_l2_stop_counter(struct hw_perf_event *hwc, int idx)
 			hwc->config_base, idx);
 }
 
-static void krait_l2_enable(struct perf_event *event)
+static void krait_l2_enable(struct hw_perf_event *hwc, int idx, int cpu)
 {
-	struct hw_perf_event *hwc = &event->hw;
-	int idx = hwc->idx;
 	struct event_desc evdesc;
 	unsigned long iflags;
 	unsigned int is_slv = 0;
@@ -271,10 +262,10 @@ static void krait_l2_enable(struct perf_event *event)
 	set_evres(evdesc.event_groupsel, evdesc.event_reg,
 		  evdesc.event_group_code);
 
-	if (event->cpu < 0)
+	if (cpu < 0)
 		set_evfilter_task_mode(idx, is_slv);
 	else
-		set_evfilter_sys_mode(idx, is_slv, event->cpu, is_tracectr);
+		set_evfilter_sys_mode(idx, is_slv, cpu, is_tracectr);
 
 out:
 	enable_intenset(idx);
@@ -286,10 +277,8 @@ out:
 	     __func__, idx, hwc->config_base, hwc->config, smp_processor_id());
 }
 
-static void krait_l2_disable(struct perf_event *event)
+static void krait_l2_disable(struct hw_perf_event *hwc, int idx)
 {
-	struct hw_perf_event *hwc = &event->hw;
-	int idx = hwc->idx;
 	unsigned long iflags;
 
 	raw_spin_lock_irqsave(&krait_l2_pmu_hw_events.pmu_lock, iflags);
@@ -303,9 +292,8 @@ static void krait_l2_disable(struct perf_event *event)
 }
 
 static int krait_l2_get_event_idx(struct pmu_hw_events *cpuc,
-				  struct perf_event *event)
+				  struct hw_perf_event *hwc)
 {
-	struct hw_perf_event *hwc = &event->hw;
 	int ctr = 0;
 
 	if (hwc->config_base == L2CYCLE_CTR_RAW_CODE) {
@@ -323,13 +311,13 @@ static int krait_l2_get_event_idx(struct pmu_hw_events *cpuc,
 	return -EAGAIN;
 }
 
-static void krait_l2_start(struct arm_pmu *l2_pmu)
+static void krait_l2_start(void)
 {
 	isb();
 	set_l2_indirect_reg(L2PMCR, L2PMCR_GLOBAL_ENABLE);
 }
 
-static void krait_l2_stop(struct arm_pmu *l2_pmu)
+static void krait_l2_stop(void)
 {
 	set_l2_indirect_reg(L2PMCR, L2PMCR_GLOBAL_DISABLE);
 	isb();
@@ -364,6 +352,8 @@ static irqreturn_t krait_l2_handle_irq(int irq_num, void *dev)
 
 	regs = get_irq_regs();
 
+	perf_sample_data_init(&data, 0);
+
 	while (pmovsr) {
 		bitp = __ffs(pmovsr);
 
@@ -381,10 +371,12 @@ static irqreturn_t krait_l2_handle_irq(int irq_num, void *dev)
 			goto next;
 
 		hwc = &event->hw;
-		armpmu_event_update(event);
-		perf_sample_data_init(&data, 0, hwc->last_period);
 
-		if (!armpmu_event_set_period(event))
+		armpmu_event_update(event, hwc, idx);
+
+		data.period = event->hw.last_period;
+
+		if (!armpmu_event_set_period(event, hwc, idx))
 			goto next;
 
 		if (perf_event_overflow(event, &data, regs))
@@ -407,18 +399,18 @@ static int krait_l2_map_event(struct perf_event *event)
 }
 
 static int
-krait_l2_pmu_generic_request_irq(int irq, irq_handler_t *handle_irq, void *dev_id)
+krait_l2_pmu_generic_request_irq(int irq, irq_handler_t *handle_irq)
 {
 	return request_irq(irq, *handle_irq,
 			IRQF_DISABLED | IRQF_NOBALANCING,
-			"krait-l2-armpmu", &krait_l2_pmu_addr);
+			"krait-l2-armpmu", NULL);
 }
 
 static void
-krait_l2_pmu_generic_free_irq(int irq, void *dev_id)
+krait_l2_pmu_generic_free_irq(int irq)
 {
 	if (irq >= 0)
-		free_irq(irq, &krait_l2_pmu_addr);
+		free_irq(irq, NULL);
 }
 
 static int msm_l2_test_set_ev_constraint(struct perf_event *event)
@@ -529,7 +521,9 @@ int get_num_events(void)
 }
 
 static struct arm_pmu krait_l2_pmu = {
-	.name		=	(char *)"msm-l2",
+	.id		=	ARM_PERF_PMU_ID_KRAIT_L2,
+	.type		=	ARM_PMU_DEVICE_L2CC,
+	.name		=	"Krait L2CC PMU",
 	.start		=	krait_l2_start,
 	.stop		=	krait_l2_stop,
 	.handle_irq	=	krait_l2_handle_irq,
@@ -543,8 +537,6 @@ static struct arm_pmu krait_l2_pmu = {
 	.map_event	=	krait_l2_map_event,
 	.max_period	=	MAX_L2_PERIOD,
 	.get_hw_events	=	krait_l2_get_hw_events,
-	.request_irq    =       cpu_pmu_request_irq,
-	.free_irq       =       cpu_pmu_free_irq,
 	.test_set_event_constraints	= msm_l2_test_set_ev_constraint,
 	.clear_event_constraints	= msm_l2_clear_ev_constraint,
 	.pmu.attr_groups		= msm_l2_pmu_attr_grps,
@@ -558,11 +550,11 @@ static struct of_device_id l2pmu_of_device_ids[] = {
 	{},
 };
 
-static int krait_l2_pmu_device_probe(struct platform_device *pdev)
+static int __devinit krait_l2_pmu_device_probe(struct platform_device *pdev)
 {
 	krait_l2_pmu.plat_device = pdev;
 
-	if (!armpmu_register(&krait_l2_pmu, -1))
+	if (!armpmu_register(&krait_l2_pmu, "msm-l2", -1))
 		pmu_type = krait_l2_pmu.pmu.type;
 
 	return 0;
@@ -575,35 +567,6 @@ static struct platform_driver krait_l2_pmu_driver = {
 	},
 	.probe		= krait_l2_pmu_device_probe,
 };
-
-#ifdef CONFIG_PERF_EVENTS_RESET_PMU_DEBUGFS
-static void l2_reset_pmu(void)
-{
-	int i, irq;
-
-	get_reset_pmovsr();
-	/* Clear counter enables */
-	for (i = 0; i < total_l2_ctrs; i++) {
-		disable_counter(i);
-		disable_intenclr(i);
-	}
-	/* Reset all ctrs */
-	set_l2_indirect_reg(L2PMCR, L2PMCR_RESET_ALL);
-	/* Clear constraint bitmap */
-	l2_pmu_constraints.pmu_bitmap = 0;
-	/* clear used_mask */
-	for (i = 0; i < total_l2_ctrs; i++)
-		test_and_clear_bit(i, krait_l2_pmu_hw_events.used_mask);
-	/* Clear irq */
-	irq = platform_get_irq(krait_l2_pmu.plat_device, 0);
-	if (irq >= 0)
-		free_irq(irq, &krait_l2_pmu_addr);
-}
-#else
-static inline void l2_reset_pmu(void)
-{
-}
-#endif
 
 static int __init register_krait_l2_pmu_driver(void)
 {
@@ -635,8 +598,6 @@ static int __init register_krait_l2_pmu_driver(void)
 	for (i = 0; i < total_l2_ctrs; i++)
 		disable_counter(i);
 
-	msm_perf_register_l2_reset_callback(&l2_reset_pmu);
 	return platform_driver_register(&krait_l2_pmu_driver);
 }
-
 device_initcall(register_krait_l2_pmu_driver);

@@ -201,8 +201,11 @@ netxen_setup_minidump(struct netxen_adapter *adapter)
 	adapter->mdump.md_template =
 		kmalloc(adapter->mdump.md_template_size, GFP_KERNEL);
 
-	if (!adapter->mdump.md_template)
+	if (!adapter->mdump.md_template) {
+		dev_err(&adapter->pdev->dev, "Unable to allocate memory "
+			"for minidump template.\n");
 		return -ENOMEM;
+	}
 
 	err = netxen_get_minidump_template(adapter);
 	if (err) {
@@ -226,7 +229,7 @@ netxen_setup_minidump(struct netxen_adapter *adapter)
 				adapter->mdump.md_template;
 	adapter->mdump.md_capture_buff = NULL;
 	adapter->mdump.fw_supports_md = 1;
-	adapter->mdump.md_enabled = 0;
+	adapter->mdump.md_enabled = 1;
 
 	return err;
 
@@ -324,9 +327,6 @@ nx_fw_cmd_create_rx_ctx(struct netxen_adapter *adapter)
 
 	cap = (NX_CAP0_LEGACY_CONTEXT | NX_CAP0_LEGACY_MN);
 	cap |= (NX_CAP0_JUMBO_CONTIGUOUS | NX_CAP0_LRO_CONTIGUOUS);
-
-	if (adapter->flags & NETXEN_FW_MSS_CAP)
-		cap |= NX_CAP0_HW_LRO_MSS;
 
 	prq->capabilities[0] = cpu_to_le32(cap);
 	prq->host_int_crb_mode =

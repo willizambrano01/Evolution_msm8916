@@ -1694,4 +1694,16 @@ static struct pcmcia_driver pcnet_driver = {
 	.suspend	= pcnet_suspend,
 	.resume		= pcnet_resume,
 };
-module_pcmcia_driver(pcnet_driver);
+
+static int __init init_pcnet_cs(void)
+{
+    return pcmcia_register_driver(&pcnet_driver);
+}
+
+static void __exit exit_pcnet_cs(void)
+{
+    pcmcia_unregister_driver(&pcnet_driver);
+}
+
+module_init(init_pcnet_cs);
+module_exit(exit_pcnet_cs);

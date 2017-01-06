@@ -1880,7 +1880,7 @@ int ipmi_request_supply_msgs(ipmi_user_t          user,
 			     struct ipmi_recv_msg *supplied_recv,
 			     int                  priority)
 {
-	unsigned char saddr = 0, lun = 0;
+	unsigned char saddr, lun;
 	int           rv;
 
 	if (!user)
@@ -1917,7 +1917,7 @@ static int smi_ipmb_proc_show(struct seq_file *m, void *v)
 
 static int smi_ipmb_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, smi_ipmb_proc_show, PDE_DATA(inode));
+	return single_open(file, smi_ipmb_proc_show, PDE(inode)->data);
 }
 
 static const struct file_operations smi_ipmb_proc_ops = {
@@ -1938,7 +1938,7 @@ static int smi_version_proc_show(struct seq_file *m, void *v)
 
 static int smi_version_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, smi_version_proc_show, PDE_DATA(inode));
+	return single_open(file, smi_version_proc_show, PDE(inode)->data);
 }
 
 static const struct file_operations smi_version_proc_ops = {
@@ -2013,7 +2013,7 @@ static int smi_stats_proc_show(struct seq_file *m, void *v)
 
 static int smi_stats_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, smi_stats_proc_show, PDE_DATA(inode));
+	return single_open(file, smi_stats_proc_show, PDE(inode)->data);
 }
 
 static const struct file_operations smi_stats_proc_ops = {
@@ -2037,11 +2037,12 @@ int ipmi_smi_add_proc_entry(ipmi_smi_t smi, char *name,
 	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
 		return -ENOMEM;
-	entry->name = kstrdup(name, GFP_KERNEL);
+	entry->name = kmalloc(strlen(name)+1, GFP_KERNEL);
 	if (!entry->name) {
 		kfree(entry);
 		return -ENOMEM;
 	}
+	strcpy(entry->name, name);
 
 	file = proc_create_data(name, 0, smi->proc_dir, proc_ops, data);
 	if (!file) {
@@ -3788,7 +3789,7 @@ static int handle_one_recv_msg(ipmi_smi_t          intf,
 
 	} else if ((msg->rsp[0] == ((IPMI_NETFN_APP_REQUEST|1) << 2))
 		   && (msg->rsp[1] == IPMI_READ_EVENT_MSG_BUFFER_CMD)) {
-		/* It's an asynchronous event. */
+		/* It's an asyncronous event. */
 		requeue = handle_read_event_rsp(intf, msg);
 	} else {
 		/* It's a response from the local BMC. */
@@ -4540,7 +4541,7 @@ static void __exit cleanup_ipmi(void)
 	del_timer_sync(&ipmi_timer);
 
 #ifdef CONFIG_PROC_FS
-	proc_remove(proc_ipmi_root);
+	remove_proc_entry(proc_ipmi_root->name, NULL);
 #endif /* CONFIG_PROC_FS */
 
 	driver_unregister(&ipmidriver.driver);

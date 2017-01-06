@@ -63,27 +63,10 @@ static struct platform_device *st_get_plat_device(int id)
  *	in case of error don't complete so that waiting for proper
  *	response times out
  */
-static void validate_firmware_response(struct kim_data_s *kim_gdata)
+void validate_firmware_response(struct kim_data_s *kim_gdata)
 {
 	struct sk_buff *skb = kim_gdata->rx_skb;
-	if (!skb)
-		return;
-
-	/* these magic numbers are the position in the response buffer which
-	 * allows us to distinguish whether the response is for the read
-	 * version info. command
-	 */
-	if (skb->data[2] == 0x01 && skb->data[3] == 0x01 &&
-			skb->data[4] == 0x10 && skb->data[5] == 0x00) {
-		/* fw version response */
-		memcpy(kim_gdata->resp_buffer,
-				kim_gdata->rx_skb->data,
-				kim_gdata->rx_skb->len);
-		complete_all(&kim_gdata->kim_rcvd);
-		kim_gdata->rx_state = ST_W4_PACKET_TYPE;
-		kim_gdata->rx_skb = NULL;
-		kim_gdata->rx_count = 0;
-	} else if (unlikely(skb->data[5] != 0)) {
+	if (unlikely(skb->data[5] != 0)) {
 		pr_err("no proper response during fw download");
 		pr_err("data6 %x", skb->data[5]);
 		kfree_skb(skb);
@@ -136,7 +119,7 @@ static inline int kim_check_data_len(struct kim_data_s *kim_gdata, int len)
  *	have been observed to come in bursts of different
  *	tty_receive and hence the logic
  */
-static void kim_int_recv(struct kim_data_s *kim_gdata,
+void kim_int_recv(struct kim_data_s *kim_gdata,
 	const unsigned char *data, long count)
 {
 	const unsigned char *ptr;
@@ -224,19 +207,16 @@ static long read_local_version(struct kim_data_s *kim_gdata, char *bts_scr_name)
 		return -EIO;
 	}
 
-	if (!wait_for_completion_interruptible_timeout(
-		&kim_gdata->kim_rcvd, msecs_to_jiffies(CMD_RESP_TIME))) {
+	if (!wait_for_completion_timeout
+	    (&kim_gdata->kim_rcvd, msecs_to_jiffies(CMD_RESP_TIME))) {
 		pr_err(" waiting for ver info- timed out ");
 		return -ETIMEDOUT;
 	}
 	INIT_COMPLETION(kim_gdata->kim_rcvd);
-	/* the positions 12 & 13 in the response buffer provide with the
-	 * chip, major & minor numbers
-	 */
 
 	version =
-		MAKEWORD(kim_gdata->resp_buffer[12],
-				kim_gdata->resp_buffer[13]);
+		MAKEWORD(kim_gdata->resp_buffer[13],
+				kim_gdata->resp_buffer[14]);
 	chip = (version & 0x7C00) >> 10;
 	min_ver = (version & 0x007F);
 	maj_ver = (version & 0x0380) >> 7;
@@ -256,7 +236,7 @@ static long read_local_version(struct kim_data_s *kim_gdata, char *bts_scr_name)
 	return 0;
 }
 
-static void skip_change_remote_baud(unsigned char **ptr, long *len)
+void skip_change_remote_baud(unsigned char **ptr, long *len)
 {
 	unsigned char *nxt_action, *cur_action;
 	cur_action = *ptr;
@@ -390,9 +370,9 @@ static long download_firmware(struct kim_data_s *kim_gdata)
 			break;
 		case ACTION_WAIT_EVENT:  /* wait */
 			pr_debug("W");
-			if (!wait_for_completion_interruptible_timeout(
-					&kim_gdata->kim_rcvd,
-					msecs_to_jiffies(CMD_RESP_TIME))) {
+			if (!wait_for_completion_timeout
+					(&kim_gdata->kim_rcvd,
+					 msecs_to_jiffies(CMD_RESP_TIME))) {
 				pr_err("response timeout during fw download ");
 				/* timed out */
 				release_firmware(kim_gdata->fw_entry);
@@ -430,10 +410,16 @@ void st_kim_recv(void *disc_data, const unsigned char *data, long count)
 	struct st_data_s	*st_gdata = (struct st_data_s *)disc_data;
 	struct kim_data_s	*kim_gdata = st_gdata->kim_data;
 
-	/* proceed to gather all data and distinguish read fw version response
-	 * from other fw responses when data gathering is complete
-	 */
-	kim_int_recv(kim_gdata, data, count);
+	/* copy to local buffer */
+	if (unlikely(data[4] == 0x01 && data[5] == 0x10 && data[0] == 0x04)) {
+		/* must be the read_ver_cmd */
+		memcpy(kim_gdata->resp_buffer, data, count);
+		complete_all(&kim_gdata->kim_rcvd);
+		return;
+	} else {
+		kim_int_recv(kim_gdata, data, count);
+		/* either completes or times out */
+	}
 	return;
 }
 
@@ -481,8 +467,8 @@ long st_kim_start(void *kim_data)
 		sysfs_notify(&kim_gdata->kim_pdev->dev.kobj,
 				NULL, "install");
 		/* wait for ldisc to be installed */
-		err = wait_for_completion_interruptible_timeout(
-			&kim_gdata->ldisc_installed, msecs_to_jiffies(LDISC_TIME));
+		err = wait_for_completion_timeout(&kim_gdata->ldisc_installed,
+				msecs_to_jiffies(LDISC_TIME));
 		if (!err) {
 			/* ldisc installation timeout,
 			 * flush uart, power cycle BT_EN */
@@ -540,11 +526,11 @@ long st_kim_stop(void *kim_data)
 	sysfs_notify(&kim_gdata->kim_pdev->dev.kobj, NULL, "install");
 
 	/* wait for ldisc to be un-installed */
-	err = wait_for_completion_interruptible_timeout(
-		&kim_gdata->ldisc_installed, msecs_to_jiffies(LDISC_TIME));
+	err = wait_for_completion_timeout(&kim_gdata->ldisc_installed,
+			msecs_to_jiffies(LDISC_TIME));
 	if (!err) {		/* timeout */
 		pr_err(" timed out waiting for ldisc to be un-installed");
-		err = -ETIMEDOUT;
+		return -ETIMEDOUT;
 	}
 
 	/* By default configure BT nShutdown to LOW state */
@@ -715,12 +701,12 @@ static const struct file_operations list_debugfs_fops = {
  * board-*.c file
  */
 
-static struct dentry *kim_debugfs_dir;
+struct dentry *kim_debugfs_dir;
 static int kim_probe(struct platform_device *pdev)
 {
+	long status;
 	struct kim_data_s	*kim_gdata;
 	struct ti_st_plat_data	*pdata = pdev->dev.platform_data;
-	int err;
 
 	if ((pdev->id != -1) && (pdev->id < MAX_ST_DEVICES)) {
 		/* multiple devices could exist */
@@ -737,28 +723,27 @@ static int kim_probe(struct platform_device *pdev)
 	}
 	dev_set_drvdata(&pdev->dev, kim_gdata);
 
-	err = st_core_init(&kim_gdata->core_data);
-	if (err != 0) {
+	status = st_core_init(&kim_gdata->core_data);
+	if (status != 0) {
 		pr_err(" ST core init failed");
-		err = -EIO;
-		goto err_core_init;
+		return -EIO;
 	}
 	/* refer to itself */
 	kim_gdata->core_data->kim_data = kim_gdata;
 
 	/* Claim the chip enable nShutdown gpio from the system */
 	kim_gdata->nshutdown = pdata->nshutdown_gpio;
-	err = gpio_request(kim_gdata->nshutdown, "kim");
-	if (unlikely(err)) {
+	status = gpio_request(kim_gdata->nshutdown, "kim");
+	if (unlikely(status)) {
 		pr_err(" gpio %ld request failed ", kim_gdata->nshutdown);
-		return err;
+		return status;
 	}
 
 	/* Configure nShutdown GPIO as output=0 */
-	err = gpio_direction_output(kim_gdata->nshutdown, 0);
-	if (unlikely(err)) {
+	status = gpio_direction_output(kim_gdata->nshutdown, 0);
+	if (unlikely(status)) {
 		pr_err(" unable to configure gpio %ld", kim_gdata->nshutdown);
-		return err;
+		return status;
 	}
 	/* get reference of pdev for request_firmware
 	 */
@@ -766,10 +751,10 @@ static int kim_probe(struct platform_device *pdev)
 	init_completion(&kim_gdata->kim_rcvd);
 	init_completion(&kim_gdata->ldisc_installed);
 
-	err = sysfs_create_group(&pdev->dev.kobj, &uim_attr_grp);
-	if (err) {
+	status = sysfs_create_group(&pdev->dev.kobj, &uim_attr_grp);
+	if (status) {
 		pr_err("failed to create sysfs entries");
-		goto err_sysfs_group;
+		return status;
 	}
 
 	/* copying platform data */
@@ -781,8 +766,8 @@ static int kim_probe(struct platform_device *pdev)
 	kim_debugfs_dir = debugfs_create_dir("ti-st", NULL);
 	if (IS_ERR(kim_debugfs_dir)) {
 		pr_err(" debugfs entries creation failed ");
-		err = -EIO;
-		goto err_debugfs_dir;
+		kim_debugfs_dir = NULL;
+		return -EIO;
 	}
 
 	debugfs_create_file("version", S_IRUGO, kim_debugfs_dir,
@@ -791,17 +776,6 @@ static int kim_probe(struct platform_device *pdev)
 				kim_gdata, &list_debugfs_fops);
 	pr_info(" debugfs entries created ");
 	return 0;
-
-err_debugfs_dir:
-	sysfs_remove_group(&pdev->dev.kobj, &uim_attr_grp);
-
-err_sysfs_group:
-	st_core_exit(kim_gdata->core_data);
-
-err_core_init:
-	kfree(kim_gdata);
-
-	return err;
 }
 
 static int kim_remove(struct platform_device *pdev)
@@ -830,7 +804,7 @@ static int kim_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int kim_suspend(struct platform_device *pdev, pm_message_t state)
+int kim_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct ti_st_plat_data	*pdata = pdev->dev.platform_data;
 
@@ -840,7 +814,7 @@ static int kim_suspend(struct platform_device *pdev, pm_message_t state)
 	return -EOPNOTSUPP;
 }
 
-static int kim_resume(struct platform_device *pdev)
+int kim_resume(struct platform_device *pdev)
 {
 	struct ti_st_plat_data	*pdata = pdev->dev.platform_data;
 

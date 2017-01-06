@@ -1485,7 +1485,7 @@ nomem:
 }
 
 
-static int mmc_spi_remove(struct spi_device *spi)
+static int __devexit mmc_spi_remove(struct spi_device *spi)
 {
 	struct mmc_host		*mmc = dev_get_drvdata(&spi->dev);
 	struct mmc_spi_host	*host;
@@ -1517,7 +1517,7 @@ static int mmc_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
-static struct of_device_id mmc_spi_of_match_table[] = {
+static struct of_device_id mmc_spi_of_match_table[] __devinitdata = {
 	{ .compatible = "mmc-spi-slot", },
 	{},
 };
@@ -1529,10 +1529,23 @@ static struct spi_driver mmc_spi_driver = {
 		.of_match_table = mmc_spi_of_match_table,
 	},
 	.probe =	mmc_spi_probe,
-	.remove =	mmc_spi_remove,
+	.remove =	__devexit_p(mmc_spi_remove),
 };
 
-module_spi_driver(mmc_spi_driver);
+
+static int __init mmc_spi_init(void)
+{
+	return spi_register_driver(&mmc_spi_driver);
+}
+module_init(mmc_spi_init);
+
+
+static void __exit mmc_spi_exit(void)
+{
+	spi_unregister_driver(&mmc_spi_driver);
+}
+module_exit(mmc_spi_exit);
+
 
 MODULE_AUTHOR("Mike Lavender, David Brownell, "
 		"Hans-Peter Nilsson, Jan Nikitenko");

@@ -768,24 +768,22 @@ struct fsl_ifc_gpcm {
  */
 struct fsl_ifc_regs {
 	__be32 ifc_rev;
-	u32 res1[0x2];
+	u32 res1[0x3];
 	struct {
-		__be32 cspr_ext;
 		__be32 cspr;
-		u32 res2;
+		u32 res2[0x2];
 	} cspr_cs[FSL_IFC_BANK_COUNT];
-	u32 res3[0x19];
+	u32 res3[0x18];
 	struct {
 		__be32 amask;
 		u32 res4[0x2];
 	} amask_cs[FSL_IFC_BANK_COUNT];
-	u32 res5[0x17];
+	u32 res5[0x18];
 	struct {
-		__be32 csor_ext;
 		__be32 csor;
-		u32 res6;
+		u32 res6[0x2];
 	} csor_cs[FSL_IFC_BANK_COUNT];
-	u32 res7[0x19];
+	u32 res7[0x18];
 	struct {
 		__be32 ftim[4];
 		u32 res8[0x8];

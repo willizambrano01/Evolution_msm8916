@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1998-2014 Erez Zadok
+ * Copyright (c) 1998-2013 Erez Zadok
  * Copyright (c) 2009	   Shrikar Archak
- * Copyright (c) 2003-2014 Stony Brook University
- * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2003-2013 Stony Brook University
+ * Copyright (c) 2003-2013 The Research Foundation of SUNY
  * Copyright (C) 2013-2014 Motorola Mobility, LLC
  *
  * This program is free software; you can redistribute it and/or modify
@@ -343,8 +343,6 @@ static int esdfs_read_super(struct super_block *sb, const char *dev_name,
 	esdfs_derive_perms(sb->s_root);
 	esdfs_set_perms(inode);
 
-	esdfs_add_super(sbi, sb);
-
 	goto out;
 
 out_freeroot:
@@ -371,7 +369,7 @@ struct dentry *esdfs_mount(struct file_system_type *fs_type, int flags,
 			    const char *dev_name, void *raw_data)
 {
 	int error;
-	struct super_block *s = sget(fs_type, NULL, set_anon_super, flags, NULL);
+	struct super_block *s = sget(fs_type, NULL, set_anon_super, NULL);
 
 	if (IS_ERR(s))
 		return ERR_CAST(s);
@@ -401,9 +399,8 @@ static struct file_system_type esdfs_fs_type = {
 	.name		= ESDFS_NAME,
 	.mount		= esdfs_mount,
 	.kill_sb	= esdfs_kill_sb,
-	.fs_flags	= 0,
+	.fs_flags	= FS_REVAL_DOT,
 };
-MODULE_ALIAS_FS(WRAPFS_NAME);
 
 static int __init init_esdfs_fs(void)
 {

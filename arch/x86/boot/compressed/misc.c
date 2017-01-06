@@ -108,6 +108,8 @@ static void error(char *m);
  * This is set up by the setup-routine at boot-time
  */
 struct boot_params *real_mode;		/* Pointer to real-mode data */
+static int quiet;
+static int debug;
 
 void *memset(void *s, int c, size_t n);
 void *memcpy(void *dest, const void *src, size_t n);
@@ -168,11 +170,15 @@ static void serial_putchar(int ch)
 	outb(ch, early_serial_base + TXR);
 }
 
-void __putstr(const char *s)
+void __putstr(int error, const char *s)
 {
 	int x, y, pos;
 	char c;
 
+#ifndef CONFIG_X86_VERBOSE_BOOTUP
+	if (!error)
+		return;
+#endif
 	if (early_serial_base) {
 		const char *str = s;
 		while (*str) {
@@ -259,9 +265,9 @@ void *memcpy(void *dest, const void *src, size_t n)
 
 static void error(char *x)
 {
-	error_putstr("\n\n");
-	error_putstr(x);
-	error_putstr("\n\n -- System halted");
+	__putstr(1, "\n\n");
+	__putstr(1, x);
+	__putstr(1, "\n\n -- System halted");
 
 	while (1)
 		asm("hlt");
@@ -288,7 +294,8 @@ static void parse_elf(void *output)
 		return;
 	}
 
-	debug_putstr("Parsing ELF... ");
+	if (!quiet)
+		putstr("Parsing ELF... ");
 
 	phdrs = malloc(sizeof(*phdrs) * ehdr.e_phnum);
 	if (!phdrs)
@@ -325,7 +332,10 @@ asmlinkage void decompress_kernel(void *rmode, memptr heap,
 {
 	real_mode = rmode;
 
-	sanitize_boot_params(real_mode);
+	if (cmdline_find_option_bool("quiet"))
+		quiet = 1;
+	if (cmdline_find_option_bool("debug"))
+		debug = 1;
 
 	if (real_mode->screen_info.orig_video_mode == 7) {
 		vidmem = (char *) 0xb0000;
@@ -339,7 +349,8 @@ asmlinkage void decompress_kernel(void *rmode, memptr heap,
 	cols = real_mode->screen_info.orig_video_cols;
 
 	console_init();
-	debug_putstr("early console in decompress_kernel\n");
+	if (debug)
+		putstr("early console in decompress_kernel\n");
 
 	free_mem_ptr     = heap;	/* Heap */
 	free_mem_end_ptr = heap + BOOT_HEAP_SIZE;
@@ -358,9 +369,11 @@ asmlinkage void decompress_kernel(void *rmode, memptr heap,
 		error("Wrong destination address");
 #endif
 
-	debug_putstr("\nDecompressing Linux... ");
+	if (!quiet)
+		putstr("\nDecompressing Linux... ");
 	decompress(input_data, input_len, NULL, NULL, output, NULL, error);
 	parse_elf(output);
-	debug_putstr("done.\nBooting the kernel.\n");
+	if (!quiet)
+		putstr("done.\nBooting the kernel.\n");
 	return;
 }

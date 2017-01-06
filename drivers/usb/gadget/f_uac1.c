@@ -1,7 +1,7 @@
 /*
  * f_audio.c -- USB Audio class function driver
  *
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  * Copyright (C) 2008 Bryan Wu <cooloney@kernel.org>
  * Copyright (C) 2008 Analog Devices, Inc
  *
@@ -61,6 +61,7 @@ MODULE_PARM_DESC(audio_capture_buf_size, "Microphone Audio buffer size");
 
 static int generic_set_cmd(struct usb_audio_control *con, u8 cmd, int value);
 static int generic_get_cmd(struct usb_audio_control *con, u8 cmd);
+
 
 #define SPEAKER_INPUT_TERMINAL_ID	3
 #define SPEAKER_OUTPUT_TERMINAL_ID	4
@@ -252,13 +253,6 @@ static struct usb_endpoint_descriptor speaker_as_ep_out_desc = {
 	.bInterval		= 4,
 };
 
-static struct usb_ss_ep_comp_descriptor speaker_as_ep_out_comp_desc = {
-	 .bLength =		 sizeof(speaker_as_ep_out_comp_desc),
-	 .bDescriptorType =	 USB_DT_SS_ENDPOINT_COMP,
-
-	 .wBytesPerInterval =	cpu_to_le16(1024),
-};
-
 /* Class-specific AS ISO OUT Endpoint Descriptor */
 static struct uac_iso_endpoint_descriptor speaker_as_iso_out_desc  = {
 	.bLength		= UAC_ISO_ENDPOINT_DESC_SIZE,
@@ -339,13 +333,6 @@ static struct usb_endpoint_descriptor microphone_as_ep_in_desc = {
 	.bInterval		= 4,
 };
 
-static struct usb_ss_ep_comp_descriptor microphone_as_ep_in_comp_desc = {
-	 .bLength =		 sizeof(microphone_as_ep_in_comp_desc),
-	 .bDescriptorType =	 USB_DT_SS_ENDPOINT_COMP,
-
-	 .wBytesPerInterval =	cpu_to_le16(1024),
-};
-
  /* Class-specific AS ISO OUT Endpoint Descriptor */
 static struct uac_iso_endpoint_descriptor microphone_as_iso_in_desc  = {
 	.bLength		= UAC_ISO_ENDPOINT_DESC_SIZE,
@@ -395,35 +382,6 @@ static struct usb_descriptor_header *f_audio_desc[]  = {
 	(struct usb_descriptor_header *)&speaker_as_header_desc,
 	(struct usb_descriptor_header *)&speaker_as_type_i_desc,
 	(struct usb_descriptor_header *)&speaker_as_ep_out_desc,
-	(struct usb_descriptor_header *)&speaker_as_iso_out_desc,
-
-	NULL,
-};
-
-static struct usb_descriptor_header *f_audio_ss_desc[]  = {
-	(struct usb_descriptor_header *)&ac_interface_desc,
-	(struct usb_descriptor_header *)&ac_header_desc,
-
-	(struct usb_descriptor_header *)&microphone_input_terminal_desc,
-	(struct usb_descriptor_header *)&microphone_output_terminal_desc,
-
-	(struct usb_descriptor_header *)&speaker_input_terminal_desc,
-	(struct usb_descriptor_header *)&speaker_output_terminal_desc,
-
-	(struct usb_descriptor_header *)&microphone_as_interface_alt_0_desc,
-	(struct usb_descriptor_header *)&microphone_as_interface_alt_1_desc,
-	(struct usb_descriptor_header *)&microphone_as_header_desc,
-	(struct usb_descriptor_header *)&microphone_as_type_i_desc,
-	(struct usb_descriptor_header *)&microphone_as_ep_in_desc,
-	(struct usb_descriptor_header *)&microphone_as_ep_in_comp_desc,
-	(struct usb_descriptor_header *)&microphone_as_iso_in_desc,
-
-	(struct usb_descriptor_header *)&speaker_as_interface_alt_0_desc,
-	(struct usb_descriptor_header *)&speaker_as_interface_alt_1_desc,
-	(struct usb_descriptor_header *)&speaker_as_header_desc,
-	(struct usb_descriptor_header *)&speaker_as_type_i_desc,
-	(struct usb_descriptor_header *)&speaker_as_ep_out_desc,
-	(struct usb_descriptor_header *)&speaker_as_ep_out_comp_desc,
 	(struct usb_descriptor_header *)&speaker_as_iso_out_desc,
 
 	NULL,
@@ -741,7 +699,6 @@ static int audio_get_intf_req(struct usb_function *f,
 
 	req->context = audio;
 	req->complete = f_audio_complete;
-	len = min_t(size_t, sizeof(value), len);
 	memcpy(req->buf, &value, len);
 
 	return len;
@@ -950,13 +907,6 @@ static int f_audio_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	pr_debug("intf %d, alt %d\n", intf, alt);
 
 	if (intf == ac_header_desc.baInterfaceNr[0]) {
-		if (audio->alt_intf[0] == alt) {
-			pr_debug("Alt interface is already set to %d. Do nothing.\n",
-				alt);
-
-			return 0;
-		}
-
 		if (alt == 1) {
 			err = usb_ep_enable(in_ep);
 			if (err) {
@@ -1004,13 +954,6 @@ static int f_audio_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 		}
 		audio->alt_intf[0] = alt;
 	} else if (intf == ac_header_desc.baInterfaceNr[1]) {
-		if (audio->alt_intf[1] == alt) {
-			pr_debug("Alt interface is already set to %d. Do nothing.\n",
-				alt);
-
-			return 0;
-		}
-
 		if (alt == 1) {
 			err = usb_ep_enable(out_ep);
 			if (err) {
@@ -1116,7 +1059,7 @@ f_audio_bind(struct usb_configuration *c, struct usb_function *f)
 	struct usb_composite_dev *cdev = c->cdev;
 	struct f_audio		*audio = func_to_audio(f);
 	int			status;
-	struct usb_ep		*ep = NULL;
+	struct usb_ep		*ep;
 	u8			epaddr;
 
 
@@ -1184,16 +1127,22 @@ f_audio_bind(struct usb_configuration *c, struct usb_function *f)
 	epaddr = speaker_as_ep_out_desc.bEndpointAddress & ~USB_DIR_IN;
 	speaker_as_iso_out.id = epaddr;
 
+	/* support all relevant hardware speeds. we expect that when
+	 * hardware is dual speed, all bulk-capable endpoints work at
+	 * both speeds
+	 */
+
 	/* copy descriptors, and track endpoint copies */
-	status = usb_assign_descriptors(f, f_audio_desc, f_audio_desc,
-					f_audio_ss_desc);
-	if (status)
-		goto fail;
+	if (gadget_is_dualspeed(c->cdev->gadget)) {
+		c->highspeed = true;
+		f->hs_descriptors = usb_copy_descriptors(f_audio_desc);
+	} else {
+		f->descriptors = usb_copy_descriptors(f_audio_desc);
+	}
+
 	return 0;
 
 fail:
-	if (ep)
-		ep->driver_data = NULL;
 	return status;
 }
 
@@ -1202,7 +1151,8 @@ f_audio_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_audio *audio = func_to_audio(f);
 
-	usb_free_all_descriptors(f);
+	usb_free_descriptors(f->descriptors);
+	usb_free_descriptors(f->hs_descriptors);
 	kfree(audio);
 }
 

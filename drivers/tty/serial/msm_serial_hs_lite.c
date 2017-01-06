@@ -2,7 +2,7 @@
  * drivers/serial/msm_serial.c - driver for msm7k serial device and console
  *
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2010-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -49,8 +49,10 @@
 #include <linux/wakelock.h>
 #include <linux/types.h>
 #include <asm/byteorder.h>
-#include <linux/platform_data/qcom-serial_hs_lite.h>
-#include <linux/msm-bus.h>
+#include <mach/board.h>
+#include <mach/msm_serial_hs_lite.h>
+#include <mach/msm_bus.h>
+#include <asm/mach-types.h>
 #include "msm_serial_hs_hwreg.h"
 
 /*
@@ -84,7 +86,7 @@ struct msm_hsl_port {
 	unsigned int            *gsbi_mapbase;
 	unsigned int            *mapped_gsbi;
 	unsigned int            old_snap_state;
-	unsigned long		ver_id;
+	unsigned int		ver_id;
 	int			tx_timeout;
 	struct mutex		clk_mutex;
 	enum uart_core_type	uart_type;
@@ -150,7 +152,10 @@ static const unsigned int regmap[][UARTDM_LAST] = {
 
 static struct of_device_id msm_hsl_match_table[] = {
 	{	.compatible = "qcom,msm-lsuart-v14",
-		.data = (void *)UARTDM_VERSION_14,
+		.data = (void *)UARTDM_VERSION_14
+	},
+	{	.compatible = "qcom,msm-lsuart",
+		.data = (void *)UARTDM_VERSION_11_13
 	},
 	{}
 };
@@ -565,7 +570,7 @@ static void handle_rx(struct uart_port *port, unsigned int misr)
 	if ((msm_hsl_read(port, regmap[vid][UARTDM_SR]) &
 				UARTDM_SR_OVERRUN_BMSK)) {
 		port->icount.overrun++;
-		tty_insert_flip_char(tty->port, 0, TTY_OVERRUN);
+		tty_insert_flip_char(tty, 0, TTY_OVERRUN);
 		msm_hsl_write(port, RESET_ERROR_STATUS,
 			regmap[vid][UARTDM_CR]);
 	}
@@ -610,12 +615,12 @@ static void handle_rx(struct uart_port *port, unsigned int misr)
 
 		/* TODO: handle sysrq */
 		/* if (!uart_handle_sysrq_char(port, c)) */
-		tty_insert_flip_string(tty->port, (char *) &c,
+		tty_insert_flip_string(tty, (char *) &c,
 				       (count > 4) ? 4 : count);
 		count -= 4;
 	}
 
-	tty_flip_buffer_push(tty->port);
+	tty_flip_buffer_push(tty);
 }
 
 static void handle_tx(struct uart_port *port)
@@ -1394,7 +1399,7 @@ static void dump_hsl_regs(struct uart_port *port)
 /*
  *  Wait for transmitter & holding register to empty
  *  Derived from wait_for_xmitr in 8250 serial driver by Russell King  */
-static inline void wait_for_xmitr(struct uart_port *port)
+static void wait_for_xmitr(struct uart_port *port)
 {
 	struct msm_hsl_port *msm_hsl_port = UART_TO_MSM(port);
 	unsigned int vid = msm_hsl_port->ver_id;
@@ -1410,13 +1415,8 @@ static inline void wait_for_xmitr(struct uart_port *port)
 			touch_nmi_watchdog();
 			cpu_relax();
 			if (++count == msm_hsl_port->tx_timeout) {
-				pr_info("%s: UART TX Stuck, Resetting TX\n",
-								 __func__);
-				msm_hsl_write(port, RESET_TX,
-					regmap[vid][UARTDM_CR]);
-				mb();
 				dump_hsl_regs(port);
-				break;
+				panic("MSM HSL wait_for_xmitr is stuck!");
 			}
 		}
 		msm_hsl_write(port, CLEAR_TX_READY, regmap[vid][UARTDM_CR]);
@@ -1485,6 +1485,7 @@ static int msm_hsl_console_setup(struct console *co, char *options)
 
 	port->cons = co;
 
+	console_lock();
 	pm_runtime_get_noresume(port->dev);
 
 #ifndef CONFIG_PM_RUNTIME
@@ -1520,6 +1521,7 @@ static int msm_hsl_console_setup(struct console *co, char *options)
 	msm_hsl_write(port, 1, regmap[vid][UARTDM_NCF_TX]);
 	msm_hsl_read(port, regmap[vid][UARTDM_NCF_TX]);
 
+	console_unlock();
 	pr_info("console setup on port #%d\n", port->line);
 
 	return ret;
@@ -1689,7 +1691,7 @@ static struct msm_serial_hslite_platform_data
 
 static atomic_t msm_serial_hsl_next_id = ATOMIC_INIT(0);
 
-static int msm_serial_hsl_probe(struct platform_device *pdev)
+static int __devinit msm_serial_hsl_probe(struct platform_device *pdev)
 {
 	struct msm_hsl_port *msm_hsl_port;
 	struct resource *uart_resource;
@@ -1768,7 +1770,7 @@ static int msm_serial_hsl_probe(struct platform_device *pdev)
 	if (!match) {
 		msm_hsl_port->ver_id = UARTDM_VERSION_11_13;
 	} else {
-		msm_hsl_port->ver_id = (unsigned long)match->data;
+		msm_hsl_port->ver_id = (unsigned int)match->data;
 		/*
 		 * BLSP based UART configuration is available with
 		 * UARTDM v14 Revision. Hence set uart_type as UART_BLSP.
@@ -1847,7 +1849,7 @@ err:
 	return ret;
 }
 
-static int msm_serial_hsl_remove(struct platform_device *pdev)
+static int __devexit msm_serial_hsl_remove(struct platform_device *pdev)
 {
 	struct msm_hsl_port *msm_hsl_port = platform_get_drvdata(pdev);
 	const struct msm_serial_hslite_platform_data *pdata =
@@ -1950,7 +1952,7 @@ static struct dev_pm_ops msm_hsl_dev_pm_ops = {
 
 static struct platform_driver msm_hsl_platform_driver = {
 	.probe = msm_serial_hsl_probe,
-	.remove = msm_serial_hsl_remove,
+	.remove = __devexit_p(msm_serial_hsl_remove),
 	.driver = {
 		.name = "msm_serial_hsl",
 		.owner = THIS_MODULE,

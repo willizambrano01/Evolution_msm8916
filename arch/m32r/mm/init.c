@@ -28,7 +28,10 @@
 #include <asm/mmu_context.h>
 #include <asm/setup.h>
 #include <asm/tlb.h>
-#include <asm/sections.h>
+
+/* References to section boundaries */
+extern char _text, _etext, _edata;
+extern char __init_begin, __init_end;
 
 pgd_t swapper_pg_dir[1024];
 
@@ -158,7 +161,7 @@ void __init mem_init(void)
 
 	/* this will put all low memory onto the freelists */
 	for_each_online_node(nid)
-		free_all_bootmem_node(NODE_DATA(nid));
+		totalram_pages += free_all_bootmem_node(NODE_DATA(nid));
 
 	reservedpages = reservedpages_count() - hole_pages;
 	codesize = (unsigned long) &_etext - (unsigned long)&_text;
@@ -181,7 +184,17 @@ void __init mem_init(void)
  *======================================================================*/
 void free_initmem(void)
 {
-	free_initmem_default(0);
+	unsigned long addr;
+
+	addr = (unsigned long)(&__init_begin);
+	for (; addr < (unsigned long)(&__init_end); addr += PAGE_SIZE) {
+		ClearPageReserved(virt_to_page(addr));
+		init_page_count(virt_to_page(addr));
+		free_page(addr);
+		totalram_pages++;
+	}
+	printk (KERN_INFO "Freeing unused kernel memory: %dk freed\n", \
+	  (int)(&__init_end - &__init_begin) >> 10);
 }
 
 #ifdef CONFIG_BLK_DEV_INITRD
@@ -191,6 +204,13 @@ void free_initmem(void)
  *======================================================================*/
 void free_initrd_mem(unsigned long start, unsigned long end)
 {
-	free_reserved_area(start, end, 0, "initrd");
+	unsigned long p;
+	for (p = start; p < end; p += PAGE_SIZE) {
+		ClearPageReserved(virt_to_page(p));
+		init_page_count(virt_to_page(p));
+		free_page(p);
+		totalram_pages++;
+	}
+	printk (KERN_INFO "Freeing initrd memory: %ldk freed\n", (end - start) >> 10);
 }
 #endif

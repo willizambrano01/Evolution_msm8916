@@ -62,10 +62,8 @@
 #define UTHR_FROM_PERIOD_SIZE(samples, playrate, burstrate) \
 	(((samples)*5000) / (((burstrate)*5000) / ((burstrate) - (playrate))))
 
-static void dac33_calculate_times(struct snd_pcm_substream *substream,
-				  struct snd_soc_codec *codec);
-static int dac33_prepare_chip(struct snd_pcm_substream *substream,
-			      struct snd_soc_codec *codec);
+static void dac33_calculate_times(struct snd_pcm_substream *substream);
+static int dac33_prepare_chip(struct snd_pcm_substream *substream);
 
 enum dac33_state {
 	DAC33_IDLE = 0,
@@ -429,8 +427,8 @@ static int dac33_playback_event(struct snd_soc_dapm_widget *w,
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		if (likely(dac33->substream)) {
-			dac33_calculate_times(dac33->substream, w->codec);
-			dac33_prepare_chip(dac33->substream, w->codec);
+			dac33_calculate_times(dac33->substream);
+			dac33_prepare_chip(dac33->substream);
 		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
@@ -801,7 +799,8 @@ static void dac33_oscwait(struct snd_soc_codec *codec)
 static int dac33_startup(struct snd_pcm_substream *substream,
 			   struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct tlv320dac33_priv *dac33 = snd_soc_codec_get_drvdata(codec);
 
 	/* Stream started, save the substream pointer */
@@ -813,7 +812,8 @@ static int dac33_startup(struct snd_pcm_substream *substream,
 static void dac33_shutdown(struct snd_pcm_substream *substream,
 			     struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct tlv320dac33_priv *dac33 = snd_soc_codec_get_drvdata(codec);
 
 	dac33->substream = NULL;
@@ -825,7 +825,8 @@ static int dac33_hw_params(struct snd_pcm_substream *substream,
 			   struct snd_pcm_hw_params *params,
 			   struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct tlv320dac33_priv *dac33 = snd_soc_codec_get_drvdata(codec);
 
 	/* Check parameters for validity */
@@ -867,9 +868,10 @@ static int dac33_hw_params(struct snd_pcm_substream *substream,
  * writes happens in different order, than dac33 might end up in unknown state.
  * Use the known, working sequence of register writes to initialize the dac33.
  */
-static int dac33_prepare_chip(struct snd_pcm_substream *substream,
-			      struct snd_soc_codec *codec)
+static int dac33_prepare_chip(struct snd_pcm_substream *substream)
 {
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct tlv320dac33_priv *dac33 = snd_soc_codec_get_drvdata(codec);
 	unsigned int oscset, ratioset, pwr_ctrl, reg_tmp;
 	u8 aictrl_a, aictrl_b, fifoctrl_a;
@@ -1065,9 +1067,10 @@ static int dac33_prepare_chip(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-static void dac33_calculate_times(struct snd_pcm_substream *substream,
-				  struct snd_soc_codec *codec)
+static void dac33_calculate_times(struct snd_pcm_substream *substream)
 {
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct tlv320dac33_priv *dac33 = snd_soc_codec_get_drvdata(codec);
 	unsigned int period_size = substream->runtime->period_size;
 	unsigned int rate = substream->runtime->rate;
@@ -1125,7 +1128,8 @@ static void dac33_calculate_times(struct snd_pcm_substream *substream,
 static int dac33_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
 			     struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct tlv320dac33_priv *dac33 = snd_soc_codec_get_drvdata(codec);
 	int ret = 0;
 
@@ -1157,7 +1161,8 @@ static snd_pcm_sframes_t dac33_dai_delay(
 			struct snd_pcm_substream *substream,
 			struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct tlv320dac33_priv *dac33 = snd_soc_codec_get_drvdata(codec);
 	unsigned long long t0, t1, t_now;
 	unsigned int time_delta, uthr;
@@ -1452,6 +1457,20 @@ static int dac33_soc_remove(struct snd_soc_codec *codec)
 	return 0;
 }
 
+static int dac33_soc_suspend(struct snd_soc_codec *codec)
+{
+	dac33_set_bias_level(codec, SND_SOC_BIAS_OFF);
+
+	return 0;
+}
+
+static int dac33_soc_resume(struct snd_soc_codec *codec)
+{
+	dac33_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
+
+	return 0;
+}
+
 static struct snd_soc_codec_driver soc_codec_dev_tlv320dac33 = {
 	.read = dac33_read_reg_cache,
 	.write = dac33_write_locked,
@@ -1462,6 +1481,8 @@ static struct snd_soc_codec_driver soc_codec_dev_tlv320dac33 = {
 	.reg_cache_default = dac33_reg,
 	.probe = dac33_soc_probe,
 	.remove = dac33_soc_remove,
+	.suspend = dac33_soc_suspend,
+	.resume = dac33_soc_resume,
 
 	.controls = dac33_snd_controls,
 	.num_controls = ARRAY_SIZE(dac33_snd_controls),
@@ -1498,8 +1519,8 @@ static struct snd_soc_dai_driver dac33_dai = {
 	.ops = &dac33_dai_ops,
 };
 
-static int dac33_i2c_probe(struct i2c_client *client,
-			   const struct i2c_device_id *id)
+static int __devinit dac33_i2c_probe(struct i2c_client *client,
+				     const struct i2c_device_id *id)
 {
 	struct tlv320dac33_platform_data *pdata;
 	struct tlv320dac33_priv *dac33;
@@ -1570,7 +1591,7 @@ err_gpio:
 	return ret;
 }
 
-static int dac33_i2c_remove(struct i2c_client *client)
+static int __devexit dac33_i2c_remove(struct i2c_client *client)
 {
 	struct tlv320dac33_priv *dac33 = i2c_get_clientdata(client);
 
@@ -1601,11 +1622,28 @@ static struct i2c_driver tlv320dac33_i2c_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe		= dac33_i2c_probe,
-	.remove		= dac33_i2c_remove,
+	.remove		= __devexit_p(dac33_i2c_remove),
 	.id_table	= tlv320dac33_i2c_id,
 };
 
-module_i2c_driver(tlv320dac33_i2c_driver);
+static int __init dac33_module_init(void)
+{
+	int r;
+	r = i2c_add_driver(&tlv320dac33_i2c_driver);
+	if (r < 0) {
+		printk(KERN_ERR "DAC33: driver registration failed\n");
+		return r;
+	}
+	return 0;
+}
+module_init(dac33_module_init);
+
+static void __exit dac33_module_exit(void)
+{
+	i2c_del_driver(&tlv320dac33_i2c_driver);
+}
+module_exit(dac33_module_exit);
+
 
 MODULE_DESCRIPTION("ASoC TLV320DAC33 codec driver");
 MODULE_AUTHOR("Peter Ujfalusi <peter.ujfalusi@ti.com>");

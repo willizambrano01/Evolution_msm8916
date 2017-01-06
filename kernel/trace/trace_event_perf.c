@@ -5,6 +5,7 @@
  * Copyright (C) 2009-2010 Frederic Weisbecker <fweisbec@gmail.com>
  */
 
+#define REALLY_WANT_TRACEPOINTS
 #include <linux/module.h>
 #include <linux/kprobes.h>
 #include "trace.h"
@@ -26,7 +27,7 @@ static int perf_trace_event_perm(struct ftrace_event_call *tp_event,
 {
 	/* The ftrace function trace is allowed only for root. */
 	if (ftrace_event_is_function(tp_event) &&
-	    perf_paranoid_tracepoint_raw() && !capable(CAP_SYS_ADMIN))
+	    perf_paranoid_kernel() && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	/* No tracing, just counting, so no obvious leak */
@@ -259,8 +260,7 @@ EXPORT_SYMBOL_GPL(perf_trace_buf_prepare);
 
 #ifdef CONFIG_FUNCTION_TRACER
 static void
-perf_ftrace_function_call(unsigned long ip, unsigned long parent_ip,
-			  struct ftrace_ops *ops, struct pt_regs *pt_regs)
+perf_ftrace_function_call(unsigned long ip, unsigned long parent_ip)
 {
 	struct ftrace_entry *entry;
 	struct hlist_head *head;
@@ -283,7 +283,7 @@ perf_ftrace_function_call(unsigned long ip, unsigned long parent_ip,
 
 	head = this_cpu_ptr(event_function.perf_events);
 	perf_trace_buf_submit(entry, ENTRY_SIZE, rctx, 0,
-			      1, &regs, head, NULL);
+			      1, &regs, head);
 
 #undef ENTRY_SIZE
 }

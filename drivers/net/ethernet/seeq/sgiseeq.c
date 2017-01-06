@@ -381,6 +381,8 @@ memory_squeeze:
 					dev->stats.rx_packets++;
 					dev->stats.rx_bytes += len;
 				} else {
+					printk(KERN_NOTICE "%s: Memory squeeze, deferring packet.\n",
+						dev->name);
 					dev->stats.rx_dropped++;
 				}
 			} else {
@@ -719,7 +721,7 @@ static const struct net_device_ops sgiseeq_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 };
 
-static int sgiseeq_probe(struct platform_device *pdev)
+static int __devinit sgiseeq_probe(struct platform_device *pdev)
 {
 	struct sgiseeq_platform_data *pd = pdev->dev.platform_data;
 	struct hpc3_regs *hpcregs = pd->hpc;
@@ -749,7 +751,6 @@ static int sgiseeq_probe(struct platform_device *pdev)
 	sp->srings = sr;
 	sp->rx_desc = sp->srings->rxvector;
 	sp->tx_desc = sp->srings->txvector;
-	spin_lock_init(&sp->tx_lock);
 
 	/* A couple calculations now, saves many cycles later. */
 	setup_rx_ring(dev, sp->rx_desc, SEEQ_RX_BUFFERS);

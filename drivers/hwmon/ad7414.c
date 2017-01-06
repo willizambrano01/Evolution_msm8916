@@ -137,7 +137,7 @@ static ssize_t set_max_min(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	temp = clamp_val(temp, -40000, 85000);
+	temp = SENSORS_LIMIT(temp, -40000, 85000);
 	temp = (temp + (temp < 0 ? -500 : 500)) / 1000;
 
 	mutex_lock(&data->lock);
@@ -185,13 +185,16 @@ static int ad7414_probe(struct i2c_client *client,
 	int err;
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA |
-				     I2C_FUNC_SMBUS_READ_WORD_DATA))
-		return -EOPNOTSUPP;
+				     I2C_FUNC_SMBUS_READ_WORD_DATA)) {
+		err = -EOPNOTSUPP;
+		goto exit;
+	}
 
-	data = devm_kzalloc(&client->dev, sizeof(struct ad7414_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct ad7414_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->lock);
@@ -211,7 +214,7 @@ static int ad7414_probe(struct i2c_client *client,
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&client->dev.kobj, &ad7414_group);
 	if (err)
-		return err;
+		goto exit_free;
 
 	data->hwmon_dev = hwmon_device_register(&client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -223,15 +226,19 @@ static int ad7414_probe(struct i2c_client *client,
 
 exit_remove:
 	sysfs_remove_group(&client->dev.kobj, &ad7414_group);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 }
 
-static int ad7414_remove(struct i2c_client *client)
+static int __devexit ad7414_remove(struct i2c_client *client)
 {
 	struct ad7414_data *data = i2c_get_clientdata(client);
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &ad7414_group);
+	kfree(data);
 	return 0;
 }
 
@@ -246,7 +253,7 @@ static struct i2c_driver ad7414_driver = {
 		.name	= "ad7414",
 	},
 	.probe	= ad7414_probe,
-	.remove	= ad7414_remove,
+	.remove	= __devexit_p(ad7414_remove),
 	.id_table = ad7414_id,
 };
 

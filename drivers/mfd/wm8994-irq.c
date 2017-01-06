@@ -21,7 +21,6 @@
 #include <linux/regmap.h>
 
 #include <linux/mfd/wm8994/core.h>
-#include <linux/mfd/wm8994/pdata.h>
 #include <linux/mfd/wm8994/registers.h>
 
 #include <linux/delay.h>
@@ -135,14 +134,11 @@ static struct regmap_irq_chip wm8994_irq_chip = {
 	.status_base = WM8994_INTERRUPT_STATUS_1,
 	.mask_base = WM8994_INTERRUPT_STATUS_1_MASK,
 	.ack_base = WM8994_INTERRUPT_STATUS_1,
-	.runtime_pm = true,
 };
 
 int wm8994_irq_init(struct wm8994 *wm8994)
 {
 	int ret;
-	unsigned long irqflags;
-	struct wm8994_pdata *pdata = wm8994->dev->platform_data;
 
 	if (!wm8994->irq) {
 		dev_warn(wm8994->dev,
@@ -151,13 +147,14 @@ int wm8994_irq_init(struct wm8994 *wm8994)
 		return 0;
 	}
 
-	/* select user or default irq flags */
-	irqflags = IRQF_TRIGGER_HIGH | IRQF_ONESHOT;
-	if (pdata->irq_flags)
-		irqflags = pdata->irq_flags;
+	if (!wm8994->irq_base) {
+		dev_err(wm8994->dev,
+			"No interrupt base specified, no interrupts\n");
+		return 0;
+	}
 
 	ret = regmap_add_irq_chip(wm8994->regmap, wm8994->irq,
-				  irqflags,
+				  IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
 				  wm8994->irq_base, &wm8994_irq_chip,
 				  &wm8994->irq_data);
 	if (ret != 0) {

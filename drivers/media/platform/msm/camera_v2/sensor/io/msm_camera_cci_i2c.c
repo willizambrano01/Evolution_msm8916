@@ -10,20 +10,25 @@
  * GNU General Public License for more details.
  */
 
-#include <soc/qcom/camera2.h>
+#include <mach/camera2.h>
 #include "msm_camera_i2c.h"
 #include "msm_cci.h"
 
 #undef CDBG
+#ifdef CONFIG_MSMB_CAMERA_DEBUG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 #define S_I2C_DBG(fmt, args...) pr_debug(fmt, ##args)
+#else
+#define CDBG(fmt, args...) do { } while (0)
+#define S_I2C_DBG(fmt, args...) do { } while (0)
+#endif
 
 #define I2C_COMPARE_MATCH 0
 #define I2C_COMPARE_MISMATCH 1
 #define I2C_POLL_MAX_ITERATION 20
-
 #define I2C_POLL_MAX_DELAY_US 11000
 #define I2C_POLL_MIN_DELAY_US 10000
+
 
 int32_t msm_camera_cci_i2c_read(struct msm_camera_i2c_client *client,
 	uint32_t addr, uint16_t *data,
@@ -124,7 +129,6 @@ int32_t msm_camera_cci_i2c_write(struct msm_camera_i2c_client *client,
 		__func__, __LINE__, addr, data_type);
 	reg_conf_tbl.reg_addr = addr;
 	reg_conf_tbl.reg_data = data;
-	reg_conf_tbl.delay = 0;
 	cci_ctrl.cmd = MSM_CCI_I2C_WRITE;
 	cci_ctrl.cci_info = client->cci_client;
 	cci_ctrl.cfg.cci_i2c_write_cfg.reg_setting = &reg_conf_tbl;
@@ -147,30 +151,23 @@ int32_t msm_camera_cci_i2c_write_seq(struct msm_camera_i2c_client *client,
 	int32_t rc = -EFAULT;
 	uint8_t i = 0;
 	struct msm_camera_cci_ctrl cci_ctrl;
-	struct msm_camera_i2c_reg_array *reg_conf_tbl = NULL;
+	struct msm_camera_i2c_reg_array reg_conf_tbl[num_byte];
 
 	if ((client->addr_type != MSM_CAMERA_I2C_BYTE_ADDR
 		&& client->addr_type != MSM_CAMERA_I2C_WORD_ADDR)
 		|| num_byte == 0)
 		return rc;
 
+	S_I2C_DBG("%s reg addr = 0x%x num bytes: %d\n",
+			  __func__, addr, num_byte);
+	memset(reg_conf_tbl, 0,
+		num_byte * sizeof(struct msm_camera_i2c_reg_array));
+	reg_conf_tbl[0].reg_addr = addr;
 	if (num_byte > I2C_SEQ_REG_DATA_MAX) {
 		pr_err("%s: num_byte=%d clamped to max supported %d\n",
 			__func__, num_byte, I2C_SEQ_REG_DATA_MAX);
-		return rc;
+		num_byte = I2C_SEQ_REG_DATA_MAX;
 	}
-
-	S_I2C_DBG("%s reg addr = 0x%x num bytes: %d\n",
-		__func__, addr, num_byte);
-
-	reg_conf_tbl = kzalloc(num_byte *
-		(sizeof(struct msm_camera_i2c_reg_array)), GFP_KERNEL);
-	if (!reg_conf_tbl) {
-		pr_err("%s:%d no memory\n", __func__, __LINE__);
-		return -ENOMEM;
-	}
-
-	reg_conf_tbl[0].reg_addr = addr;
 	for (i = 0; i < num_byte; i++) {
 		reg_conf_tbl[i].reg_data = data[i];
 		reg_conf_tbl[i].delay = 0;
@@ -185,8 +182,6 @@ int32_t msm_camera_cci_i2c_write_seq(struct msm_camera_i2c_client *client,
 			core, ioctl, VIDIOC_MSM_CCI_CFG, &cci_ctrl);
 	CDBG("%s line %d rc = %d\n", __func__, __LINE__, rc);
 	rc = cci_ctrl.status;
-	kfree(reg_conf_tbl);
-	reg_conf_tbl = NULL;
 	return rc;
 }
 
@@ -371,8 +366,10 @@ int32_t msm_camera_cci_i2c_poll(struct msm_camera_i2c_client *client,
 {
 	int32_t rc;
 	int i;
+
 	S_I2C_DBG("%s: addr: 0x%x data: 0x%x dt: %d\n",
 		__func__, addr, data, data_type);
+
 	for (i = 0; i < I2C_POLL_MAX_ITERATION; i++) {
 		rc = msm_camera_cci_i2c_compare(client,
 			addr, data, data_type);
@@ -380,8 +377,8 @@ int32_t msm_camera_cci_i2c_poll(struct msm_camera_i2c_client *client,
 			break;
 		if (i < I2C_POLL_MAX_ITERATION)
 			usleep_range(I2C_POLL_MIN_DELAY_US,
-			I2C_POLL_MAX_DELAY_US);
-		}
+				I2C_POLL_MAX_DELAY_US);
+	}
 	if (rc == I2C_COMPARE_MATCH)
 		S_I2C_DBG("%s:%d match on try # %d\n", __func__, __LINE__, i);
 	else if (rc == I2C_COMPARE_MISMATCH)

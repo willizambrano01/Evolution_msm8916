@@ -21,7 +21,7 @@
 #include <linux/wait.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
-#include <linux/msm_iommu_domains.h>
+#include <mach/iommu_domains.h>
 #include <media/msm_vidc.h>
 #include <media/v4l2-subdev.h>
 #include "enc-subdev.h"
@@ -75,7 +75,7 @@ int venc_load_fw(struct v4l2_subdev *sd)
 int venc_init(struct v4l2_subdev *sd, u32 val)
 {
 	if (!venc_ion_client)
-		venc_ion_client = msm_ion_client_create("wfd_enc_subdev");
+		venc_ion_client = msm_ion_client_create(-1, "wfd_enc_subdev");
 
 	return venc_ion_client ? 0 : -ENOMEM;
 }
@@ -446,8 +446,6 @@ static long venc_close(struct v4l2_subdev *sd, void *arg)
 	if (rc)
 		WFD_MSG_WARN("Failed to close vidc context\n");
 
-	kfree(inst->free_output_indices.bitmap);
-	kfree(inst->free_input_indices.bitmap);
 	kfree(inst);
 	sd->dev_priv = inst = NULL;
 venc_close_fail:
@@ -734,7 +732,6 @@ static int venc_map_user_to_kernel(struct venc_inst *inst,
 	int rc = 0;
 	unsigned long size = 0, align_req = 0, flags = 0;
 	int domain = 0, partition = 0;
-	dma_addr_t paddr = 0;
 
 	if (!mregion) {
 		rc = -EINVAL;
@@ -766,16 +763,25 @@ static int venc_map_user_to_kernel(struct venc_inst *inst,
 	mregion->kvaddr = inst->secure ? NULL :
 		venc_map_kernel(venc_ion_client, mregion->ion_handle);
 
+	if (inst->secure) {
+		rc = msm_ion_secure_buffer(venc_ion_client,
+			mregion->ion_handle, VIDEO_BITSTREAM, 0);
+		if (rc) {
+			WFD_MSG_ERR("Failed to secure output buffer\n");
+			goto venc_map_iommu_map_fail;
+		}
+	}
+
 	rc = msm_vidc_get_iommu_domain_partition(inst->vidc_context,
 			flags, BUF_TYPE_OUTPUT, &domain, &partition);
 	if (rc) {
 		WFD_MSG_ERR("Failed to get domain for output buffer\n");
-		goto venc_map_iommu_map_fail;
+		goto venc_domain_fail;
 	}
 
 	rc = ion_map_iommu(venc_ion_client, mregion->ion_handle,
 			domain, partition, align_req, 0,
-			&paddr, &size, 0, 0);
+			(unsigned long *)&mregion->paddr, &size, 0, 0);
 	if (rc) {
 		WFD_MSG_ERR("Failed to map into iommu\n");
 		goto venc_map_iommu_map_fail;
@@ -784,11 +790,13 @@ static int venc_map_user_to_kernel(struct venc_inst *inst,
 		goto venc_map_iommu_size_fail;
 	}
 
-	mregion->paddr = dma_addr_to_void_ptr(paddr);
 	return 0;
 venc_map_iommu_size_fail:
 	ion_unmap_iommu(venc_ion_client, mregion->ion_handle,
 			domain, partition);
+venc_domain_fail:
+	if (inst->secure)
+		msm_ion_unsecure_buffer(venc_ion_client, mregion->ion_handle);
 venc_map_iommu_map_fail:
 	if (!inst->secure && !IS_ERR_OR_NULL(mregion->kvaddr))
 		venc_unmap_kernel(venc_ion_client, mregion->ion_handle);
@@ -828,6 +836,9 @@ static int venc_unmap_user_to_kernel(struct venc_inst *inst,
 		venc_unmap_kernel(venc_ion_client, mregion->ion_handle);
 		mregion->kvaddr = NULL;
 	}
+
+	if (inst->secure)
+		msm_ion_unsecure_buffer(venc_ion_client, mregion->ion_handle);
 
 	ion_free(venc_ion_client, mregion->ion_handle);
 	return rc;
@@ -1331,7 +1342,7 @@ long venc_mmap(struct v4l2_subdev *sd, void *arg)
 	struct mem_region *mregion = NULL;
 	unsigned long size = 0, align_req = 0, flags = 0;
 	int domain = 0, partition = 0, rc = 0;
-	dma_addr_t paddr = 0;
+	void *paddr = NULL;
 	struct venc_inst *inst = NULL;
 
 	if (!sd) {
@@ -1359,19 +1370,28 @@ long venc_mmap(struct v4l2_subdev *sd, void *arg)
 		goto venc_map_bad_align;
 	}
 
+	if (inst->secure) {
+		rc = msm_ion_secure_buffer(mmap->ion_client,
+				mregion->ion_handle, VIDEO_PIXEL, 0);
+		if (rc) {
+			WFD_MSG_ERR("Failed to secure input buffer\n");
+			goto venc_map_bad_align;
+		}
+	}
+
 	rc = msm_vidc_get_iommu_domain_partition(inst->vidc_context,
 			flags, BUF_TYPE_INPUT, &domain, &partition);
 	if (rc) {
 		WFD_MSG_ERR("Failed to get domain for output buffer\n");
-		goto venc_map_bad_align;
+		goto venc_map_domain_fail;
 	}
 
 	rc = ion_map_iommu(mmap->ion_client, mregion->ion_handle,
 			domain, partition, align_req, 0,
-			&paddr, &size, 0, 0);
+			(unsigned long *)&paddr, &size, 0, 0);
 	if (rc) {
 		WFD_MSG_ERR("Failed to get physical addr %d\n", rc);
-		paddr = 0;
+		paddr = NULL;
 		goto venc_map_bad_align;
 	} else if (size < mregion->size) {
 		WFD_MSG_ERR("Failed to map enough memory\n");
@@ -1379,12 +1399,15 @@ long venc_mmap(struct v4l2_subdev *sd, void *arg)
 		goto venc_map_iommu_size_fail;
 	}
 
-	mregion->paddr = dma_addr_to_void_ptr(paddr);
+	mregion->paddr = paddr;
 	return rc;
 
 venc_map_iommu_size_fail:
 	ion_unmap_iommu(venc_ion_client, mregion->ion_handle,
 			domain, partition);
+venc_map_domain_fail:
+	if (inst->secure)
+		msm_ion_unsecure_buffer(mmap->ion_client, mregion->ion_handle);
 venc_map_bad_align:
 	return rc;
 }
@@ -1427,6 +1450,9 @@ long venc_munmap(struct v4l2_subdev *sd, void *arg)
 			domain, partition);
 		mregion->paddr = NULL;
 	}
+
+	if (inst->secure)
+		msm_ion_unsecure_buffer(mmap->ion_client, mregion->ion_handle);
 
 	return rc;
 }

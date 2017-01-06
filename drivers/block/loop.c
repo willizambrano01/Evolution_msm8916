@@ -162,13 +162,12 @@ static struct loop_func_table *xfer_funcs[MAX_LO_CRYPT] = {
 
 static loff_t get_size(loff_t offset, loff_t sizelimit, struct file *file)
 {
-	loff_t loopsize;
+	loff_t size, loopsize;
 
 	/* Compute loopsize in bytes */
-	loopsize = i_size_read(file->f_mapping->host);
-	if (offset > 0)
-		loopsize -= offset;
-	/* offset is beyond i_size, weird but possible */
+	size = i_size_read(file->f_mapping->host);
+	loopsize = size - offset;
+	/* offset is beyond i_size, wierd but possible */
 	if (loopsize < 0)
 		return 0;
 
@@ -191,7 +190,6 @@ figure_loop_size(struct loop_device *lo, loff_t offset, loff_t sizelimit)
 {
 	loff_t size = get_size(offset, sizelimit, lo->lo_backing_file);
 	sector_t x = (sector_t)size;
-	struct block_device *bdev = lo->lo_device;
 
 	if (unlikely((loff_t)x != size))
 		return -EFBIG;
@@ -200,9 +198,6 @@ figure_loop_size(struct loop_device *lo, loff_t offset, loff_t sizelimit)
 	if (lo->lo_sizelimit != sizelimit)
 		lo->lo_sizelimit = sizelimit;
 	set_capacity(lo->lo_disk, x);
-	bd_set_size(bdev, (loff_t)get_capacity(bdev->bd_disk) << 9);
-	/* let user-space know about the new size */
-	kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
 	return 0;
 }
 
@@ -230,11 +225,9 @@ static int __do_lo_send_write(struct file *file,
 	ssize_t bw;
 	mm_segment_t old_fs = get_fs();
 
-	file_start_write(file);
 	set_fs(get_ds());
 	bw = file->f_op->write(file, buf, len, &pos);
 	set_fs(old_fs);
-	file_end_write(file);
 	if (likely(bw == len))
 		return 0;
 	printk(KERN_ERR "loop: Write error at byte offset %llu, length %i.\n",
@@ -470,7 +463,6 @@ out:
  */
 static void loop_add_bio(struct loop_device *lo, struct bio *bio)
 {
-	lo->lo_bio_count++;
 	bio_list_add(&lo->lo_bio_list, bio);
 }
 
@@ -479,7 +471,6 @@ static void loop_add_bio(struct loop_device *lo, struct bio *bio)
  */
 static struct bio *loop_get_bio(struct loop_device *lo)
 {
-	lo->lo_bio_count--;
 	return bio_list_pop(&lo->lo_bio_list);
 }
 
@@ -498,10 +489,6 @@ static void loop_make_request(struct request_queue *q, struct bio *old_bio)
 		goto out;
 	if (unlikely(rw == WRITE && (lo->lo_flags & LO_FLAGS_READ_ONLY)))
 		goto out;
-	if (lo->lo_bio_count >= q->nr_congestion_on)
-		wait_event_lock_irq(lo->lo_req_wait,
-				    lo->lo_bio_count < q->nr_congestion_off,
-				    lo->lo_lock);
 	loop_add_bio(lo, old_bio);
 	wake_up(&lo->lo_event);
 	spin_unlock_irq(&lo->lo_lock);
@@ -559,8 +546,6 @@ static int loop_thread(void *data)
 			continue;
 		spin_lock_irq(&lo->lo_lock);
 		bio = loop_get_bio(lo);
-		if (lo->lo_bio_count < lo->lo_queue->nr_congestion_off)
-			wake_up(&lo->lo_req_wait);
 		spin_unlock_irq(&lo->lo_lock);
 
 		BUG_ON(!bio);
@@ -888,11 +873,17 @@ static int loop_set_fd(struct loop_device *lo, fmode_t mode,
 	lo->transfer = transfer_none;
 	lo->ioctl = NULL;
 	lo->lo_sizelimit = 0;
-	lo->lo_bio_count = 0;
 	lo->old_gfp_mask = mapping_gfp_mask(mapping);
 	mapping_set_gfp_mask(mapping, lo->old_gfp_mask & ~(__GFP_IO|__GFP_FS));
 
 	bio_list_init(&lo->lo_bio_list);
+
+	/*
+	 * set queue make_request_fn, and add limits based on lower level
+	 * device
+	 */
+	blk_queue_make_request(lo->lo_queue, loop_make_request);
+	lo->lo_queue->queuedata = lo;
 
 	if (!(lo_flags & LO_FLAGS_READ_ONLY) && file->f_op->fsync)
 		blk_queue_flush(lo->lo_queue, REQ_FLUSH);
@@ -990,21 +981,8 @@ static int loop_clr_fd(struct loop_device *lo)
 	if (lo->lo_state != Lo_bound)
 		return -ENXIO;
 
-	/*
-	 * If we've explicitly asked to tear down the loop device,
-	 * and it has an elevated reference count, set it for auto-teardown when
-	 * the last reference goes away. This stops $!~#$@ udev from
-	 * preventing teardown because it decided that it needs to run blkid on
-	 * the loopback device whenever they appear. xfstests is notorious for
-	 * failing tests because blkid via udev races with a losetup
-	 * <dev>/do something like mkfs/losetup -d <dev> causing the losetup -d
-	 * command to fail with EBUSY.
-	 */
-	if (lo->lo_refcnt > 1) {
-		lo->lo_flags |= LO_FLAGS_AUTOCLEAR;
-		mutex_unlock(&lo->lo_ctl_mutex);
-		return 0;
-	}
+	if (lo->lo_refcnt > 1)	/* we needed one fd for the ioctl */
+		return -EBUSY;
 
 	if (filp == NULL)
 		return -EINVAL;
@@ -1067,10 +1045,10 @@ loop_set_status(struct loop_device *lo, const struct loop_info64 *info)
 {
 	int err;
 	struct loop_func_table *xfer;
-	kuid_t uid = current_uid();
+	uid_t uid = current_uid();
 
 	if (lo->lo_encrypt_key_size &&
-	    !uid_eq(lo->lo_key_owner, uid) &&
+	    lo->lo_key_owner != uid &&
 	    !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	if (lo->lo_state != Lo_bound)
@@ -1098,10 +1076,10 @@ loop_set_status(struct loop_device *lo, const struct loop_info64 *info)
 		return err;
 
 	if (lo->lo_offset != info->lo_offset ||
-	    lo->lo_sizelimit != info->lo_sizelimit)
+	    lo->lo_sizelimit != info->lo_sizelimit) {
 		if (figure_loop_size(lo, info->lo_offset, info->lo_sizelimit))
 			return -EFBIG;
-
+	}
 	loop_config_discard(lo);
 
 	memcpy(lo->lo_file_name, info->lo_file_name, LO_NAME_SIZE);
@@ -1146,7 +1124,7 @@ loop_get_status(struct loop_device *lo, struct loop_info64 *info)
 
 	if (lo->lo_state != Lo_bound)
 		return -ENXIO;
-	error = vfs_getattr(&file->f_path, &stat);
+	error = vfs_getattr(file->f_path.mnt, file->f_path.dentry, &stat);
 	if (error)
 		return error;
 	memset(info, 0, sizeof(*info));
@@ -1278,10 +1256,26 @@ loop_get_status64(struct loop_device *lo, struct loop_info64 __user *arg) {
 
 static int loop_set_capacity(struct loop_device *lo, struct block_device *bdev)
 {
-	if (unlikely(lo->lo_state != Lo_bound))
-		return -ENXIO;
+	int err;
+	sector_t sec;
+	loff_t sz;
 
-	return figure_loop_size(lo, lo->lo_offset, lo->lo_sizelimit);
+	err = -ENXIO;
+	if (unlikely(lo->lo_state != Lo_bound))
+		goto out;
+	err = figure_loop_size(lo, lo->lo_offset, lo->lo_sizelimit);
+	if (unlikely(err))
+		goto out;
+	sec = get_capacity(lo->lo_disk);
+	/* the width of sector_t may be narrow for bit-shift */
+	sz = sec;
+	sz <<= 9;
+	bd_set_size(bdev, sz);
+	/* let user-space know about the new size */
+	kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
+
+ out:
+	return err;
 }
 
 static int lo_ioctl(struct block_device *bdev, fmode_t mode,
@@ -1511,7 +1505,7 @@ out:
 	return err;
 }
 
-static void lo_release(struct gendisk *disk, fmode_t mode)
+static int lo_release(struct gendisk *disk, fmode_t mode)
 {
 	struct loop_device *lo = disk->private_data;
 	int err;
@@ -1528,7 +1522,7 @@ static void lo_release(struct gendisk *disk, fmode_t mode)
 		 */
 		err = loop_clr_fd(lo);
 		if (!err)
-			return;
+			goto out_unlocked;
 	} else {
 		/*
 		 * Otherwise keep thread (if running) and config,
@@ -1539,6 +1533,8 @@ static void lo_release(struct gendisk *disk, fmode_t mode)
 
 out:
 	mutex_unlock(&lo->lo_ctl_mutex);
+out_unlocked:
+	return 0;
 }
 
 static const struct block_device_operations lo_fops = {
@@ -1606,35 +1602,41 @@ static int loop_add(struct loop_device **l, int i)
 	struct gendisk *disk;
 	int err;
 
-	err = -ENOMEM;
 	lo = kzalloc(sizeof(*lo), GFP_KERNEL);
-	if (!lo)
+	if (!lo) {
+		err = -ENOMEM;
 		goto out;
+	}
 
-	lo->lo_state = Lo_unbound;
+	err = idr_pre_get(&loop_index_idr, GFP_KERNEL);
+	if (err < 0)
+		goto out_free_dev;
 
-	/* allocate id, if @id >= 0, we're requesting that specific id */
 	if (i >= 0) {
-		err = idr_alloc(&loop_index_idr, lo, i, i + 1, GFP_KERNEL);
-		if (err == -ENOSPC)
+		int m;
+
+		/* create specific i in the index */
+		err = idr_get_new_above(&loop_index_idr, lo, i, &m);
+		if (err >= 0 && i != m) {
+			idr_remove(&loop_index_idr, m);
 			err = -EEXIST;
+		}
+	} else if (i == -1) {
+		int m;
+
+		/* get next free nr */
+		err = idr_get_new(&loop_index_idr, lo, &m);
+		if (err >= 0)
+			i = m;
 	} else {
-		err = idr_alloc(&loop_index_idr, lo, 0, 0, GFP_KERNEL);
+		err = -EINVAL;
 	}
 	if (err < 0)
 		goto out_free_dev;
-	i = err;
 
-	err = -ENOMEM;
 	lo->lo_queue = blk_alloc_queue(GFP_KERNEL);
 	if (!lo->lo_queue)
-		goto out_free_idr;
-
-	/*
-	 * set queue make_request_fn
-	 */
-	blk_queue_make_request(lo->lo_queue, loop_make_request);
-	lo->lo_queue->queuedata = lo;
+		goto out_free_dev;
 
 	disk = lo->lo_disk = alloc_disk(1 << part_shift);
 	if (!disk)
@@ -1665,7 +1667,6 @@ static int loop_add(struct loop_device **l, int i)
 	lo->lo_number		= i;
 	lo->lo_thread		= NULL;
 	init_waitqueue_head(&lo->lo_event);
-	init_waitqueue_head(&lo->lo_req_wait);
 	spin_lock_init(&lo->lo_lock);
 	disk->major		= LOOP_MAJOR;
 	disk->first_minor	= i << part_shift;
@@ -1679,8 +1680,6 @@ static int loop_add(struct loop_device **l, int i)
 
 out_free_queue:
 	blk_cleanup_queue(lo->lo_queue);
-out_free_idr:
-	idr_remove(&loop_index_idr, i);
 out_free_dev:
 	kfree(lo);
 out:
@@ -1744,7 +1743,7 @@ static struct kobject *loop_probe(dev_t dev, int *part, void *data)
 	if (err < 0)
 		err = loop_add(&lo, MINOR(dev) >> part_shift);
 	if (err < 0)
-		kobj = NULL;
+		kobj = ERR_PTR(err);
 	else
 		kobj = get_disk(lo->lo_disk);
 	mutex_unlock(&loop_index_mutex);
@@ -1906,6 +1905,7 @@ static void __exit loop_exit(void)
 	range = max_loop ? max_loop << part_shift : 1UL << MINORBITS;
 
 	idr_for_each(&loop_index_idr, &loop_exit_cb, NULL);
+	idr_remove_all(&loop_index_idr);
 	idr_destroy(&loop_index_idr);
 
 	blk_unregister_region(MKDEV(LOOP_MAJOR, 0), range);

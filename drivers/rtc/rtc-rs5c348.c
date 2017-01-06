@@ -152,14 +152,13 @@ static const struct rtc_class_ops rs5c348_rtc_ops = {
 
 static struct spi_driver rs5c348_driver;
 
-static int rs5c348_probe(struct spi_device *spi)
+static int __devinit rs5c348_probe(struct spi_device *spi)
 {
 	int ret;
 	struct rtc_device *rtc;
 	struct rs5c348_plat_data *pdata;
 
-	pdata = devm_kzalloc(&spi->dev, sizeof(struct rs5c348_plat_data),
-				GFP_KERNEL);
+	pdata = kzalloc(sizeof(struct rs5c348_plat_data), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
 	spi->dev.platform_data = pdata;
@@ -203,7 +202,7 @@ static int rs5c348_probe(struct spi_device *spi)
 	if (ret & RS5C348_BIT_24H)
 		pdata->rtc_24h = 1;
 
-	rtc = devm_rtc_device_register(&spi->dev, rs5c348_driver.driver.name,
+	rtc = rtc_device_register(rs5c348_driver.driver.name, &spi->dev,
 				  &rs5c348_rtc_ops, THIS_MODULE);
 
 	if (IS_ERR(rtc)) {
@@ -215,11 +214,18 @@ static int rs5c348_probe(struct spi_device *spi)
 
 	return 0;
  kfree_exit:
+	kfree(pdata);
 	return ret;
 }
 
-static int rs5c348_remove(struct spi_device *spi)
+static int __devexit rs5c348_remove(struct spi_device *spi)
 {
+	struct rs5c348_plat_data *pdata = spi->dev.platform_data;
+	struct rtc_device *rtc = pdata->rtc;
+
+	if (rtc)
+		rtc_device_unregister(rtc);
+	kfree(pdata);
 	return 0;
 }
 
@@ -229,7 +235,7 @@ static struct spi_driver rs5c348_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe	= rs5c348_probe,
-	.remove	= rs5c348_remove,
+	.remove	= __devexit_p(rs5c348_remove),
 };
 
 module_spi_driver(rs5c348_driver);

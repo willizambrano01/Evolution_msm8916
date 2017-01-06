@@ -136,9 +136,9 @@ ssize_t beat_nvram_get_size(void)
 	return BEAT_NVRAM_SIZE;
 }
 
-int beat_set_xdabr(unsigned long dabr, unsigned long dabrx)
+int beat_set_xdabr(unsigned long dabr)
 {
-	if (beat_set_dabr(dabr, dabrx))
+	if (beat_set_dabr(dabr, DABRX_KERNEL | DABRX_USER))
 		return -1;
 	return 0;
 }

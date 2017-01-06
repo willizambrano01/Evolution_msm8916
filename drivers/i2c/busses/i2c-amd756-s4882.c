@@ -169,7 +169,11 @@ static int __init amd756_s4882_init(void)
 	}
 
 	/* Unregister physical bus */
-	i2c_del_adapter(&amd756_smbus);
+	error = i2c_del_adapter(&amd756_smbus);
+	if (error) {
+		dev_err(&amd756_smbus.dev, "Physical bus removal failed\n");
+		goto ERROR0;
+	}
 
 	printk(KERN_INFO "Enabling SMBus multiplexing for Tyan S4882\n");
 	/* Define the 5 virtual adapters and algorithms structures */
