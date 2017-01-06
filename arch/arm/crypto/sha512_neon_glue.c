@@ -143,9 +143,7 @@ static int sha512_neon_update(struct shash_desc *desc, const u8 *data,
 	if (!may_use_simd()) {
 		res = crypto_sha512_update(desc, data, len);
 	} else {
-		kernel_neon_begin();
 		res = __sha512_neon_update(desc, data, len, partial);
-		kernel_neon_end();
 	}
 
 	return res;
@@ -173,7 +171,6 @@ static int sha512_neon_final(struct shash_desc *desc, u8 *out)
 		crypto_sha512_update(desc, padding, padlen);
 		crypto_sha512_update(desc, (const u8 *)&bits, sizeof(bits));
 	} else {
-		kernel_neon_begin();
 		/* We need to fill a whole block for __sha512_neon_update() */
 		if (padlen <= 112) {
 			sctx->count[0] += padlen;
@@ -185,7 +182,6 @@ static int sha512_neon_final(struct shash_desc *desc, u8 *out)
 		}
 		__sha512_neon_update(desc, (const u8 *)&bits,
 					sizeof(bits), 112);
-		kernel_neon_end();
 	}
 
 	/* Store state in digest */
